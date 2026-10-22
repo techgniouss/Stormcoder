@@ -2,6 +2,8 @@ name: Release
 on:
   push:
     tags: ['v*']
+    # Pushing the `release` branch publishes the version in package.json.
+    branches: [release]
   workflow_dispatch:
     inputs:
       version:
@@ -28,7 +30,11 @@ jobs:
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          V="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
+          case "$GITHUB_REF" in
+            refs/tags/v*) V="${GITHUB_REF_NAME#v}" ;;
+            refs/heads/release) V="$(node -p "require('./package.json').version")" ;;
+            *) V="$INPUT_VERSION" ;;
+          esac
           npm version --no-git-tag-version --allow-same-version "$V"
       - run: npm run build
       - run: npx electron-builder --publish always
