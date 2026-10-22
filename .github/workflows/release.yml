@@ -2,6 +2,11 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release (for example 1.0.0)
+        required: true
 jobs:
   dist:
     strategy:
@@ -18,9 +23,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Stamp the version from the tag
+      - name: Stamp the version from the tag or input
         shell: bash
-        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          V="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
+          npm version --no-git-tag-version --allow-same-version "$V"
       - run: npm run build
       - run: npx electron-builder --publish always
         env:
