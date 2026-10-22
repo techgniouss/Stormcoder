@@ -1,0 +1,222 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) OpenVS. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+// Standalone unit test for src/agent/compaction.ts. Run:
+//   npx tsc -p extensions/openvs-chat/tsconfig.json
+//   node extensions/openvs-chat/scripts/test-compaction.mjs
+import assert from 'node:assert/strict';
+
+const m = await import(new URL('../out/agent/compaction.js', import.meta.url));
+const big = n => 'x'.repeat(n);
+
+const convo = (middleCount, middleSize) => [
+	{ role: 'system', content: 'SYSTEM' },
+	{ role: 'user', content: 'ORIGINAL REQUEST' },
+	...Array.from({ length: middleCount }, (_, i) => ({ role: 'assistant', content: `step ${i}: ${big(middleSize)}` })),
+	{ role: 'user', content: 'recent question' },
+	{ role: 'assistant', content: 'recent answer' },
+];
+
+// shouldCompact: fires above 70% of the window, not below.
+assert.strictEqual(m.shouldCompact(convo(2, 100), 100_000), false);
+assert.strictEqual(m.shouldCompact(convo(40, 8_000), 100_000), true); // ~80k tokens > 70k
+
+// compactMessages: middle replaced by one summary turn; head and recent tail intact.
+{
+	const messages = convo(20, 4_000);
+	const seen = [];
+	const res = await m.compactMessages(messages, async (msgs, maxTokens) => {
+		seen.push({ count: msgs.length, maxTokens });
+		return 'THE SUMMARY';
+	});
+	assert.ok(res, 'compaction produced a result');
+	assert.strictEqual(res.messages[0].content, 'SYSTEM');
+	assert.strictEqual(res.messages[1].content, 'ORIGINAL REQUEST');
+	const summaryMsg = res.messages[2];
+	assert.strictEqual(summaryMsg.role, 'user');
+	assert.ok(summaryMsg.content.startsWith(m.COMPACT_MARKER), 'summary carries the marker');
+	assert.ok(summaryMsg.content.includes('THE SUMMARY'));
+	// The last 6 original turns survive verbatim.
+	assert.deepStrictEqual(res.messages.slice(3), messages.slice(-6));
+	assert.ok(res.before > res.after, 'token estimate shrank');
+	assert.strictEqual(res.replaced, messages.length - 2 - 6);
+	// The summarizer saw the compactable turns plus the instruction, with a small budget.
+	assert.strictEqual(seen.length, 1);
+	assert.ok(seen[0].maxTokens <= 2_000);
+}
+
+// Too little middle to compact → undefined (never loops on its own summary).
+assert.strictEqual(await m.compactMessages(convo(2, 100), async () => 'S'), undefined);
+
+// Summarizer failure or empty summary → undefined (caller falls back to trimming).
+assert.strictEqual(await m.compactMessages(convo(20, 4_000), async () => { throw new Error('boom'); }), undefined);
+assert.strictEqual(await m.compactMessages(convo(20, 4_000), async () => '   '), undefined);
+
+// Orphaned tool results at the keep-boundary are dropped, not sent.
+{
+	const messages = [
+		{ role: 'system', content: 'SYSTEM' },
+		{ role: 'user', content: 'REQ' },
+		...Array.from({ length: 10 }, (_, i) => ({ role: 'assistant', content: big(4_000) + i })),
+		// Tail starts with tool results whose calls sit in the compacted region.
+		{ role: 'tool', content: 'orphan result', toolCallId: 'call-1' },
+		{ role: 'user', content: 'q1' }, { role: 'assistant', content: 'a1' },
+		{ role: 'user', content: 'q2' }, { role: 'assistant', content: 'a2' },
+		{ role: 'user', content: 'q3' },
+	];
+	const res = await m.compactMessages(messages, async () => 'S');
+	assert.ok(res);
+	assert.ok(!res.messages.some(x => x.role === 'tool'), 'orphan tool result dropped');
+}
+
+
+// compactionThreshold: COMPACT_TRIGGER (45%) of the window, but never above the point
+// where the lossy trim would already have kicked in — trimming must never get first crack.
+{
+	// The window share governs for every automatically-derived budget: that budget is ~80%
+	// of the window, so even its 90% headroom (72% of the window) sits well above 45%.
+	assert.strictEqual(m.compactionThreshold(200_000, 151_808), 90_000);
+	assert.strictEqual(m.compactionThreshold(1_000_000, 791_808), 450_000);
+	assert.strictEqual(m.compactionThreshold(32_000, 17_408), 14_400);
+	// Pinning openvsChat.agent.maxContextTokens far below the window puts the trim budget
+	// back in charge, and compaction must still precede it.
+	assert.strictEqual(m.compactionThreshold(200_000, 50_000), 45_000);
+	assert.ok(m.compactionThreshold(200_000, 50_000) < 50_000, 'compaction fires before trimming');
+	assert.ok(m.compactionThreshold(32_000, 17_408) < 17_408, 'compaction fires before trimming');
+	assert.ok(m.compactionThreshold(64_000, 43_008) < 43_008, 'compaction fires before trimming');
+	// No budget supplied: pure window behavior.
+	assert.strictEqual(m.compactionThreshold(100_000), 45_000);
+	assert.strictEqual(m.compactionThreshold(100_000, 0), 45_000);
+}
+
+// shouldCompact honors the budget-aware threshold when a trim budget is supplied.
+{
+	// ~20k estimated tokens: far under 45% of a 200k window (90k) but over the headroom of
+	// a pinned 10k budget, so it must compact rather than wait for the lossy trim.
+	const msgs = convo(10, 8_000);
+	assert.strictEqual(m.shouldCompact(msgs, 200_000), false, 'window-only threshold would not fire');
+	assert.strictEqual(m.shouldCompact(msgs, 200_000, 10_000), true, 'budget-aware threshold fires');
+}
+
+// The trigger is provider-dependent, because compacting early is a cost control and only
+// pays on a backend where a long prompt is expensive. On one that caches its prefix,
+// compaction instead *invalidates* that cache, so it stays a measure for fitting the
+// window rather than for saving money.
+{
+	assert.strictEqual(m.compactionThreshold(100_000, 0, m.COMPACT_TRIGGER), 45_000);
+	assert.strictEqual(m.compactionThreshold(100_000, 0, m.CACHED_COMPACT_TRIGGER), 70_000);
+	assert.ok(m.CACHED_COMPACT_TRIGGER > m.COMPACT_TRIGGER, 'a caching backend compacts later');
+	// ~50k estimated tokens in a 100k window: past the uncached trigger, short of the
+	// cached one — the case the split exists for.
+	const msgs = convo(25, 8_000);
+	assert.deepStrictEqual(
+		[
+			m.shouldCompact(msgs, 100_000, 0, m.COMPACT_TRIGGER),
+			m.shouldCompact(msgs, 100_000, 0, m.CACHED_COMPACT_TRIGGER),
+		],
+		[true, false],
+		'the same conversation compacts on an uncached backend and not on a cached one',
+	);
+}
+
+// keepHead: an assembled request is [system, attached context, the request, ...]. The
+// default "preserve through the first user turn" would protect the bulky context blob
+// and summarize away the request itself — keepHead is what prevents that.
+{
+	const assembled = [
+		{ role: 'system', content: 'SYSTEM' },
+		{ role: 'user', content: 'Context for the request:\n\n' + big(40_000) },
+		{ role: 'user', content: 'THE ACTUAL REQUEST' },
+		...Array.from({ length: 8 }, (_, i) => ({ role: 'assistant', content: 'work ' + i })),
+		...Array.from({ length: 6 }, (_, i) => ({ role: 'user', content: 'recent ' + i })),
+	];
+	// HAZARD PIN, not an endorsement: omitting keepHead on an assembled request loses the
+	// request itself. No caller may do this — every call site passes a real head — and
+	// this assertion exists so that if one ever stops, the cost is visible here.
+	const naive = await m.compactMessages(assembled, async () => 'SUMMARY');
+	assert.ok(!naive.messages.some(x => x.content === 'THE ACTUAL REQUEST'),
+		'omitting keepHead on an assembled request drops the request — callers must pass one');
+
+	// With keepHead the head is preserved verbatim and only later turns are summarized.
+	const res = await m.compactMessages(assembled, async () => 'SUMMARY', 3);
+	assert.deepStrictEqual(res.messages.slice(0, 3), assembled.slice(0, 3), 'head kept verbatim');
+	assert.ok(res.messages.some(x => x.content === 'THE ACTUAL REQUEST'), 'the request survives');
+	assert.ok(res.messages[3].content.startsWith(m.COMPACT_MARKER), 'summary follows the head');
+	assert.deepStrictEqual(res.messages.slice(4), assembled.slice(-6), 'recent turns kept verbatim');
+	// replaced counts only post-head messages, so it stays in the webview's terms.
+	assert.strictEqual(res.replaced, assembled.length - 3 - 6);
+
+	// Out-of-range keepHead leaves nothing compactable rather than throwing.
+	assert.strictEqual(await m.compactMessages(assembled, async () => 'S', 999), undefined);
+	// keepHead 0 protects nothing — including the system prompt, which then lands in the
+	// compacted region. Callers must pass a real head; this pins the consequence so the
+	// behavior is a documented hazard rather than a surprise.
+	const noHead = await m.compactMessages(assembled, async () => 'S', 0);
+	assert.strictEqual(noHead.messages[0].role, 'user', 'keepHead 0 drops the system prompt');
+	assert.ok(noHead.messages[0].content.startsWith(m.COMPACT_MARKER));
+}
+
+// The summarizer payload must be a plain chat request: no assistant tool_calls and no
+// role:'tool' turns. It is sent with no `tools` declared, and the slice is cut at a
+// fixed offset from the tail, so unflattened it is an invalid request — OpenAI rejects
+// an unanswered tool_calls, Anthropic rejects tool blocks when tools is undefined.
+{
+	const msgs = [
+		{ role: 'system', content: 'SYS' },
+		{ role: 'user', content: 'REQ' },
+	];
+	for (let i = 0; i < 8; i++) {
+		msgs.push({ role: 'assistant', content: big(3_000), toolCalls: [{ id: 'c' + i, name: 'read_file', args: { path: 'a.ts' } }] });
+		msgs.push({ role: 'tool', content: big(3_000), toolCallId: 'c' + i });
+	}
+	for (let i = 0; i < 6; i++) { msgs.push({ role: 'user', content: 'recent ' + i }); }
+
+	let sent;
+	const res = await m.compactMessages(msgs, async payload => { sent = payload; return 'SUMMARY'; }, 2);
+	assert.ok(res, 'compaction ran');
+	assert.ok(!sent.some(x => x.toolCalls?.length), 'no assistant tool_calls reach the summarizer');
+	assert.ok(!sent.some(x => x.role === 'tool'), 'no tool-role turns reach the summarizer');
+	// The information survives as text rather than being dropped.
+	assert.ok(sent.some(x => x.content.includes('[tool call: read_file(')), 'tool calls survive as prose');
+	assert.ok(sent.some(x => x.content.startsWith('[tool result]')), 'tool results survive as prose');
+	// Flattening applies ONLY to the summarizer payload: the compacted conversation the
+	// model goes on to use keeps its real tool structure, minus anything orphaned.
+	assert.deepStrictEqual(res.messages.slice(0, 2), msgs.slice(0, 2), 'head kept verbatim');
+	assert.deepStrictEqual(res.messages.slice(-6), msgs.slice(-6), 'recent turns kept verbatim');
+	assert.ok(!res.messages.some(x => x.content.startsWith('[tool result]')),
+		'the conversation itself is not flattened');
+}
+// The summarizer request is bounded by the caller's budget. Unbounded it was the LARGEST
+// request a run ever made — agent steps are trimmed to the context budget, this was not —
+// so on a backend with a tight per-request allowance it failed every time, twice, and
+// compaction turned itself off for the rest of the run. On exactly the providers whose cost
+// compaction exists to control.
+{
+	const big = n => 'x'.repeat(n);
+	const msgs = [{ role: 'system', content: 'SYS' }, { role: 'user', content: 'REQ' }];
+	for (let i = 0; i < 20; i++) {
+		msgs.push({ role: 'assistant', content: 'step ' + i, toolCalls: [{ id: 'c' + i, name: 'read_file', args: { path: `f${i}.ts` } }] });
+		msgs.push({ role: 'tool', content: big(24_000), toolCallId: 'c' + i }); // the read cap
+	}
+	for (let i = 0; i < 6; i++) { msgs.push({ role: 'user', content: 'recent ' + i }); }
+
+	const send = async budget => {
+		let sent;
+		const res = await m.compactMessages(msgs, async payload => { sent = payload; return 'SUMMARY'; }, 2, budget);
+		assert.ok(res, 'compaction ran');
+		return m.estimateMessagesTokens ? m.estimateMessagesTokens(sent) : sent.reduce((n, x) => n + Math.ceil(x.content.length / 4) + 4, 0);
+	};
+	const unbounded = await send(undefined);
+	const bounded = await send(6_000);
+	assert.ok(unbounded > 100_000, `the fixture really is huge unbounded (${unbounded} tokens)`);
+	assert.ok(bounded <= 6_000, `a budget is honoured (${bounded} tokens for a 6000 budget)`);
+	// The narration is what a summary is made of; the file dumps are not. Trimming runs
+	// before tool turns are flattened precisely so it can tell those apart.
+	let sent;
+	await m.compactMessages(msgs, async payload => { sent = payload; return 'S'; }, 2, 6_000);
+	assert.ok(sent.some(x => x.content.includes('step 19')), 'recent narration survives the bound');
+	assert.ok(sent.at(-1).content.includes('Summarize the conversation'), 'the summary prompt is still last');
+}
+
+console.log('test-compaction: all assertions passed');

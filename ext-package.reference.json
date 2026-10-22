@@ -1,0 +1,1081 @@
+{
+  "name": "openvs-chat",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "1.0.0",
+  "icon": "media/icon.png",
+  "publisher": "openvs",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "main": "./out/extension",
+  "enabledApiProposals": [
+    "findTextInFiles",
+    "contribSourceControlInputBoxMenu",
+    "inlineCompletionsAdditions"
+  ],
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "chat",
+    "openai",
+    "chatgpt",
+    "claude",
+    "anthropic",
+    "nvidia",
+    "openrouter",
+    "groq",
+    "mistral",
+    "cloudflare",
+    "kimi",
+    "moonshot",
+    "qwen",
+    "copilot"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Chat works in untrusted workspaces, but Agent mode cannot write files or run commands until you trust the workspace."
+    }
+  },
+  "contributes": {
+    "viewsContainers": {
+      "secondarySidebar": [
+        {
+          "id": "openvsChat",
+          "title": "%viewsContainers.chat.title%",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "openvsChat": [
+        {
+          "type": "webview",
+          "id": "openvsChat.view",
+          "name": "%views.chat.name%",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "openvsChat.focus",
+        "title": "%commands.focus%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.newChat",
+        "title": "%commands.newChat%",
+        "category": "OpenVS Thor",
+        "icon": "$(add)"
+      },
+      {
+        "command": "openvsChat.configureProvider",
+        "title": "%commands.configureProvider%",
+        "category": "OpenVS Thor",
+        "icon": "$(key)"
+      },
+      {
+        "command": "openvsChat.openSettings",
+        "title": "%commands.openSettings%",
+        "category": "OpenVS Thor",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "openvsChat.signIn",
+        "title": "%commands.signIn%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.clearKey",
+        "title": "%commands.clearKey%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.selectProvider",
+        "title": "%commands.selectProvider%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.explainSelection",
+        "title": "%commands.explainSelection%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.fixSelection",
+        "title": "%commands.fixSelection%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.docSelection",
+        "title": "%commands.docSelection%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.optimizeSelection",
+        "title": "%commands.optimizeSelection%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.generateTests",
+        "title": "%commands.generateTests%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.editSelection",
+        "title": "%commands.editSelection%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.mcpReconnect",
+        "title": "%commands.mcpReconnect%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.mcpStatus",
+        "title": "%commands.mcpStatus%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.selectSkill",
+        "title": "%commands.selectSkill_cmd%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.createSkill",
+        "title": "%commands.createSkill%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.mcpAdd",
+        "title": "%commands.mcpAdd%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.mcpOpenConfig",
+        "title": "%commands.mcpOpenConfig%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.generateCommitMessage",
+        "title": "%commands.generateCommitMessage%",
+        "category": "OpenVS Thor",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "openvsChat.remoteEnable",
+        "title": "%commands.remoteEnable%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.remoteStatus",
+        "title": "%commands.remoteStatus%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.remoteDeployRelay",
+        "title": "%commands.remoteDeployRelay%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.remoteInstallCloudflared",
+        "title": "%commands.remoteInstallCloudflared%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.remoteSetTunnel",
+        "title": "%commands.remoteSetTunnel%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.completions.toggle",
+        "title": "%commands.completionsToggle%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.completions.trigger",
+        "title": "%commands.completionsTrigger%",
+        "category": "OpenVS Thor"
+      },
+      {
+        "command": "openvsChat.completions.showStats",
+        "title": "%commands.completionsShowStats%",
+        "category": "OpenVS Thor"
+      }
+    ],
+    "submenus": [
+      {
+        "id": "openvsChat.editor",
+        "label": "OpenVS Thor"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "submenu": "openvsChat.editor",
+          "group": "navigation@9",
+          "when": "editorTextFocus"
+        }
+      ],
+      "openvsChat.editor": [
+        {
+          "command": "openvsChat.explainSelection",
+          "group": "1_ai@1"
+        },
+        {
+          "command": "openvsChat.fixSelection",
+          "group": "1_ai@2"
+        },
+        {
+          "command": "openvsChat.editSelection",
+          "group": "1_ai@3"
+        },
+        {
+          "command": "openvsChat.docSelection",
+          "group": "1_ai@4"
+        },
+        {
+          "command": "openvsChat.optimizeSelection",
+          "group": "1_ai@5"
+        },
+        {
+          "command": "openvsChat.generateTests",
+          "group": "1_ai@6"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "openvsChat.newChat",
+          "when": "view == openvsChat.view",
+          "group": "navigation@1"
+        },
+        {
+          "command": "openvsChat.openSettings",
+          "when": "view == openvsChat.view",
+          "group": "navigation@2"
+        }
+      ],
+      "scm/inputBox": [
+        {
+          "command": "openvsChat.generateCommitMessage",
+          "when": "scmProvider == git"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "openvsChat.focus"
+        },
+        {
+          "command": "openvsChat.newChat"
+        },
+        {
+          "command": "openvsChat.openSettings"
+        },
+        {
+          "command": "openvsChat.configureProvider"
+        },
+        {
+          "command": "openvsChat.signIn"
+        },
+        {
+          "command": "openvsChat.clearKey"
+        },
+        {
+          "command": "openvsChat.selectProvider"
+        },
+        {
+          "command": "openvsChat.generateCommitMessage"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "openvsChat.completions.trigger",
+        "key": "alt+\\",
+        "when": "editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "OpenVS Thor",
+      "properties": {
+        "openvsChat.defaultProvider": {
+          "type": "string",
+          "enum": [
+            "openai",
+            "anthropic",
+            "nvidia",
+            "gemini",
+            "antigravity",
+            "openrouter",
+            "groq",
+            "mistral",
+            "cloudflare",
+            "kimi",
+            "qwen",
+            "zai",
+            "opencode_zen",
+            "xkiro",
+            "copilot",
+            "grok",
+            "kiro",
+            "web_gemini",
+            "claude-code-cli",
+            "custom"
+          ],
+          "enumDescriptions": [
+            "%config.provider.openai%",
+            "%config.provider.anthropic%",
+            "%config.provider.nvidia%",
+            "%config.provider.gemini%",
+            "%config.provider.antigravity%",
+            "%config.provider.openrouter%",
+            "%config.provider.groq%",
+            "%config.provider.mistral%",
+            "%config.provider.cloudflare%",
+            "%config.provider.kimi%",
+            "%config.provider.qwen%",
+            "%config.provider.zai%",
+            "%config.provider.opencode_zen%",
+            "%config.provider.xkiro%",
+            "%config.provider.copilot%",
+            "%config.provider.grok%",
+            "%config.provider.kiro%",
+            "%config.provider.web_gemini%",
+            "%config.provider.claude-code-cli%",
+            "%config.provider.custom%"
+          ],
+          "default": "nvidia",
+          "description": "%config.defaultProvider%"
+        },
+        "openvsChat.openai.model": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "description": "%config.openai.model%"
+        },
+        "openvsChat.openai.baseUrl": {
+          "type": "string",
+          "default": "https://api.openai.com/v1",
+          "description": "%config.openai.baseUrl%"
+        },
+        "openvsChat.openai.authUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.authUrl%"
+        },
+        "openvsChat.anthropic.model": {
+          "type": "string",
+          "default": "claude-sonnet-5",
+          "description": "%config.anthropic.model%"
+        },
+        "openvsChat.anthropic.baseUrl": {
+          "type": "string",
+          "default": "https://api.anthropic.com/v1",
+          "description": "%config.anthropic.baseUrl%"
+        },
+        "openvsChat.anthropic.authUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.authUrl%"
+        },
+        "openvsChat.anthropic.thinking": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "off"
+          ],
+          "enumDescriptions": [
+            "%config.anthropic.thinking.auto%",
+            "%config.anthropic.thinking.off%"
+          ],
+          "default": "auto",
+          "description": "%config.anthropic.thinking%"
+        },
+        "openvsChat.nvidia.model": {
+          "type": "string",
+          "default": "meta/llama-3.3-70b-instruct",
+          "description": "%config.nvidia.model%"
+        },
+        "openvsChat.nvidia.baseUrl": {
+          "type": "string",
+          "default": "https://integrate.api.nvidia.com/v1",
+          "description": "%config.nvidia.baseUrl%"
+        },
+        "openvsChat.nvidia.authUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.authUrl%"
+        },
+        "openvsChat.gemini.model": {
+          "type": "string",
+          "default": "gemini-2.5-flash",
+          "description": "%config.gemini.model%"
+        },
+        "openvsChat.gemini.baseUrl": {
+          "type": "string",
+          "default": "https://generativelanguage.googleapis.com/v1beta/openai",
+          "description": "%config.gemini.baseUrl%"
+        },
+        "openvsChat.gemini.authUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.authUrl%"
+        },
+        "openvsChat.antigravity.model": {
+          "type": "string",
+          "default": "gemini-2.5-flash",
+          "description": "%config.antigravity.model%"
+        },
+        "openvsChat.openrouter.model": {
+          "type": "string",
+          "default": "deepseek/deepseek-chat-v3-0324:free",
+          "description": "%config.openrouter.model%"
+        },
+        "openvsChat.openrouter.baseUrl": {
+          "type": "string",
+          "default": "https://openrouter.ai/api/v1",
+          "description": "%config.openrouter.baseUrl%"
+        },
+        "openvsChat.openrouter.authUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.authUrl%"
+        },
+        "openvsChat.groq.model": {
+          "type": "string",
+          "default": "llama-3.3-70b-versatile",
+          "description": "%config.groq.model%"
+        },
+        "openvsChat.groq.baseUrl": {
+          "type": "string",
+          "default": "https://api.groq.com/openai/v1",
+          "description": "%config.groq.baseUrl%"
+        },
+        "openvsChat.groq.authUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.authUrl%"
+        },
+        "openvsChat.mistral.model": {
+          "type": "string",
+          "default": "mistral-medium-latest",
+          "description": "%config.mistral.model%"
+        },
+        "openvsChat.mistral.baseUrl": {
+          "type": "string",
+          "default": "https://api.mistral.ai/v1",
+          "description": "%config.mistral.baseUrl%"
+        },
+        "openvsChat.mistral.authUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.authUrl%"
+        },
+        "openvsChat.cloudflare.accountId": {
+          "type": "string",
+          "default": "",
+          "description": "%config.cloudflare.accountId%"
+        },
+        "openvsChat.cloudflare.model": {
+          "type": "string",
+          "default": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+          "description": "%config.cloudflare.model%"
+        },
+        "openvsChat.cloudflare.baseUrl": {
+          "type": "string",
+          "default": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+          "description": "%config.cloudflare.baseUrl%"
+        },
+        "openvsChat.cloudflare.authUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.authUrl%"
+        },
+        "openvsChat.kimi.model": {
+          "type": "string",
+          "default": "kimi-k2.5",
+          "description": "%config.kimi.model%"
+        },
+        "openvsChat.kimi.baseUrl": {
+          "type": "string",
+          "default": "https://api.moonshot.ai/v1",
+          "description": "%config.kimi.baseUrl%"
+        },
+        "openvsChat.kimi.authUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.authUrl%"
+        },
+        "openvsChat.qwen.model": {
+          "type": "string",
+          "default": "qwen-plus",
+          "description": "%config.qwen.model%"
+        },
+        "openvsChat.qwen.baseUrl": {
+          "type": "string",
+          "default": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+          "description": "%config.qwen.baseUrl%"
+        },
+        "openvsChat.qwen.authUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.authUrl%"
+        },
+        "openvsChat.zai.model": {
+          "type": "string",
+          "default": "glm-4.6-flash",
+          "description": "%config.zai.model%"
+        },
+        "openvsChat.zai.baseUrl": {
+          "type": "string",
+          "default": "https://api.z.ai/api/paas/v4",
+          "description": "%config.zai.baseUrl%"
+        },
+        "openvsChat.zai.authUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.authUrl%"
+        },
+        "openvsChat.opencode_zen.model": {
+          "type": "string",
+          "default": "laguna-s-2.1-free",
+          "description": "%config.opencode_zen.model%"
+        },
+        "openvsChat.opencode_zen.baseUrl": {
+          "type": "string",
+          "default": "https://opencode.ai/zen/v1",
+          "description": "%config.opencode_zen.baseUrl%"
+        },
+        "openvsChat.opencode_zen.authUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.authUrl%"
+        },
+        "openvsChat.xkiro.model": {
+          "type": "string",
+          "default": "mistralai/mistral-medium-3.5",
+          "description": "%config.xkiro.model%"
+        },
+        "openvsChat.xkiro.baseUrl": {
+          "type": "string",
+          "default": "https://xkiro.com/v1",
+          "description": "%config.xkiro.baseUrl%"
+        },
+        "openvsChat.xkiro.authUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.authUrl%"
+        },
+        "openvsChat.copilot.model": {
+          "type": "string",
+          "default": "gpt-4.1",
+          "description": "%config.copilot.model%"
+        },
+        "openvsChat.grok.model": {
+          "type": "string",
+          "default": "grok-4.6",
+          "description": "%config.grok.model%"
+        },
+        "openvsChat.kiro.model": {
+          "type": "string",
+          "default": "claude-sonnet-4-5",
+          "description": "%config.kiro.model%"
+        },
+        "openvsChat.web_gemini.model": {
+          "type": "string",
+          "default": "gemini-2.5-flash",
+          "description": "%config.web_gemini.model%"
+        },
+        "openvsChat.webGemini.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.webGemini.enabled%"
+        },
+        "openvsChat.claude-code-cli.model": {
+          "type": "string",
+          "default": "",
+          "description": "%config.claude-code-cli.model%"
+        },
+        "openvsChat.claude-code-cli.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "%config.claude-code-cli.cliPath%"
+        },
+        "openvsChat.custom.model": {
+          "type": "string",
+          "default": "llama3.1",
+          "description": "%config.custom.model%"
+        },
+        "openvsChat.custom.baseUrl": {
+          "type": "string",
+          "default": "http://localhost:11434/v1",
+          "description": "%config.custom.baseUrl%"
+        },
+        "openvsChat.custom.authUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.authUrl%"
+        },
+        "openvsChat.agent.maxSteps": {
+          "type": "number",
+          "default": 100,
+          "description": "%config.agent.maxSteps%"
+        },
+        "openvsChat.agent.maxContextTokens": {
+          "type": "number",
+          "default": 0,
+          "description": "%config.agent.maxContextTokens%"
+        },
+        "openvsChat.ask.autoContext": {
+          "type": "string",
+          "enum": [
+            "active",
+            "tabs",
+            "off"
+          ],
+          "default": "active",
+          "description": "%config.ask.autoContext%"
+        },
+        "openvsChat.stream.idleTimeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "description": "%config.stream.idleTimeoutMs%"
+        },
+        "openvsChat.agent.commandTimeoutMs": {
+          "type": "number",
+          "default": 300000,
+          "description": "%config.agent.commandTimeoutMs%"
+        },
+        "openvsChat.agent.shell": {
+          "type": "string",
+          "default": "",
+          "description": "%config.agent.shell%"
+        },
+        "openvsChat.agent.maxSubagents": {
+          "type": "number",
+          "default": 4,
+          "description": "%config.agent.maxSubagents%"
+        },
+        "openvsChat.agent.maxSubagentDepth": {
+          "type": "number",
+          "default": 2,
+          "description": "%config.agent.maxSubagentDepth%"
+        },
+        "openvsChat.agent.maxAgentMessages": {
+          "type": "number",
+          "default": 3,
+          "description": "%config.agent.maxAgentMessages%"
+        },
+        "openvsChat.agent.parallelResearch": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.agent.parallelResearch%"
+        },
+        "openvsChat.agent.parallelReads": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.agent.parallelReads%"
+        },
+        "openvsChat.agent.maxRunMinutes": {
+          "type": "number",
+          "default": 30,
+          "description": "%config.agent.maxRunMinutes%"
+        },
+        "openvsChat.agent.traceTiming": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.agent.traceTiming%"
+        },
+        "openvsChat.remote.traceSessions": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.remote.traceSessions%"
+        },
+        "openvsChat.remote.loopback": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.remote.loopback%"
+        },
+        "openvsChat.remote.promptEscalationSeconds": {
+          "type": "number",
+          "default": 30,
+          "description": "%config.remote.promptEscalationSeconds%"
+        },
+        "openvsChat.remote.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.remote.enabled%"
+        },
+        "openvsChat.remote.relayUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.remote.relayUrl%"
+        },
+        "openvsChat.remote.relayMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "local",
+            "hosted"
+          ],
+          "enumDescriptions": [
+            "%config.remote.relayMode.auto%",
+            "%config.remote.relayMode.local%",
+            "%config.remote.relayMode.hosted%"
+          ],
+          "default": "auto",
+          "description": "%config.remote.relayMode%"
+        },
+        "openvsChat.remote.cloudflaredPath": {
+          "type": "string",
+          "default": "",
+          "description": "%config.remote.cloudflaredPath%"
+        },
+        "openvsChat.remote.tunnelHostname": {
+          "type": "string",
+          "default": "",
+          "description": "%config.remote.tunnelHostname%"
+        },
+        "openvsChat.remote.localPort": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "%config.remote.localPort%"
+        },
+        "openvsChat.remote.deviceTokenDays": {
+          "type": "number",
+          "default": 30,
+          "description": "%config.remote.deviceTokenDays%"
+        },
+        "openvsChat.remote.idleDisableHours": {
+          "type": "number",
+          "default": 12,
+          "description": "%config.remote.idleDisableHours%"
+        },
+        "openvsChat.remote.approvalFloor": {
+          "type": "string",
+          "enum": [
+            "always",
+            "auto-edits",
+            "yolo"
+          ],
+          "enumDescriptions": [
+            "%config.guardrails.approval.always%",
+            "%config.guardrails.approval.autoEdits%",
+            "%config.guardrails.approval.yolo%"
+          ],
+          "default": "auto-edits",
+          "description": "%config.remote.approvalFloor%"
+        },
+        "openvsChat.rules": {
+          "type": "string",
+          "editPresentation": "multilineText",
+          "default": "",
+          "description": "%config.rules%"
+        },
+        "openvsChat.ruleFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".openvs/rules.md",
+            "AGENTS.md",
+            ".github/copilot-instructions.md",
+            ".cursorrules"
+          ],
+          "description": "%config.ruleFiles%"
+        },
+        "openvsChat.guardrails.approval": {
+          "type": "string",
+          "enum": [
+            "always",
+            "auto-edits",
+            "yolo"
+          ],
+          "enumDescriptions": [
+            "%config.guardrails.approval.always%",
+            "%config.guardrails.approval.autoEdits%",
+            "%config.guardrails.approval.yolo%"
+          ],
+          "default": "yolo",
+          "description": "%config.guardrails.approval%"
+        },
+        "openvsChat.guardrails.deniedCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "rm\\s+-[a-z]*r[a-z]*f|rm\\s+-[a-z]*f[a-z]*r",
+            ":\\(\\)\\s*\\{\\s*:\\s*\\|\\s*:",
+            "\\bmkfs\\b",
+            "\\bdd\\s+if=",
+            "\\bsudo\\b",
+            "git\\s+push\\s+.*(--force|-f)\\b",
+            "\\b(curl|wget)\\b[^|]*\\|\\s*(sudo\\s+)?(ba)?sh",
+            ">\\s*/dev/sd[a-z]",
+            "\\b(shutdown|reboot|halt|poweroff)\\b",
+            "chmod\\s+-R\\s+777\\s+/"
+          ],
+          "description": "%config.guardrails.deniedCommands%"
+        },
+        "openvsChat.guardrails.allowedCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "%config.guardrails.allowedCommands%"
+        },
+        "openvsChat.guardrails.protectedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".git",
+            ".env",
+            ".env.*",
+            "*.pem",
+            "*.key",
+            "id_rsa",
+            ".ssh"
+          ],
+          "description": "%config.guardrails.protectedPaths%"
+        },
+        "openvsChat.mcp.servers": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "%config.mcp.servers%",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "Executable to launch the stdio MCP server."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string",
+                "description": "URL of a remote MCP server (Streamable HTTP, or the older HTTP+SSE transport — whichever the server speaks). Use instead of \"command\"."
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "markdownDescription": "Extra request headers for a remote server, e.g. `{\"Authorization\": \"Bearer ${env:MY_TOKEN}\"}`. `${env:NAME}` is replaced with that environment variable, so a token need not be written into settings."
+              },
+              "disabled": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "openvsChat.skills": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "%config.skills%",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "instructions": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "instructions"
+            ]
+          }
+        },
+        "openvsChat.auto.planModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "%config.auto.planModel%"
+        },
+        "openvsChat.auto.codeModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "%config.auto.codeModel%"
+        },
+        "openvsChat.auto.reviewModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "%config.auto.reviewModel%"
+        },
+        "openvsChat.auto.enableReview": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.auto.enableReview%"
+        },
+        "openvsChat.auto.decompose": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.auto.decompose%"
+        },
+        "openvsChat.persona.thinking": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.persona.thinking%"
+        },
+        "openvsChat.persona.environment": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.persona.environment%"
+        },
+        "openvsChat.persona.compactPrompt": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "always",
+            "never"
+          ],
+          "enumDescriptions": [
+            "%config.persona.compactPrompt.auto%",
+            "%config.persona.compactPrompt.always%",
+            "%config.persona.compactPrompt.never%"
+          ],
+          "default": "auto",
+          "description": "%config.persona.compactPrompt%"
+        },
+        "openvsChat.systemPrompt": {
+          "type": "string",
+          "editPresentation": "multilineText",
+          "default": "You are a helpful AI coding assistant integrated into the editor. Answer concisely and use Markdown for code.",
+          "description": "%config.systemPrompt%"
+        },
+        "openvsChat.maxTokens": {
+          "type": "number",
+          "default": 8192,
+          "description": "%config.maxTokens%"
+        },
+        "openvsChat.completions.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.completions.enabled%"
+        },
+        "openvsChat.completions.model": {
+          "type": "string",
+          "default": "",
+          "description": "%config.completions.model%"
+        },
+        "openvsChat.completions.debounceMs": {
+          "type": "number",
+          "default": 250,
+          "description": "%config.completions.debounceMs%"
+        },
+        "openvsChat.completions.maxLines": {
+          "type": "number",
+          "default": 6,
+          "description": "%config.completions.maxLines%"
+        },
+        "openvsChat.completions.prefixChars": {
+          "type": "number",
+          "default": 2000,
+          "description": "%config.completions.prefixChars%"
+        },
+        "openvsChat.completions.suffixChars": {
+          "type": "number",
+          "default": 1000,
+          "description": "%config.completions.suffixChars%"
+        },
+        "openvsChat.completions.maxTokens": {
+          "type": "number",
+          "default": 96,
+          "description": "%config.completions.maxTokens%"
+        },
+        "openvsChat.completions.quotaReserve": {
+          "type": "number",
+          "default": 0.15,
+          "description": "%config.completions.quotaReserve%"
+        },
+        "openvsChat.completions.slowMs": {
+          "type": "number",
+          "default": 3000,
+          "description": "%config.completions.slowMs%"
+        },
+        "openvsChat.completions.disabledLanguages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "%config.completions.disabledLanguages%"
+        },
+        "openvsChat.completions.excludeFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "%config.completions.excludeFiles%"
+        },
+        "openvsChat.completions.inComments": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.completions.inComments%"
+        },
+        "openvsChat.completions.untrusted": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.completions.untrusted%"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "gulp compile-extension:openvs-chat",
+    "watch": "gulp watch-extension:openvs-chat",
+    "typecheck": "tsc -p ./tsconfig.json --noEmit && npm run typecheck-webview",
+    "typecheck-webview": "tsc --noEmit --ignoreConfig --allowJs --checkJs --noImplicitAny false --strictNullChecks --target es2022 --lib es2022,dom media/main.js media/prompts.js media/markdown.js media/qr.js media/pairing.js media/webview.d.ts",
+    "pretest": "tsc -p ./tsconfig.json",
+    "test": "node ./scripts/run-tests.mjs",
+    "vscode:prepublish": "npm run build-ext",
+    "build-ext": "node ../../node_modules/gulp/bin/gulp.js --gulpfile ../../build/gulpfile.extensions.mjs compile-extension:openvs-chat ./tsconfig.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/microsoft/vscode.git"
+  },
+  "dependencies": {
+    "sql.js": "1.14.2"
+  },
+  "devDependencies": {
+    "@types/sql.js": "1.4.11"
+  }
+}

@@ -1,0 +1,117 @@
+/* Applied inside the chat and settings frames. The chat UI was written against the editor's
+   theme variables; defining every one of them from the tokens lets its stylesheet render here
+   unchanged, and the rules below then restyle what the data-terminal style does differently. */
+@import url("mjolnir-asset://app/shell/tokens.css");
+
+:root {
+	--vscode-font-family: var(--font);
+	--vscode-font-size: var(--fs-body);
+	--vscode-editor-font-family: var(--mono);
+	--vscode-foreground: var(--text);
+	--vscode-descriptionForeground: var(--muted);
+	--vscode-icon-foreground: var(--text-2);
+	--vscode-focusBorder: var(--accent);
+	--vscode-contrastBorder: transparent;
+	--vscode-panel-border: var(--border);
+	--vscode-widget-border: var(--control);
+	--vscode-widget-shadow: rgba(0, 0, 0, .45);
+	--vscode-panelTitle-activeBorder: var(--accent);
+	--vscode-editor-background: var(--ground);
+	--vscode-editorWidget-background: var(--raised);
+	--vscode-textCodeBlock-background: var(--surface);
+	--vscode-textBlockQuote-background: var(--surface);
+	--vscode-textBlockQuote-border: var(--control);
+	--vscode-textLink-foreground: var(--accent);
+	--vscode-list-hoverBackground: rgba(255, 255, 255, .04);
+	--vscode-list-activeSelectionBackground: var(--raised);
+	--vscode-list-activeSelectionForeground: var(--text);
+	--vscode-toolbar-hoverBackground: rgba(255, 255, 255, .06);
+	--vscode-editor-inactiveSelectionBackground: var(--raised);
+	--vscode-button-background: var(--text);
+	--vscode-button-foreground: #000;
+	--vscode-button-hoverBackground: #e6e6e8;
+	--vscode-button-border: transparent;
+	--vscode-button-secondaryBackground: var(--raised);
+	--vscode-button-secondaryForeground: var(--text-2);
+	--vscode-button-secondaryHoverBackground: var(--control);
+	--vscode-input-background: var(--surface);
+	--vscode-input-foreground: var(--text);
+	--vscode-input-border: var(--control);
+	--vscode-dropdown-background: var(--surface);
+	--vscode-dropdown-foreground: var(--text);
+	--vscode-dropdown-border: var(--control);
+	--vscode-badge-background: var(--raised);
+	--vscode-badge-foreground: var(--text-2);
+	--vscode-errorForeground: var(--negative);
+	--vscode-editorWarning-foreground: var(--warning);
+	--vscode-inputValidation-errorBorder: var(--negative);
+	--vscode-inputValidation-errorBackground: var(--pill-negative-bg);
+	--vscode-inputValidation-warningBorder: var(--warning);
+	--vscode-inputValidation-warningBackground: var(--pill-warning-bg);
+	--vscode-testing-iconPassed: var(--positive);
+	--vscode-charts-blue: var(--accent);
+	--vscode-charts-purple: var(--text-2);
+	--vscode-charts-yellow: var(--warning);
+	--vscode-scrollbarSlider-background: rgba(255, 255, 255, .12);
+	--vscode-scrollbarSlider-hoverBackground: rgba(255, 255, 255, .2);
+	--vscode-scrollbarSlider-activeBackground: rgba(255, 255, 255, .3);
+}
+
+html, body {
+	background: var(--ground);
+	font-feature-settings: "tnum" 1, "cv11" 1;
+	-webkit-font-smoothing: antialiased;
+}
+
+::selection { background: rgba(79, 168, 224, .32); }
+
+* { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .16) transparent; }
+
+/* ---- Style overrides: flat surfaces, no ambient wash, one accent line ---- */
+#messages, #messages.is-empty { background: none; }
+.empty-hero {
+	content: url("mjolnir-asset://app/shell/mark.svg");
+	width: 44px; height: 44px; border: 0; border-radius: 0; box-shadow: none; animation: none; opacity: .95;
+}
+.empty-title { font-size: var(--fs-section); font-weight: 400; color: var(--muted); letter-spacing: 0; margin-top: 10px; }
+.empty-sub { color: var(--muted); }
+
+/* Native selects everywhere: the customizable-select mode renders differently across the
+   Chromium versions Electron has shipped, and the pills here need to look the same on all. */
+@supports (appearance: base-select) {
+	#app select, #app select::picker(select) { appearance: none; }
+	#app select > button { display: none; }
+	#app select { display: inline-block; padding-right: 22px; }
+}
+#app select {
+	background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 16 16' fill='%238a8c92'><path d='M3 6l5 5 5-5H3z'/></svg>");
+	background-repeat: no-repeat;
+	background-position: right 8px center;
+}
+.mode-pill { background-color: var(--raised) !important; color: var(--text) !important; border: 1px solid var(--control) !important; }
+.mode-pill:hover { background-color: var(--control) !important; }
+select { color-scheme: dark; }
+
+/* Settings frame: the rail replaces the in-panel Close button, and areas show one at a time. */
+body.settings-window #closeSettings { display: none; }
+body.settings-window #settingsPanel { display: flex !important; flex-direction: row; align-items: stretch; padding: 0; overflow: hidden; }
+.area-nav {
+	flex: none; width: 200px; display: flex; flex-direction: column; gap: 2px;
+	padding: 20px 12px; border-right: 1px solid var(--border); overflow-y: auto;
+}
+.area-nav h1 { margin: 0 0 14px 8px; font-size: var(--fs-section); font-weight: 400; color: var(--muted); }
+.area-nav button {
+	position: relative; text-align: left; height: 30px; padding: 0 8px; color: var(--muted);
+	background: none; border: 0; border-radius: 4px; cursor: pointer; font: inherit;
+}
+.area-nav button:hover { color: var(--text-2); }
+.area-nav button[aria-current] { color: var(--text); }
+.area-nav button[aria-current]::before { content: ""; position: absolute; left: -12px; top: 6px; bottom: 6px; width: 1px; background: var(--accent); }
+#settingsPanel .area { display: none; flex: 1; min-width: 0; overflow-y: auto; padding: 24px 32px 48px; max-width: 880px; }
+#settingsPanel .area.active { display: block; }
+body.settings-window #settingsPanel > .area.active { flex: 1; }
+body.settings-window #settingsPanel { max-width: none; width: 100%; margin: 0; padding: 0; border: 0; }
+body.settings-window #settingsPanel > .panel-header { display: none; }
+#settingsPanel .area > .settings-header:first-child h2 { font-size: var(--fs-section); font-weight: 400; color: var(--muted); margin: 0 0 8px; }
+#settingsPanel .area { padding-left: 40px; padding-right: 40px; }
+#settingsPanel .area > * { max-width: 760px; }

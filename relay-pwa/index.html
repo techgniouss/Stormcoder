@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OpenVS Remote</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#111318">
+<!-- iOS Safari ignores the manifest's "display": "standalone" entirely — without this meta tag
+     an "Add to Home Screen" install still opens inside Safari chrome (URL bar, tab switcher),
+     which also silently breaks Web Push (iOS only allows it from an actually-standalone launch). -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="OpenVS">
+<!-- iOS also ignores the manifest's icons array — needs its own link. -->
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<div id="pairScreen" class="pair-screen">
+	<h1>OpenVS Remote</h1>
+	<p>Enter the pairing code shown in the OpenVS Chat panel.</p>
+	<form id="pairForm">
+		<input id="pairCode" type="text" inputmode="text" autocapitalize="characters" placeholder="8-character code" maxlength="8">
+		<button type="submit">Pair</button>
+	</form>
+	<p id="pairError" class="pair-error"></p>
+	<p class="pair-note">iOS: add this page to your Home Screen first — Web Push notifications only work from the installed app, not a Safari tab.</p>
+</div>
+
+<div id="app" hidden>
+	<header class="topbar">
+		<div id="status" class="status" role="status" aria-live="polite">Connecting…</div>
+		<div class="topbar-actions">
+			<button id="historyBtn" class="icon-btn" type="button" aria-label="History"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v4l2.5 1.5M4 12a8 8 0 1 0 2.3-5.6M4 4v4h4"/></svg><span class="icon-label">History</span></button>
+			<button id="newSessionBtn" class="icon-btn" type="button" aria-label="New chat"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span class="icon-label">New</span></button>
+		</div>
+	</header>
+	<nav id="tabs" class="tabs" aria-label="Chats"></nav>
+	<main id="messages" class="messages" aria-live="polite"></main>
+	<div id="todos" class="todos" hidden></div>
+	<footer class="composer-bar">
+		<div id="contextChip" class="context-chip" hidden></div>
+		<div id="queueChips" class="queue-chips" hidden></div>
+		<div id="slashMenu" class="slash-menu" hidden></div>
+		<div class="composer">
+			<textarea id="composer" rows="1" placeholder="Message…" aria-label="Message"></textarea>
+			<div class="composer-actions">
+				<input id="attachImageInput" type="file" accept="image/*" hidden>
+				<button id="attachImageBtn" class="tool-btn" type="button" aria-label="Attach image"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15.5 8.5h.01"/></svg><span class="tool-label">Image</span></button>
+				<button id="attachActiveBtn" class="tool-btn" type="button" aria-label="Attach the file open in VS Code"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h12V7l-4-4zM14 3v4h4M10 12l-2 2 2 2M14 12l2 2-2 2"/></svg><span class="tool-label">Open file</span></button>
+				<button id="enhanceBtn" class="tool-btn" type="button" aria-label="Enhance prompt"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM18.5 15l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/></svg><span class="tool-label">Enhance</span></button>
+				<span class="spacer"></span>
+				<button id="stopBtn" class="round-btn stop-btn" type="button" aria-label="Stop" hidden><svg class="icon icon-fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7z"/></svg></button>
+				<button id="sendBtn" class="round-btn send-btn" type="button" aria-label="Send"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/></svg></button>
+			</div>
+		</div>
+		<div class="controls-row">
+			<select id="modeSelect" aria-label="Mode">
+				<option value="ask">Ask</option>
+				<option value="plan">Plan</option>
+				<option value="agent">Agent</option>
+			</select>
+			<select id="providerSelect" aria-label="Provider"></select>
+			<select id="modelSelect" aria-label="Model"></select>
+		</div>
+		<details id="skillsPanel" class="skills-panel" hidden>
+			<summary id="skillsSummary">Skills</summary>
+			<div id="skillsList" class="skills-list"></div>
+		</details>
+	</footer>
+</div>
+
+<div id="historyPanel" class="history-panel" hidden>
+	<div class="history-header">
+		<span class="history-title">History</span>
+		<button id="historyCloseBtn" class="icon-btn" type="button" aria-label="Close history"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+	</div>
+	<div id="historyList" class="history-list"></div>
+</div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

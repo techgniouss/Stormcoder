@@ -1,0 +1,82 @@
+[
+	{
+		"id": "openvsChat.configureProvider",
+		"title": "Configure Provider / API Key",
+		"group": "Command"
+	},
+	{
+		"id": "openvsChat.signIn",
+		"title": "Sign in to Provider (Web)",
+		"group": "Command"
+	},
+	{
+		"id": "openvsChat.clearKey",
+		"title": "Clear Stored API Key",
+		"group": "Command"
+	},
+	{
+		"id": "openvsChat.selectProvider",
+		"title": "Select AI Provider",
+		"group": "Command"
+	},
+	{
+		"id": "openvsChat.mcpReconnect",
+		"title": "MCP: Reconnect Servers",
+		"group": "Command"
+	},
+	{
+		"id": "openvsChat.mcpStatus",
+		"title": "MCP: Show Server Status",
+		"group": "Command"
+	},
+	{
+		"id": "openvsChat.mcpAdd",
+		"title": "MCP: Add Server",
+		"group": "Command"
+	},
+	{
+		"id": "openvsChat.mcpOpenConfig",
+		"title": "MCP: Open Project Config",
+		"group": "Command"
+	},
+	{
+		"id": "openvsChat.remoteEnable",
+		"title": "Remote: Enable Remote Control",
+		"group": "Command"
+	},
+	{
+		"id": "openvsChat.remoteStatus",
+		"title": "Remote: Show Connection Status",
+		"group": "Command"
+	},
+	{
+		"id": "openvsChat.remoteDeployRelay",
+		"title": "Remote: Deploy Your Own Relay",
+		"group": "Command"
+	},
+	{
+		"id": "openvsChat.remoteInstallCloudflared",
+		"title": "Remote: Install Cloudflare Tunnel",
+		"group": "Command"
+	},
+	{
+		"id": "openvsChat.remoteSetTunnel",
+		"title": "Remote: Use My Cloudflare Tunnel",
+		"group": "Command"
+	},
+	{
+		"id": "openvsChat.newChat",
+		"title": "New Chat",
+		"group": "Chat"
+	},
+	{
+		"id": "openvsChat.selectSkill",
+		"title": "Choose Active Skills…",
+		"group": "Skills"
+	},
+	{
+		"id": "openvsChat.createSkill",
+		"title": "New Skill…",
+		"group": "Skills"
+	}
+]

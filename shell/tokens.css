@@ -1,0 +1,42 @@
+/* Design tokens: the "data terminal" style from the taste-skill app sheet, dark theme.
+   Colour sits on data, never on chrome; the accent is only ever a 1px line. */
+@font-face {
+	font-family: "Public Sans";
+	font-style: normal;
+	font-weight: 100 900;
+	font-display: swap;
+	src: url("mjolnir-asset://app/shell/fonts/public-sans-latin-wght-normal.woff2") format("woff2");
+}
+
+:root {
+	color-scheme: dark;
+	--ground: #171719;
+	--surface: #131217;
+	--raised: #212023;
+	--border: #222224;
+	--rule: #1b1a1f;
+	--control: #3a3a3e;
+	--text: #ffffff;
+	--text-2: #bdbdc0;
+	--muted: #8a8c92;
+	--accent: #4fa8e0;
+	--positive: #44a282;
+	--negative: #e5566f;
+	--warning: #d9a441;
+	--pill-positive-bg: #1b2828; --pill-positive-ink: #5fc39c;
+	--pill-negative-bg: #2c1a20; --pill-negative-ink: #e5566f;
+	--pill-warning-bg: #2a2416; --pill-warning-ink: #d9a441;
+	--pill-neutral-bg: #212023; --pill-neutral-ink: #bdbdc0;
+	--shadow: 0 12px 28px rgba(0, 0, 0, .2);
+	--radius-card: 6px;
+	--radius-control: 999px;
+	--gap: 24px;
+	--control-height: 34px;
+	--fs-title: 26px;
+	--fs-section: 20px;
+	--fs-kpi: 20px;
+	--fs-body: 13px;
+	--fs-small: 12px;
+	--font: "Public Sans", Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+	--mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}

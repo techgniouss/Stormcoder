@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src mjolnir-asset://app; style-src mjolnir-asset://app 'unsafe-inline'; font-src mjolnir-asset://app; img-src mjolnir-asset://app data:; frame-src mjolnir-asset://app; connect-src ws://127.0.0.1:* ws://localhost:*" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Mjolnir</title>
+	<link rel="icon" href="mjolnir-asset://app/shell/mark.svg" />
+	<link rel="stylesheet" href="mjolnir-asset://app/shell/tokens.css" />
+	<link rel="stylesheet" href="mjolnir-asset://app/shell/shell.css" />
+</head>
+<body>
+	<div id="shell">
+		<nav id="rail" aria-label="Main">
+			<div class="rail-mark" title="Mjolnir" aria-hidden="true">
+				<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="13" height="7" rx="1"/><path d="M9.5 10v11"/><path d="M16 6.5h3.5L21 8"/></svg>
+			</div>
+			<div class="rail-group">
+				<button class="rail-btn" data-view="chat" aria-label="Chat" title="Chat  (Ctrl+1)">
+					<svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>
+				</button>
+				<button class="rail-btn" data-view="history" aria-label="History" title="History  (Ctrl+2)">
+					<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 4.8V8l2.2 1.4"/></svg>
+				</button>
+			</div>
+			<div class="rail-group">
+				<button class="rail-btn" data-view="skills" aria-label="Skills" title="Skills  (Ctrl+3)">
+					<svg viewBox="0 0 16 16"><path d="M3.5 2.5h7l2 2v9h-9z"/><path d="M5.5 7h5M5.5 9.5h5"/></svg>
+				</button>
+				<button class="rail-btn" data-view="mcp" aria-label="MCP servers" title="MCP servers  (Ctrl+4)">
+					<svg viewBox="0 0 16 16"><path d="M6 2.5v3M10 2.5v3M4.5 5.5h7v2.5a3.5 3.5 0 0 1-7 0zM8 11.5v2"/></svg>
+				</button>
+				<button class="rail-btn" data-view="settings" aria-label="Settings" title="Settings  (Ctrl+,)">
+					<svg viewBox="0 0 16 16"><path d="M2.5 4.5h6M11.5 4.5h2M2.5 8h2M7.5 8h6M2.5 11.5h7M12.5 11.5h1"/><circle cx="10" cy="4.5" r="1.5"/><circle cx="5.5" cy="8" r="1.5"/><circle cx="11" cy="11.5" r="1.5"/></svg>
+				</button>
+			</div>
+			<div class="rail-spacer"></div>
+			<div class="rail-group">
+				<button class="rail-btn" id="paletteBtn" aria-label="Command palette" title="Command palette  (Ctrl+K)">
+					<svg viewBox="0 0 16 16"><path d="M5.5 3.5a2 2 0 1 0-2 2h9a2 2 0 1 0-2-2v9a2 2 0 1 0 2-2h-9a2 2 0 1 0 2 2z"/></svg>
+				</button>
+			</div>
+		</nav>
+
+		<div id="main">
+			<header id="scope">
+				<button id="projectBtn" class="scope-project" title="Switch project folder">
+					<svg viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg>
+					<span id="projectName">No folder open</span>
+				</button>
+				<span id="trustPill" class="pill pill-warning hidden" title="The agent cannot write files or run commands in a folder you have not trusted">Read-only</span>
+				<span class="spacer"></span>
+				<span id="statusItems"></span>
+				<span id="progressLabel" class="scope-note hidden"></span>
+				<span id="storageNote" class="scope-note hidden"></span>
+			</header>
+			<div id="progressBar" class="hidden"><span></span></div>
+			<div id="views">
+				<iframe id="view-chat" class="view" title="Chat" data-view="chat"></iframe>
+				<iframe id="view-settings" class="view hidden" title="Settings" data-view="settings"></iframe>
+			</div>
+		</div>
+	</div>
+
+	<div id="palette" class="overlay hidden" role="dialog" aria-modal="true" aria-label="Command palette">
+		<div class="palette-card">
+			<div id="paletteTitle" class="palette-title hidden"></div>
+			<div id="palettePrompt" class="palette-prompt hidden"></div>
+			<input id="paletteInput" type="text" autocomplete="off" spellcheck="false" />
+			<ul id="paletteList" role="listbox"></ul>
+			<div id="paletteFoot" class="palette-foot"></div>
+		</div>
+	</div>
+
+	<div id="dialog" class="overlay hidden" role="alertdialog" aria-modal="true" aria-labelledby="dialogText">
+		<div class="dialog-card">
+			<p id="dialogText"></p>
+			<p id="dialogDetail" class="dialog-detail hidden"></p>
+			<div id="dialogActions" class="dialog-actions"></div>
+		</div>
+	</div>
+
+	<div id="editor" class="overlay hidden" role="dialog" aria-modal="true" aria-label="File editor">
+		<div class="editor-card">
+			<div class="editor-head">
+				<span id="editorPath" class="editor-path"></span>
+				<span id="editorNote" class="editor-note"></span>
+				<span class="spacer"></span>
+				<button id="editorSave" class="btn btn-primary">Save</button>
+				<button id="editorClose" class="btn">Close</button>
+			</div>
+			<textarea id="editorText" spellcheck="false" wrap="off"></textarea>
+		</div>
+	</div>
+
+	<div id="toasts" aria-live="polite"></div>
+
+	<script src="mjolnir-asset://app/shell/web-api.js"></script>
+	<script src="mjolnir-asset://app/shell/shell.js"></script>
+</body>
+</html>

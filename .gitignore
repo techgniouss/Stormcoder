@@ -1,0 +1,8 @@
+node_modules/
+dist/
+out/
+release/
+.dev-data/
+*.log
+.taste-skill/inspect/
+.taste-skill/assets/

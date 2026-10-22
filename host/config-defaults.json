@@ -1,0 +1,609 @@
+{
+	"defaults": {
+		"openvsChat.defaultProvider": "nvidia",
+		"openvsChat.openai.model": "gpt-4o-mini",
+		"openvsChat.openai.baseUrl": "https://api.openai.com/v1",
+		"openvsChat.openai.authUrl": "",
+		"openvsChat.anthropic.model": "claude-sonnet-5",
+		"openvsChat.anthropic.baseUrl": "https://api.anthropic.com/v1",
+		"openvsChat.anthropic.authUrl": "",
+		"openvsChat.anthropic.thinking": "auto",
+		"openvsChat.nvidia.model": "meta/llama-3.3-70b-instruct",
+		"openvsChat.nvidia.baseUrl": "https://integrate.api.nvidia.com/v1",
+		"openvsChat.nvidia.authUrl": "",
+		"openvsChat.gemini.model": "gemini-2.5-flash",
+		"openvsChat.gemini.baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+		"openvsChat.gemini.authUrl": "",
+		"openvsChat.antigravity.model": "gemini-2.5-flash",
+		"openvsChat.openrouter.model": "deepseek/deepseek-chat-v3-0324:free",
+		"openvsChat.openrouter.baseUrl": "https://openrouter.ai/api/v1",
+		"openvsChat.openrouter.authUrl": "",
+		"openvsChat.groq.model": "llama-3.3-70b-versatile",
+		"openvsChat.groq.baseUrl": "https://api.groq.com/openai/v1",
+		"openvsChat.groq.authUrl": "",
+		"openvsChat.mistral.model": "mistral-medium-latest",
+		"openvsChat.mistral.baseUrl": "https://api.mistral.ai/v1",
+		"openvsChat.mistral.authUrl": "",
+		"openvsChat.cloudflare.accountId": "",
+		"openvsChat.cloudflare.model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+		"openvsChat.cloudflare.baseUrl": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+		"openvsChat.cloudflare.authUrl": "",
+		"openvsChat.kimi.model": "kimi-k2.5",
+		"openvsChat.kimi.baseUrl": "https://api.moonshot.ai/v1",
+		"openvsChat.kimi.authUrl": "",
+		"openvsChat.qwen.model": "qwen-plus",
+		"openvsChat.qwen.baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+		"openvsChat.qwen.authUrl": "",
+		"openvsChat.zai.model": "glm-4.6-flash",
+		"openvsChat.zai.baseUrl": "https://api.z.ai/api/paas/v4",
+		"openvsChat.zai.authUrl": "",
+		"openvsChat.opencode_zen.model": "laguna-s-2.1-free",
+		"openvsChat.opencode_zen.baseUrl": "https://opencode.ai/zen/v1",
+		"openvsChat.opencode_zen.authUrl": "",
+		"openvsChat.xkiro.model": "mistralai/mistral-medium-3.5",
+		"openvsChat.xkiro.baseUrl": "https://xkiro.com/v1",
+		"openvsChat.xkiro.authUrl": "",
+		"openvsChat.copilot.model": "gpt-4.1",
+		"openvsChat.grok.model": "grok-4.6",
+		"openvsChat.kiro.model": "claude-sonnet-4-5",
+		"openvsChat.web_gemini.model": "gemini-2.5-flash",
+		"openvsChat.webGemini.enabled": false,
+		"openvsChat.claude-code-cli.model": "",
+		"openvsChat.claude-code-cli.cliPath": "",
+		"openvsChat.custom.model": "llama3.1",
+		"openvsChat.custom.baseUrl": "http://localhost:11434/v1",
+		"openvsChat.custom.authUrl": "",
+		"openvsChat.agent.maxSteps": 100,
+		"openvsChat.agent.maxContextTokens": 0,
+		"openvsChat.ask.autoContext": "active",
+		"openvsChat.stream.idleTimeoutMs": 120000,
+		"openvsChat.agent.commandTimeoutMs": 300000,
+		"openvsChat.agent.shell": "",
+		"openvsChat.agent.maxSubagents": 4,
+		"openvsChat.agent.maxSubagentDepth": 2,
+		"openvsChat.agent.maxAgentMessages": 3,
+		"openvsChat.agent.parallelResearch": true,
+		"openvsChat.agent.parallelReads": true,
+		"openvsChat.agent.maxRunMinutes": 30,
+		"openvsChat.agent.traceTiming": false,
+		"openvsChat.remote.traceSessions": false,
+		"openvsChat.remote.loopback": false,
+		"openvsChat.remote.promptEscalationSeconds": 30,
+		"openvsChat.remote.enabled": false,
+		"openvsChat.remote.relayUrl": "",
+		"openvsChat.remote.relayMode": "auto",
+		"openvsChat.remote.cloudflaredPath": "",
+		"openvsChat.remote.tunnelHostname": "",
+		"openvsChat.remote.localPort": 0,
+		"openvsChat.remote.deviceTokenDays": 30,
+		"openvsChat.remote.idleDisableHours": 12,
+		"openvsChat.remote.approvalFloor": "auto-edits",
+		"openvsChat.rules": "",
+		"openvsChat.ruleFiles": [
+			".openvs/rules.md",
+			"AGENTS.md",
+			".github/copilot-instructions.md",
+			".cursorrules"
+		],
+		"openvsChat.guardrails.approval": "yolo",
+		"openvsChat.guardrails.deniedCommands": [
+			"rm\\s+-[a-z]*r[a-z]*f|rm\\s+-[a-z]*f[a-z]*r",
+			":\\(\\)\\s*\\{\\s*:\\s*\\|\\s*:",
+			"\\bmkfs\\b",
+			"\\bdd\\s+if=",
+			"\\bsudo\\b",
+			"git\\s+push\\s+.*(--force|-f)\\b",
+			"\\b(curl|wget)\\b[^|]*\\|\\s*(sudo\\s+)?(ba)?sh",
+			">\\s*/dev/sd[a-z]",
+			"\\b(shutdown|reboot|halt|poweroff)\\b",
+			"chmod\\s+-R\\s+777\\s+/"
+		],
+		"openvsChat.guardrails.allowedCommands": [],
+		"openvsChat.guardrails.protectedPaths": [
+			".git",
+			".env",
+			".env.*",
+			"*.pem",
+			"*.key",
+			"id_rsa",
+			".ssh"
+		],
+		"openvsChat.mcp.servers": {},
+		"openvsChat.skills": [],
+		"openvsChat.auto.planModel": "",
+		"openvsChat.auto.codeModel": "",
+		"openvsChat.auto.reviewModel": "",
+		"openvsChat.auto.enableReview": true,
+		"openvsChat.auto.decompose": false,
+		"openvsChat.persona.thinking": true,
+		"openvsChat.persona.environment": true,
+		"openvsChat.persona.compactPrompt": "auto",
+		"openvsChat.systemPrompt": "You are a helpful AI coding assistant integrated into the editor. Answer concisely and use Markdown for code.",
+		"openvsChat.maxTokens": 8192
+	},
+	"schema": {
+		"openvsChat.defaultProvider": {
+			"type": "string",
+			"enum": [
+				"openai",
+				"anthropic",
+				"nvidia",
+				"gemini",
+				"antigravity",
+				"openrouter",
+				"groq",
+				"mistral",
+				"cloudflare",
+				"kimi",
+				"qwen",
+				"zai",
+				"opencode_zen",
+				"xkiro",
+				"copilot",
+				"grok",
+				"kiro",
+				"web_gemini",
+				"claude-code-cli",
+				"custom"
+			],
+			"enumDescriptions": [
+				"%config.provider.openai%",
+				"%config.provider.anthropic%",
+				"%config.provider.nvidia%",
+				"%config.provider.gemini%",
+				"%config.provider.antigravity%",
+				"%config.provider.openrouter%",
+				"%config.provider.groq%",
+				"%config.provider.mistral%",
+				"%config.provider.cloudflare%",
+				"%config.provider.kimi%",
+				"%config.provider.qwen%",
+				"%config.provider.zai%",
+				"%config.provider.opencode_zen%",
+				"%config.provider.xkiro%",
+				"%config.provider.copilot%",
+				"%config.provider.grok%",
+				"%config.provider.kiro%",
+				"%config.provider.web_gemini%",
+				"%config.provider.claude-code-cli%",
+				"%config.provider.custom%"
+			],
+			"description": "%config.defaultProvider%"
+		},
+		"openvsChat.openai.model": {
+			"type": "string",
+			"description": "%config.openai.model%"
+		},
+		"openvsChat.openai.baseUrl": {
+			"type": "string",
+			"description": "%config.openai.baseUrl%"
+		},
+		"openvsChat.openai.authUrl": {
+			"type": "string",
+			"description": "%config.authUrl%"
+		},
+		"openvsChat.anthropic.model": {
+			"type": "string",
+			"description": "%config.anthropic.model%"
+		},
+		"openvsChat.anthropic.baseUrl": {
+			"type": "string",
+			"description": "%config.anthropic.baseUrl%"
+		},
+		"openvsChat.anthropic.authUrl": {
+			"type": "string",
+			"description": "%config.authUrl%"
+		},
+		"openvsChat.anthropic.thinking": {
+			"type": "string",
+			"enum": [
+				"auto",
+				"off"
+			],
+			"enumDescriptions": [
+				"%config.anthropic.thinking.auto%",
+				"%config.anthropic.thinking.off%"
+			],
+			"description": "%config.anthropic.thinking%"
+		},
+		"openvsChat.nvidia.model": {
+			"type": "string",
+			"description": "%config.nvidia.model%"
+		},
+		"openvsChat.nvidia.baseUrl": {
+			"type": "string",
+			"description": "%config.nvidia.baseUrl%"
+		},
+		"openvsChat.nvidia.authUrl": {
+			"type": "string",
+			"description": "%config.authUrl%"
+		},
+		"openvsChat.gemini.model": {
+			"type": "string",
+			"description": "%config.gemini.model%"
+		},
+		"openvsChat.gemini.baseUrl": {
+			"type": "string",
+			"description": "%config.gemini.baseUrl%"
+		},
+		"openvsChat.gemini.authUrl": {
+			"type": "string",
+			"description": "%config.authUrl%"
+		},
+		"openvsChat.antigravity.model": {
+			"type": "string",
+			"description": "%config.antigravity.model%"
+		},
+		"openvsChat.openrouter.model": {
+			"type": "string",
+			"description": "%config.openrouter.model%"
+		},
+		"openvsChat.openrouter.baseUrl": {
+			"type": "string",
+			"description": "%config.openrouter.baseUrl%"
+		},
+		"openvsChat.openrouter.authUrl": {
+			"type": "string",
+			"description": "%config.authUrl%"
+		},
+		"openvsChat.groq.model": {
+			"type": "string",
+			"description": "%config.groq.model%"
+		},
+		"openvsChat.groq.baseUrl": {
+			"type": "string",
+			"description": "%config.groq.baseUrl%"
+		},
+		"openvsChat.groq.authUrl": {
+			"type": "string",
+			"description": "%config.authUrl%"
+		},
+		"openvsChat.mistral.model": {
+			"type": "string",
+			"description": "%config.mistral.model%"
+		},
+		"openvsChat.mistral.baseUrl": {
+			"type": "string",
+			"description": "%config.mistral.baseUrl%"
+		},
+		"openvsChat.mistral.authUrl": {
+			"type": "string",
+			"description": "%config.authUrl%"
+		},
+		"openvsChat.cloudflare.accountId": {
+			"type": "string",
+			"description": "%config.cloudflare.accountId%"
+		},
+		"openvsChat.cloudflare.model": {
+			"type": "string",
+			"description": "%config.cloudflare.model%"
+		},
+		"openvsChat.cloudflare.baseUrl": {
+			"type": "string",
+			"description": "%config.cloudflare.baseUrl%"
+		},
+		"openvsChat.cloudflare.authUrl": {
+			"type": "string",
+			"description": "%config.authUrl%"
+		},
+		"openvsChat.kimi.model": {
+			"type": "string",
+			"description": "%config.kimi.model%"
+		},
+		"openvsChat.kimi.baseUrl": {
+			"type": "string",
+			"description": "%config.kimi.baseUrl%"
+		},
+		"openvsChat.kimi.authUrl": {
+			"type": "string",
+			"description": "%config.authUrl%"
+		},
+		"openvsChat.qwen.model": {
+			"type": "string",
+			"description": "%config.qwen.model%"
+		},
+		"openvsChat.qwen.baseUrl": {
+			"type": "string",
+			"description": "%config.qwen.baseUrl%"
+		},
+		"openvsChat.qwen.authUrl": {
+			"type": "string",
+			"description": "%config.authUrl%"
+		},
+		"openvsChat.zai.model": {
+			"type": "string",
+			"description": "%config.zai.model%"
+		},
+		"openvsChat.zai.baseUrl": {
+			"type": "string",
+			"description": "%config.zai.baseUrl%"
+		},
+		"openvsChat.zai.authUrl": {
+			"type": "string",
+			"description": "%config.authUrl%"
+		},
+		"openvsChat.opencode_zen.model": {
+			"type": "string",
+			"description": "%config.opencode_zen.model%"
+		},
+		"openvsChat.opencode_zen.baseUrl": {
+			"type": "string",
+			"description": "%config.opencode_zen.baseUrl%"
+		},
+		"openvsChat.opencode_zen.authUrl": {
+			"type": "string",
+			"description": "%config.authUrl%"
+		},
+		"openvsChat.xkiro.model": {
+			"type": "string",
+			"description": "%config.xkiro.model%"
+		},
+		"openvsChat.xkiro.baseUrl": {
+			"type": "string",
+			"description": "%config.xkiro.baseUrl%"
+		},
+		"openvsChat.xkiro.authUrl": {
+			"type": "string",
+			"description": "%config.authUrl%"
+		},
+		"openvsChat.copilot.model": {
+			"type": "string",
+			"description": "%config.copilot.model%"
+		},
+		"openvsChat.grok.model": {
+			"type": "string",
+			"description": "%config.grok.model%"
+		},
+		"openvsChat.kiro.model": {
+			"type": "string",
+			"description": "%config.kiro.model%"
+		},
+		"openvsChat.web_gemini.model": {
+			"type": "string",
+			"description": "%config.web_gemini.model%"
+		},
+		"openvsChat.webGemini.enabled": {
+			"type": "boolean",
+			"description": "%config.webGemini.enabled%"
+		},
+		"openvsChat.claude-code-cli.model": {
+			"type": "string",
+			"description": "%config.claude-code-cli.model%"
+		},
+		"openvsChat.claude-code-cli.cliPath": {
+			"type": "string",
+			"description": "%config.claude-code-cli.cliPath%"
+		},
+		"openvsChat.custom.model": {
+			"type": "string",
+			"description": "%config.custom.model%"
+		},
+		"openvsChat.custom.baseUrl": {
+			"type": "string",
+			"description": "%config.custom.baseUrl%"
+		},
+		"openvsChat.custom.authUrl": {
+			"type": "string",
+			"description": "%config.authUrl%"
+		},
+		"openvsChat.agent.maxSteps": {
+			"type": "number",
+			"description": "%config.agent.maxSteps%"
+		},
+		"openvsChat.agent.maxContextTokens": {
+			"type": "number",
+			"description": "%config.agent.maxContextTokens%"
+		},
+		"openvsChat.ask.autoContext": {
+			"type": "string",
+			"enum": [
+				"active",
+				"tabs",
+				"off"
+			],
+			"description": "%config.ask.autoContext%"
+		},
+		"openvsChat.stream.idleTimeoutMs": {
+			"type": "number",
+			"description": "%config.stream.idleTimeoutMs%"
+		},
+		"openvsChat.agent.commandTimeoutMs": {
+			"type": "number",
+			"description": "%config.agent.commandTimeoutMs%"
+		},
+		"openvsChat.agent.shell": {
+			"type": "string",
+			"description": "%config.agent.shell%"
+		},
+		"openvsChat.agent.maxSubagents": {
+			"type": "number",
+			"description": "%config.agent.maxSubagents%"
+		},
+		"openvsChat.agent.maxSubagentDepth": {
+			"type": "number",
+			"description": "%config.agent.maxSubagentDepth%"
+		},
+		"openvsChat.agent.maxAgentMessages": {
+			"type": "number",
+			"description": "%config.agent.maxAgentMessages%"
+		},
+		"openvsChat.agent.parallelResearch": {
+			"type": "boolean",
+			"description": "%config.agent.parallelResearch%"
+		},
+		"openvsChat.agent.parallelReads": {
+			"type": "boolean",
+			"description": "%config.agent.parallelReads%"
+		},
+		"openvsChat.agent.maxRunMinutes": {
+			"type": "number",
+			"description": "%config.agent.maxRunMinutes%"
+		},
+		"openvsChat.agent.traceTiming": {
+			"type": "boolean",
+			"description": "%config.agent.traceTiming%"
+		},
+		"openvsChat.remote.traceSessions": {
+			"type": "boolean",
+			"description": "%config.remote.traceSessions%"
+		},
+		"openvsChat.remote.loopback": {
+			"type": "boolean",
+			"description": "%config.remote.loopback%"
+		},
+		"openvsChat.remote.promptEscalationSeconds": {
+			"type": "number",
+			"description": "%config.remote.promptEscalationSeconds%"
+		},
+		"openvsChat.remote.enabled": {
+			"type": "boolean",
+			"description": "%config.remote.enabled%"
+		},
+		"openvsChat.remote.relayUrl": {
+			"type": "string",
+			"description": "%config.remote.relayUrl%"
+		},
+		"openvsChat.remote.relayMode": {
+			"type": "string",
+			"enum": [
+				"auto",
+				"local",
+				"hosted"
+			],
+			"enumDescriptions": [
+				"%config.remote.relayMode.auto%",
+				"%config.remote.relayMode.local%",
+				"%config.remote.relayMode.hosted%"
+			],
+			"description": "%config.remote.relayMode%"
+		},
+		"openvsChat.remote.cloudflaredPath": {
+			"type": "string",
+			"description": "%config.remote.cloudflaredPath%"
+		},
+		"openvsChat.remote.tunnelHostname": {
+			"type": "string",
+			"description": "%config.remote.tunnelHostname%"
+		},
+		"openvsChat.remote.localPort": {
+			"type": "number",
+			"description": "%config.remote.localPort%",
+			"minimum": 0,
+			"maximum": 65535
+		},
+		"openvsChat.remote.deviceTokenDays": {
+			"type": "number",
+			"description": "%config.remote.deviceTokenDays%"
+		},
+		"openvsChat.remote.idleDisableHours": {
+			"type": "number",
+			"description": "%config.remote.idleDisableHours%"
+		},
+		"openvsChat.remote.approvalFloor": {
+			"type": "string",
+			"enum": [
+				"always",
+				"auto-edits",
+				"yolo"
+			],
+			"enumDescriptions": [
+				"%config.guardrails.approval.always%",
+				"%config.guardrails.approval.autoEdits%",
+				"%config.guardrails.approval.yolo%"
+			],
+			"description": "%config.remote.approvalFloor%"
+		},
+		"openvsChat.rules": {
+			"type": "string",
+			"description": "%config.rules%"
+		},
+		"openvsChat.ruleFiles": {
+			"type": "array",
+			"description": "%config.ruleFiles%"
+		},
+		"openvsChat.guardrails.approval": {
+			"type": "string",
+			"enum": [
+				"always",
+				"auto-edits",
+				"yolo"
+			],
+			"enumDescriptions": [
+				"%config.guardrails.approval.always%",
+				"%config.guardrails.approval.autoEdits%",
+				"%config.guardrails.approval.yolo%"
+			],
+			"description": "%config.guardrails.approval%"
+		},
+		"openvsChat.guardrails.deniedCommands": {
+			"type": "array",
+			"description": "%config.guardrails.deniedCommands%"
+		},
+		"openvsChat.guardrails.allowedCommands": {
+			"type": "array",
+			"description": "%config.guardrails.allowedCommands%"
+		},
+		"openvsChat.guardrails.protectedPaths": {
+			"type": "array",
+			"description": "%config.guardrails.protectedPaths%"
+		},
+		"openvsChat.mcp.servers": {
+			"type": "object",
+			"description": "%config.mcp.servers%"
+		},
+		"openvsChat.skills": {
+			"type": "array",
+			"description": "%config.skills%"
+		},
+		"openvsChat.auto.planModel": {
+			"type": "string",
+			"description": "%config.auto.planModel%"
+		},
+		"openvsChat.auto.codeModel": {
+			"type": "string",
+			"description": "%config.auto.codeModel%"
+		},
+		"openvsChat.auto.reviewModel": {
+			"type": "string",
+			"description": "%config.auto.reviewModel%"
+		},
+		"openvsChat.auto.enableReview": {
+			"type": "boolean",
+			"description": "%config.auto.enableReview%"
+		},
+		"openvsChat.auto.decompose": {
+			"type": "boolean",
+			"description": "%config.auto.decompose%"
+		},
+		"openvsChat.persona.thinking": {
+			"type": "boolean",
+			"description": "%config.persona.thinking%"
+		},
+		"openvsChat.persona.environment": {
+			"type": "boolean",
+			"description": "%config.persona.environment%"
+		},
+		"openvsChat.persona.compactPrompt": {
+			"type": "string",
+			"enum": [
+				"auto",
+				"always",
+				"never"
+			],
+			"enumDescriptions": [
+				"%config.persona.compactPrompt.auto%",
+				"%config.persona.compactPrompt.always%",
+				"%config.persona.compactPrompt.never%"
+			],
+			"description": "%config.persona.compactPrompt%"
+		},
+		"openvsChat.systemPrompt": {
+			"type": "string",
+			"description": "%config.systemPrompt%"
+		},
+		"openvsChat.maxTokens": {
+			"type": "number",
+			"description": "%config.maxTokens%"
+		}
+	}
+}

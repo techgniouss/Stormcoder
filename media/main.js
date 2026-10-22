@@ -1,0 +1,3163 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) OpenVS. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+// @ts-check
+(function () {
+	const vscode = acquireVsCodeApi();
+
+	/**
+	 * True when this webview is the detached Settings editor tab (see `openSettingsWindow`
+	 * in chatViewProvider). The same UI serves both surfaces; this flag hides the chat
+	 * chrome and pins the settings panel open so it fills the editor column.
+	 */
+	const SETTINGS_ONLY = !!(/** @type {any} */ (window).__OPENVS_SETTINGS_ONLY__);
+
+	/**
+	 * URI of the brand mark shown on a fresh chat, handed over by the host because a
+	 * relative path here would resolve against the webview document, not `media/`.
+	 * Always set by `getHtml`; `test-webview` fails if that ever stops being true.
+	 */
+	const HERO_URI = /** @type {string} */ (window.__OPENVS_HERO_URI__ || '');
+
+	/** Sentinel provider id for the role-routed Auto pipeline (mirrors chatViewProvider). */
+	const AUTO_PROVIDER = '__auto__';
+	const ROLE_LABELS = { plan: 'Planning', code: 'Implementation', review: 'Review' };
+
+	/** Agent approval levels (mirrors `openvsChat.guardrails.approval`), most permissive first. */
+	const APPROVAL_OPTIONS = [
+		{ value: 'yolo', label: '⚡ Full Auto', desc: 'Never asks — the agent edits files and runs commands on its own. Hard guardrails (protected paths, denied commands, workspace confinement) still apply.' },
+		{ value: 'auto-edits', label: '🛡 Default', desc: 'Auto-approves file edits inside the workspace; asks before running commands.' },
+		{ value: 'always', label: '🛡 Always Ask', desc: 'Asks before every file write and command (safest). Reading, listing and searching never ask, under any level.' },
+	];
+
+	/**
+	 * @typedef {{ role: string, label?: string, provider?: string, model?: string, source?: string }} AutoPhase
+	 * @typedef {{ role: 'user'|'assistant', content: string, images?: {mimeType:string,data:string}[], kind?: 'info'|'error'|'auto', phases?: AutoPhase[], fromAgentSession?: {id:string,title:string} }} Msg
+	 * @typedef {{ content: string, status: 'pending'|'in_progress'|'completed' }} Todo
+	 * @typedef {{ id: string, title: string, messages: Msg[], streaming: boolean, pending: string|null, queue: string[], todos?: Todo[], runId?: string, runMode?: string, steerable?: boolean, compactSummary?: string, compactedUpTo?: number, mode?: string, undo?: { runId: string, files: string[] } }} Session
+	 */
+	/**
+	 * All chat tabs — the RENDERING CACHE, not the source of truth. Session ownership lives
+	 * on the extension host now (`SessionStore`); this array and `activeSessionId` are written
+	 * only by the `sessions`/`transcript` message handlers below, never mutated locally except
+	 * for a few small optimistic UI updates (e.g. `setMode`) that the next `sessions` push
+	 * confirms or corrects.
+	 *
+	 * Both start empty and stay that way until the host's first `sessions` + `transcript` push
+	 * arrives — a reply to the `ready` message posted at the very end of this file's init, one
+	 * message round-trip, same process, typically a handful of milliseconds. That window is
+	 * real, though: `cur()` returns `undefined` until then, so every function that calls it has
+	 * to tolerate that rather than assume a session already exists (see the guards in
+	 * `renderAll`, `updateComposer`, `renderQueueChips`, `sendText`, `send`, `enhance`). Nothing
+	 * here fabricates a placeholder session to paper over the gap — that would just reintroduce
+	 * the local ownership this refactor exists to retire.
+	 * @type {Session[]}
+	 */
+	let sessions = [];
+	let activeSessionId = '';
+	/** @type {{mimeType:string,data:string}[]} pending image attachments for the next send */
+	let pendingImages = [];
+	const MAX_IMAGE_DIM = 1568; // Claude's own internal long-edge cap; a sane default everywhere.
+	const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+	const MAX_IMAGES_PER_MESSAGE = 5;
+	/** @type {any[]} */
+	let providers = [];
+	let selectedProvider = '';
+	/** The slash-command catalog, pushed by the host's `commands` message (single source of
+	 * truth — this used to be a hardcoded local list; see `SLASH_COMMANDS` in `src/session/slash.ts`). */
+	let slashCommands = [];
+	/** @type {{ roles: any[], reviewEnabled: boolean, decompose?: boolean }} */
+	let autoConfig = { roles: [], reviewEnabled: true };
+	/** Current agent approval level (synced from `openvsChat.guardrails.approval`). */
+	let approval = 'auto-edits';
+	/** Mirrors `openvsChat.completions.enabled`, synced on every 'config'. */
+	let completionsEnabled = true;
+	/** Mirrors `openvsChat.systemPrompt` / `maxTokens` / `rules` / `agent.max*`, synced on every 'config'. */
+	let generalConfig = { systemPrompt: '', maxTokens: 8192, rules: '', maxSteps: 100, maxRunMinutes: 30 };
+	/** @type {{ label: string, content: string } | null} */
+	let currentContext = null;
+	/** The DOM bubble of the active session's in-flight assistant turn (model of record is `session.pending`). */
+	/** @type {HTMLElement | null} */
+	let activeAssistantBody = null;
+	/** @type {Map<string, { wrap: HTMLElement, out: HTMLElement, details: HTMLDetailsElement, summary: HTMLElement }>} running tool blocks (active session only), keyed by session + call id */
+	const toolEls = new Map();
+	let toolSeq = 0;
+	/**
+	 * Separator for composite map keys. A NUL can't occur in a session or call id, so it
+	 * can't collide — spelled as an escape rather than a literal so this file stays plain
+	 * text and greppable (a raw NUL makes grep treat main.js as binary).
+	 */
+	const SEP = '\u0000';
+	/** Scopes a tool block to its chat tab so parallel runs can't close each other's blocks. */
+	function toolKey(sessionId, callId) { return sessionId + SEP + callId; }
+
+	function newSessionId() { return 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+	function newRunId() { return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8); }
+	/**
+	 * The active session, or `undefined` during the brief bootstrap window before the host's
+	 * first `sessions` push has arrived (see the doc on `sessions` above) — no longer
+	 * guaranteed to exist the way it was when the webview minted its own session locally.
+	 */
+	function cur() { return sessions.find(s => s.id === activeSessionId) || sessions[0]; }
+	/** The active session's chat mode, or 'ask' as a sane default before `cur()` exists. */
+	function curMode() { return (cur() && cur().mode) || 'ask'; }
+	/**
+	 * The session a host message belongs to, or null when it belongs to no live run:
+	 * an unknown tab, or a run that has already been superseded by a newer one. Both
+	 * used to fall through to the active tab, corrupting whatever was streaming there.
+	 */
+	function sessionFor(msg) {
+		const s = sessions.find(x => x.id === msg.sessionId);
+		if (!s) { return msg.sessionId ? null : cur(); }
+		if (msg.runId && s.runId && msg.runId !== s.runId) { return null; }
+		return s;
+	}
+
+	/** Known todo statuses; anything else from the host falls back to 'pending'. */
+	const TODO_STATUSES = ['pending', 'in_progress', 'completed'];
+
+	/** Renders the agent's task checklist for the active session (hidden when empty). */
+	function renderTodos() {
+		let panel = document.getElementById('todoPanel');
+		if (!panel) {
+			panel = document.createElement('div');
+			panel.id = 'todoPanel';
+			panel.className = 'todo-panel hidden';
+			// The transcript always has a parent in the served markup; bail rather than
+			// throw if that ever stops being true, since a missing checklist is a far
+			// smaller problem than a render path that dies partway through.
+			if (!els.messages.parentElement) { return; }
+			els.messages.parentElement.insertBefore(panel, els.messages);
+		}
+		const items = (cur() && cur().todos) || [];
+		if (!items.length) {
+			panel.classList.add('hidden');
+			panel.innerHTML = '';
+			return;
+		}
+		const icon = s => s === 'completed' ? '●' : s === 'in_progress' ? '◐' : '○';
+		panel.innerHTML = '<div class="todo-title">Tasks</div>' + items.map(t => {
+			const status = TODO_STATUSES.includes(t.status) ? t.status : 'pending';
+			return `<div class="todo-item todo-${status}"><span class="todo-icon">${icon(status)}</span>${escapeHtml(t.content)}</div>`;
+		}).join('');
+		panel.classList.remove('hidden');
+	}
+
+	const $ = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
+	const els = {
+		modeSelect: /** @type {HTMLSelectElement} */ ($('modeSelect')),
+		approvalSelect: /** @type {HTMLSelectElement} */ ($('approvalSelect')),
+		approvalList: $('approvalList'),
+		providerSelect: /** @type {HTMLSelectElement} */ ($('providerSelect')),
+		modelSelect: /** @type {HTMLSelectElement} */ ($('modelSelect')),
+		autoSummary: $('autoSummary'),
+		refreshModels: $('refreshModels'),
+		settingsButton: $('settingsButton'),
+		settingsPanel: $('settingsPanel'),
+		closeSettings: $('closeSettings'),
+		providerList: $('providerList'),
+		autoRoutingList: $('autoRoutingList'),
+		systemPromptInput: /** @type {HTMLTextAreaElement} */ ($('systemPromptInput')),
+		saveSystemPrompt: $('saveSystemPrompt'),
+		maxTokensInput: /** @type {HTMLInputElement} */ ($('maxTokensInput')),
+		saveMaxTokens: $('saveMaxTokens'),
+		rulesInput: /** @type {HTMLTextAreaElement} */ ($('rulesInput')),
+		saveRules: $('saveRules'),
+		maxStepsInput: /** @type {HTMLInputElement} */ ($('maxStepsInput')),
+		saveMaxSteps: $('saveMaxSteps'),
+		maxRunMinutesInput: /** @type {HTMLInputElement} */ ($('maxRunMinutesInput')),
+		saveMaxRunMinutes: $('saveMaxRunMinutes'),
+		enableDecompose: /** @type {HTMLInputElement} */ ($('enableDecompose')),
+		enableReview: /** @type {HTMLInputElement} */ ($('enableReview')),
+		completionsEnabled: /** @type {HTMLInputElement} */ ($('completionsEnabled')),
+		messages: $('messages'),
+		contextChip: $('contextChip'),
+		imageChips: $('imageChips'),
+		attachButton: $('attachButton'),
+		imageButton: $('imageButton'),
+		input: /** @type {HTMLTextAreaElement} */ ($('input')),
+		slashMenu: $('slashMenu'),
+		enhanceButton: /** @type {HTMLButtonElement} */ ($('enhanceButton')),
+		sendButton: /** @type {HTMLButtonElement} */ ($('sendButton')),
+		stopButton: /** @type {HTMLButtonElement} */ ($('stopButton')),
+		skillChip: $('skillChip'),
+		queueChips: $('queueChips'),
+		skillList: $('skillList'),
+		newSkill: $('newSkill'),
+		mcpList: $('mcpList'),
+		mcpAdd: $('mcpAdd'),
+		mcpReconnectBtn: $('mcpReconnectBtn'),
+		mcpOpenConfig: $('mcpOpenConfig'),
+		historyButton: $('historyButton'),
+		historyPanel: $('historyPanel'),
+		closeHistory: $('closeHistory'),
+		historyList: $('historyList'),
+		remotePanel: $('remotePanel'),
+	};
+	/** @type {{id:string,name:string,description:string}[]} */
+	let skillsList = [];
+	/** Ids of all currently active skills (multiple can be active at once). */
+	let activeSkills = [];
+	let enhancing = false;
+
+	/**
+	 * Closed conversations, newest first: `{ id, title, messages, savedAt }`. No longer
+	 * persisted client-side — the host owns the archive (`workspaceState`) now. This is a
+	 * read-only mirror of its `history` push, shown in the History panel and the empty-state
+	 * "Recent chats" list.
+	 * @type {{id:string,title:string,messages:Msg[],savedAt:number}[]}
+	 */
+	let history = [];
+
+	/**
+	 * Version stamp for `vscode.setState()`'s shape, and the migration marker: once it's
+	 * present, the one-time legacy `adopt` below has already run (or never needed to), so
+	 * that branch can never fire a second time. Bump this if the minimal shape below changes
+	 * in a way an older build's bootstrap check would misread.
+	 */
+	const UI_STATE_VERSION = 1;
+
+	/**
+	 * Persists UI-only preferences across reloads — no session/message/history state, which
+	 * is the host's job now (`SessionStore`, kept in `workspaceState`); mirroring a copy here
+	 * would let a stale local cache race the host's authoritative one, exactly what this phase
+	 * exists to stop.
+	 */
+	function saveState() {
+		vscode.setState({
+			uiStateVersion: UI_STATE_VERSION,
+			selectedProvider,
+		});
+	}
+
+	/**
+	 * One-time migration for a build from before session ownership moved to the host: its
+	 * `vscode.getState()` still has the pre-Phase-2 `{sessions, activeSessionId, mode,
+	 * selectedProvider, history}` shape (see `media/main.js`'s old bootstrap, before this
+	 * rewrite, and `adoptLegacyState` on the host, which knows how to import exactly this
+	 * shape). Hand it to the host once via `adopt` — its reply is the normal `sessions` +
+	 * `transcript` push, so nothing else here needs to touch `sessions`/`history` directly —
+	 * then immediately stamp `vscode.setState()` with the new minimal shape so this branch
+	 * can never fire again. A fresh install or an already-migrated build has no legacy shape
+	 * to find, so nothing is posted and the webview just waits for the `ready`-triggered
+	 * pushes the host already sends.
+	 */
+	const persisted = vscode.getState();
+	if (persisted) {
+		selectedProvider = persisted.selectedProvider || '';
+		if (!persisted.uiStateVersion &&
+			(Array.isArray(persisted.sessions) || Array.isArray(persisted.messages) || Array.isArray(persisted.history))) {
+			vscode.postMessage({ type: 'adopt', state: persisted });
+		}
+	}
+	saveState();
+
+	// ---- Markdown ---------------------------------------------------------------
+
+	// The renderer itself lives in media/markdown.js — pure string → HTML, so it can be
+	// driven directly by scripts/test-markdown.mjs, which nothing inside this IIFE can be.
+	const { render: renderMarkdown, escapeHtml } = OpenVSMarkdown;
+
+	/**
+	 * Renders markdown into a message body, preserving which reasoning blocks the user had
+	 * opened. The streaming bubble is rebuilt on every token, so without this a block
+	 * snaps shut the instant the next token lands.
+	 */
+	function setBodyMarkdown(body, text) {
+		const wasOpen = new Set();
+		for (const el of body.querySelectorAll('details.thinking[open]')) {
+			wasOpen.add(el.dataset.think);
+		}
+		body.innerHTML = renderMarkdown(text);
+		for (const el of body.querySelectorAll('details.thinking')) {
+			if (wasOpen.has(el.dataset.think)) { el.open = true; }
+		}
+	}
+	/** Adds a header — the fence's language, then Copy / Insert — above each finalized code block. */
+	function enhanceCodeBlocks(container) {
+		for (const pre of container.querySelectorAll('pre')) {
+			if (pre.dataset.enhanced) { continue; }
+			pre.dataset.enhanced = '1';
+			const code = pre.querySelector('code');
+			if (!code) { continue; }
+			const bar = document.createElement('div');
+			bar.className = 'code-actions';
+			// Always present, empty when the fence named no language: it is also what pushes
+			// the buttons to the right edge.
+			const lang = document.createElement('span');
+			lang.className = 'code-lang';
+			lang.textContent = code.dataset.language || '';
+			bar.appendChild(lang);
+			const copyBtn = document.createElement('button');
+			copyBtn.textContent = 'Copy';
+			const insertBtn = document.createElement('button');
+			insertBtn.textContent = 'Insert';
+			bar.appendChild(copyBtn);
+			bar.appendChild(insertBtn);
+			copyBtn.addEventListener('click', () => {
+				const text = code.textContent || '';
+				try {
+					navigator.clipboard?.writeText(text);
+					copyBtn.textContent = 'Copied';
+					setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1200);
+				} catch { /* clipboard may be unavailable */ }
+			});
+			insertBtn.addEventListener('click', () => {
+				vscode.postMessage({ type: 'insertAtCursor', content: code.textContent || '' });
+			});
+			pre.parentNode?.insertBefore(bar, pre);
+		}
+	}
+
+	// ---- Messages ---------------------------------------------------------------
+
+	// ---- Icons ------------------------------------------------------------------
+
+	/**
+	 * The panel's one icon set, drawn on a 16px grid. `fill` entries are the composer's own
+	 * glyphs (shared with webviewHtml.ts so the two stay one family); `stroke` entries are
+	 * outline marks at a 1.3px stroke that matches their weight. Emoji and text glyphs (✕, 📎,
+	 * 🔧) used to stand in for these — they render in whatever colour font the OS ships, at a
+	 * size and baseline no stylesheet controls, and ignore the theme's foreground entirely.
+	 */
+	const ICONS = {
+		close: { fill: 'M8 8.707l3.646 3.647.708-.707L8.707 8l3.647-3.646-.707-.708L8 7.293 4.354 3.646l-.707.708L7.293 8l-3.646 3.646.707.708L8 8.707z' },
+		chevronDown: { fill: 'M8 11.3 3.4 6.7l.9-.9L8 9.5l3.7-3.7.9.9z' },
+		paperclip: { fill: 'M10.57 2.27a2.75 2.75 0 0 1 3.89 3.89l-6.72 6.72a4.25 4.25 0 0 1-6.01-6.01l6.01-6.01.71.71-6.01 6.01a3.25 3.25 0 1 0 4.6 4.6l6.72-6.72a1.75 1.75 0 1 0-2.48-2.48L4.92 9.34a.75.75 0 0 0 1.06 1.06l5.66-5.66.71.71-5.66 5.66a1.75 1.75 0 0 1-2.48-2.48l6.36-6.36z' },
+		clock: { fill: 'M8 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zm0 1.3a5.2 5.2 0 1 0 0 10.4A5.2 5.2 0 0 0 8 2.8zm.65 1.7v3.23l2.55 1.53-.67 1.11L7.35 8.6V4.5h1.3z' },
+		sparkle: { fill: 'M8 1l1.5 4L14 6.5 9.5 8 8 12 6.5 8 2 6.5 6.5 5 8 1zm5 9l.75 2 2 .75-2 .75L13 15.5l-.75-2-2-.75 2-.75L13 10z' },
+		file: { stroke: 'M4 1.5h5l3 3v10H4z M9 1.5v3h3' },
+		folder: { stroke: 'M1.5 3.5h4.5l1.5 1.5h7v8.5h-13z' },
+		search: { stroke: 'M11.5 7a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0z M10.3 10.3l4.2 4.2' },
+		pencil: { stroke: 'M11 2.5l2.5 2.5L6 12.5l-3.2.7.7-3.2z M9.5 4l2.5 2.5' },
+		terminal: { stroke: 'M1.5 3.5a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z M4.5 6.5l2 1.5-2 1.5 M8.5 10.5h3' },
+		checklist: { stroke: 'M2 4.5l1.2 1.2L5.5 3.4 M2 10.5l1.2 1.2 2.3-2.3 M8 4.5h6 M8 10.5h6' },
+		question: { stroke: 'M14.5 8a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z M6.2 6.2a1.9 1.9 0 1 1 2.6 1.8c-.5.2-.8.6-.8 1.1v.4 M8 11.6v.1' },
+		branch: { stroke: 'M3.5 2v5.5a3 3 0 0 0 3 3h7 M11 8l2.5 2.5L11 13' },
+		plug: { stroke: 'M6 1.5v3 M10 1.5v3 M4 4.5h8v2.5a4 4 0 0 1-8 0z M8 11v3.5' },
+		bulb: { stroke: 'M6 12.5h4 M6.5 14.5h3 M8 1.5a4.5 4.5 0 0 0-2.6 8.2c.4.3.6.7.6 1.1v.2h4v-.2c0-.4.2-.8.6-1.1A4.5 4.5 0 0 0 8 1.5z' },
+		slash: { stroke: 'M1.5 3.5a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z M9.5 5l-3 6' },
+		book: { stroke: 'M1.5 3h4.2A2.3 2.3 0 0 1 8 5.3v8.2a1.7 1.7 0 0 0-1.7-1.7H1.5z M14.5 3h-4.2A2.3 2.3 0 0 0 8 5.3v8.2a1.7 1.7 0 0 1 1.7-1.7h4.8z' },
+		trash: { stroke: 'M2.5 4h11 M6 4V2.5h4V4 M3.8 4l.7 9.5h7l.7-9.5 M6.5 6.5v4.5 M9.5 6.5v4.5' },
+	};
+
+	/**
+	 * Inline SVG markup for one of {@link ICONS}, sized in px and coloured by `currentColor`.
+	 * @param {keyof typeof ICONS} name
+	 * @param {number} [size]
+	 */
+	function icon(name, size = 14) {
+		const def = /** @type {{ fill?: string, stroke?: string }} */ (ICONS[name]);
+		const paint = def.fill
+			? `fill="currentColor"><path d="${def.fill}"/>`
+			: `fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="${def.stroke}"/>`;
+		return `<svg class="ui-icon" width="${size}" height="${size}" viewBox="0 0 16 16" aria-hidden="true" ${paint}</svg>`;
+	}
+
+	/**
+	 * Gives a <select> the author button of a customizable select: `<button><selectedcontent>`.
+	 * Under `appearance: base-select` (see main.css's Dropdowns section) the browser's own
+	 * button cannot ellipsize — a long model id clipped mid-word and shoved the chevron out of
+	 * the pill — while a `<selectedcontent>` mirrors the chosen option and can. Engines without
+	 * customizable select never render a button inside a select, so this is inert there.
+	 * @param {HTMLSelectElement} select
+	 */
+	function withSelectButton(select) {
+		if (!select.querySelector(':scope > button')) {
+			const button = document.createElement('button');
+			button.type = 'button';
+			button.tabIndex = -1;
+			button.appendChild(document.createElement('selectedcontent'));
+			select.prepend(button);
+		}
+		return select;
+	}
+
+	/**
+	 * Empties a select's options but keeps its {@link withSelectButton} button, which
+	 * `innerHTML = ''` would take with them.
+	 * @param {HTMLSelectElement} select
+	 */
+	function clearOptions(select) {
+		for (const child of [...select.children]) {
+			if (child.tagName !== 'BUTTON') { child.remove(); }
+		}
+	}
+
+	/** Quick-start suggestions shown on the empty chat; clicking one primes the composer. */
+	const EMPTY_SUGGESTIONS = /** @type {{ icon: keyof typeof ICONS, label: string, mode: string, prompt: string }[]} */ ([
+		{ icon: 'bulb', label: 'Explain this project', mode: 'ask', prompt: 'Give me a tour of this project: what it does, how it is laid out, and where to start reading.' },
+		{ icon: 'checklist', label: 'Plan a feature', mode: 'plan', prompt: 'Plan how to add ' },
+		{ icon: 'sparkle', label: 'Let the agent fix something', mode: 'agent', prompt: 'Find and fix ' },
+		{ icon: 'slash', label: 'See all commands', mode: '', prompt: '/help' },
+	]);
+
+	function renderAll() {
+		const s = cur();
+		// The whole transcript is about to be rebuilt, `pending` included.
+		cancelStreamRender();
+		els.messages.innerHTML = '';
+		activeAssistantBody = null;
+		toolEls.clear();
+		renderTodos();
+		if (!s) {
+			// Bootstrap window: the host's first `sessions` + `transcript` push hasn't landed
+			// yet (see the doc on `sessions` near the top of this file). Nothing to draw —
+			// `els.messages` is already cleared above — rather than fabricate a local session.
+			return;
+		}
+		const isEmpty = s.messages.length === 0 && s.pending === null;
+		els.messages.classList.toggle('is-empty', isEmpty);
+		if (isEmpty) {
+			const empty = document.createElement('div');
+			empty.className = 'empty';
+			// The mark only ever appears here, on a fresh chat, and is torn out with the rest
+			// of the hero the moment a first message lands — a watermark left behind the
+			// transcript would sit under body text at whatever contrast the theme happens
+			// to give it, which is exactly the readability trade we don't want to make.
+			// `alt` is empty because the title right below already names the panel; a
+			// screen reader announcing the mark as well would just say it twice.
+			empty.innerHTML = `
+				<img class="empty-hero" src="${HERO_URI}" alt="" draggable="false" />
+				<div class="empty-title">Mjolnir</div>
+				<div class="empty-sub">Ask about your code, plan a change, or hand the whole task to the agent — powered by the provider and model you choose.</div>
+				<div class="empty-chips"></div>
+				<div class="empty-footnote${hasCredential() ? ' hidden' : ''}">Add a provider key or sign in under Settings.</div>`;
+			const chips = /** @type {HTMLElement} */ (empty.querySelector('.empty-chips'));
+			for (const s of EMPTY_SUGGESTIONS) {
+				const chip = document.createElement('button');
+				chip.className = 'empty-chip';
+				chip.innerHTML = `<span class="chip-icon">${icon(s.icon)}</span>${escapeHtml(s.label)}`;
+				chip.addEventListener('click', () => {
+					if (s.mode) { setMode(s.mode); }
+					els.input.value = s.prompt;
+					autoSize();
+					els.input.focus();
+					els.input.setSelectionRange(s.prompt.length, s.prompt.length);
+				});
+				chips.appendChild(chip);
+			}
+			// Previous conversations, right on the landing screen: click to reopen.
+			if (history.length) {
+				const recent = document.createElement('div');
+				recent.className = 'empty-recent';
+				const title = document.createElement('div');
+				title.className = 'empty-recent-title';
+				title.textContent = 'Recent chats';
+				recent.appendChild(title);
+				for (const h of history.slice(0, 6)) {
+					const item = document.createElement('button');
+					item.className = 'empty-recent-item';
+					item.title = 'Reopen this conversation';
+					item.innerHTML = `<span class="recent-name">${escapeHtml(h.title || 'Untitled chat')}</span><span class="recent-time">${escapeHtml(relTime(h.savedAt))}</span>`;
+					item.addEventListener('click', () => restoreChat(h.id));
+					recent.appendChild(item);
+				}
+				if (history.length > 6) {
+					const more = document.createElement('button');
+					more.className = 'empty-recent-more';
+					more.textContent = `All ${history.length} chats…`;
+					more.addEventListener('click', () => openHistoryPanel());
+					recent.appendChild(more);
+				}
+				const footnote = empty.querySelector('.empty-footnote');
+				empty.insertBefore(recent, footnote);
+			}
+			els.messages.appendChild(empty);
+			return;
+		}
+		for (const m of s.messages) {
+			// The Auto run's model summary is a transcript entry like any other, so it survives
+			// a tab switch and a reload — the record of which models ran is the whole point of
+			// it, and a DOM node appended once does not survive either.
+			if (m.kind === 'auto' && m.phases?.length) {
+				appendAutoSummary(m.phases);
+				continue;
+			}
+			const body = appendMessageEl(m.role, m.content, m.images);
+			if (m.kind) { body.parentElement?.classList.add(m.kind === 'auto' ? 'info' : m.kind); }
+			// A message delivered by another chat tab's agent (send_agent_message) — carries
+			// no `kind` (it's a real, sendable turn, unlike an 'info'/'error' notice), so it
+			// is marked distinctly here instead, mirroring the `.steering` class below.
+			if (m.fromAgentSession) { body.parentElement?.classList.add('agent-message'); }
+		}
+		renderUndoBar(s);
+		// Re-attach the in-flight assistant bubble when switching back to a streaming tab.
+		if (s.pending !== null) {
+			activeAssistantBody = appendMessageEl('assistant', s.pending);
+			activeAssistantBody.parentElement?.classList.add('streaming');
+			if (s.pending === '') { activeAssistantBody.parentElement?.classList.add('awaiting'); }
+		}
+		// The strip belongs to whichever tab is on screen: start it for a live run, and drop
+		// a strip left over from the tab we just switched away from.
+		if (s.streaming) { startWorking(); } else { stopWorking(); }
+		renderOpenPrompts();
+		scrollToBottom(true);
+	}
+	/**
+	 * The Undo bar under the tab's latest run that changed files (see the host's `checkpoint`
+	 * message). Kept on the session in memory only, like the host's own record of what to
+	 * restore, so it goes away on reload exactly when the undo itself stops being possible.
+	 */
+	function renderUndoBar(s) {
+		els.messages.querySelector('.undo-bar')?.remove();
+		if (!s.undo || !s.undo.files.length) { return; }
+		const undo = s.undo;
+		const bar = document.createElement('div');
+		bar.className = 'edit-apply undo-bar';
+		const label = document.createElement('span');
+		label.textContent = `This run changed ${undo.files.length} file${undo.files.length === 1 ? '' : 's'}: ${undo.files.join(', ')}`;
+		const button = document.createElement('button');
+		button.textContent = 'Undo';
+		button.title = 'Restore these files to how they were before this run';
+		button.addEventListener('click', () => {
+			button.disabled = true;
+			button.textContent = 'Undoing…';
+			vscode.postMessage({ type: 'undoRun', sessionId: s.id, runId: undo.runId });
+		});
+		bar.append(label, button);
+		els.messages.appendChild(bar);
+	}
+
+	function appendMessageEl(role, content, images) {
+		// The first real message replaces the empty-state hero.
+		els.messages.querySelector('.empty')?.remove();
+		els.messages.classList.remove('is-empty');
+		const wrap = document.createElement('div');
+		wrap.className = `message ${role}`;
+		const roleEl = document.createElement('div');
+		roleEl.className = 'role';
+		roleEl.textContent = role === 'user' ? 'You' : 'Assistant';
+		const body = document.createElement('div');
+		body.className = 'body';
+		setBodyMarkdown(body, content);
+		if (images && images.length) {
+			const gallery = document.createElement('div');
+			gallery.className = 'message-images';
+			for (const img of images) {
+				const el = document.createElement('img');
+				el.src = `data:${img.mimeType};base64,${img.data}`;
+				gallery.appendChild(el);
+			}
+			body.insertBefore(gallery, body.firstChild);
+		}
+		enhanceCodeBlocks(body);
+		wrap.appendChild(roleEl);
+		wrap.appendChild(body);
+		els.messages.appendChild(wrap);
+		keepWorkingLast();
+		return body;
+	}
+	/**
+	 * Renders a tool-call card. `container`, when given, is a sub-agent's `.tool-children`
+	 * group (see `childrenContainer`) rather than the top-level transcript — a delegate's
+	 * own tool activity nests under its `spawn_subagent` card instead of appearing as an
+	 * unrelated top-level event.
+	 */
+	function appendToolEl(name, args, container) {
+		const wrap = document.createElement('div');
+		wrap.className = 'tool running';
+		const head = document.createElement('div');
+		head.className = 'tool-head';
+		head.innerHTML = icon(toolIcon(name), 13);
+		const headText = document.createElement('span');
+		headText.textContent = toolLabel(name, args);
+		head.appendChild(headText);
+		const details = document.createElement('details');
+		const summary = document.createElement('summary');
+		summary.className = 'tool-summary';
+		summary.textContent = 'running…';
+		// A tool call is the longest wait in a run, so it gets a Thor mark too — drawn from
+		// the same rotating set as the working indicator, otherwise the bolt was the only
+		// glyph a user ever saw (the four only rotated in the brief empty-bubble window).
+		// An <svg> holds no text nodes, so summary.textContent stays exactly 'running…',
+		// which the stop/cleanup path at 'stopped' compares against.
+		const mark = document.createElement('span');
+		mark.className = 'tool-glyph';
+		mark.innerHTML = pickGlyph();
+		summary.insertBefore(mark, summary.firstChild);
+		const out = document.createElement('pre');
+		out.className = 'tool-out';
+		details.appendChild(summary);
+		details.appendChild(out);
+		wrap.appendChild(head);
+		wrap.appendChild(details);
+		(container || els.messages).appendChild(wrap);
+		keepWorkingLast();
+		scrollToBottom();
+		return { wrap, out, details, summary, children: null };
+	}
+
+	/**
+	 * Lazily creates (and caches on `parent`) the nested-activity group a delegated
+	 * sub-agent's own tool cards render into, so several of them visually collect under one
+	 * `spawn_subagent` card rather than each getting its own container element.
+	 */
+	function childrenContainer(parent) {
+		if (!parent.children) {
+			parent.children = document.createElement('div');
+			parent.children.className = 'tool-children';
+			parent.wrap.appendChild(parent.children);
+		}
+		return parent.children;
+	}
+	function summarizeArgs(args) {
+		try {
+			const s = JSON.stringify(args);
+			return s.length > 80 ? s.slice(0, 77) + '…' : s;
+		} catch { return ''; }
+	}
+
+	/**
+	 * Human-readable header for a tool call: "Read src/foo.ts" rather than the raw
+	 * call signature with its JSON arguments. Unknown tools (MCP servers contribute
+	 * their own) fall back to the signature form, which is still accurate.
+	 */
+	function toolLabel(name, args) {
+		const a = args || {};
+		const path = typeof a.path === 'string' ? a.path : '';
+		switch (name) {
+			case 'read_file': return `Read ${path}`;
+			case 'list_dir': return `List ${path || '.'}`;
+			case 'search_files': return `Search ${JSON.stringify(a.query ?? '')}${a.glob ? ` in ${a.glob}` : ''}`;
+			case 'glob_files': return `Find ${String(a.pattern ?? '')}`;
+			case 'write_file': return `Write ${path}`;
+			case 'edit_file': return `Edit ${path}`;
+			case 'run_command': return `Run ${trimLabel(String(a.command ?? ''), 80)}${a.cwd ? ` (in ${a.cwd})` : ''}`;
+			case 'update_todos': return 'Update checklist';
+			case 'ask_user': return `Ask: ${trimLabel(String(a.question ?? ''), 70)}`;
+			case 'spawn_subagent': return `Delegate: ${trimLabel(String(a.goal ?? ''), 70)}`;
+			default: return `${name}(${summarizeArgs(a)})`;
+		}
+	}
+
+	/**
+	 * The mark on a tool card: what kind of thing the call does. MCP tools and anything
+	 * unrecognised get the plug — they come from a server, not from this extension.
+	 * @param {string} name
+	 * @returns {keyof typeof ICONS}
+	 */
+	function toolIcon(name) {
+		switch (name) {
+			case 'read_file': return 'file';
+			case 'list_dir': case 'glob_files': return 'folder';
+			case 'search_files': return 'search';
+			case 'write_file': case 'edit_file': return 'pencil';
+			case 'run_command': return 'terminal';
+			case 'update_todos': return 'checklist';
+			case 'ask_user': return 'question';
+			case 'spawn_subagent': return 'branch';
+			case 'fetch_url': return 'search';
+			default: return 'plug';
+		}
+	}
+
+	/** Single-line, length-capped version of free-form text for a header label. */
+	function trimLabel(text, max) {
+		const flat = text.replace(/\s+/g, ' ').trim();
+		return flat.length > max ? flat.slice(0, max - 1) + '…' : flat;
+	}
+	/**
+	 * One-line gist of a tool result. The full text stays one click away; a transcript
+	 * that inlines every file the agent read is unreadable.
+	 */
+	function summarizeToolResult(name, result, isError) {
+		const text = String(result);
+		if (isError) {
+			return text.split('\n')[0].slice(0, 120);
+		}
+		const lines = text.split('\n').length;
+		if (name === 'read_file') {
+			return `Read ${lines} line${lines === 1 ? '' : 's'}`;
+		}
+		if (name === 'list_dir') {
+			// The first line is the "Contents of …" header, not an entry.
+			const entries = Math.max(0, lines - 1);
+			return `${entries} ${entries === 1 ? 'entry' : 'entries'}`;
+		}
+		if (name === 'search_files') {
+			return `${lines} match${lines === 1 ? '' : 'es'}`;
+		}
+		if (name === 'glob_files') {
+			return `${lines} file${lines === 1 ? '' : 's'}`;
+		}
+		// write_file/edit_file confirmations are already a single short line.
+		return lines === 1 && text.length <= 120 ? text : `${lines} line${lines === 1 ? '' : 's'} of output`;
+	}
+	/**
+	 * Whether the transcript follows new output. Every token, tool card and notice used to scroll
+	 * to the bottom unconditionally, so scrolling up to re-read something mid-run was undone by
+	 * the next token. Now output follows only while the reader is at the bottom; scrolling away
+	 * stops it, scrolling back (or "Jump to latest") resumes it.
+	 */
+	let followOutput = true;
+	/** Distance from the bottom, in px, that still counts as "at the bottom". */
+	const FOLLOW_SLACK = 48;
+
+	/** Floating "Jump to latest" pill over the composer, shown while output is not followed. */
+	const jumpEl = document.createElement('button');
+	jumpEl.type = 'button';
+	jumpEl.className = 'jump-latest hidden';
+	jumpEl.title = 'Scroll to the newest message';
+	jumpEl.innerHTML = `${icon('chevronDown', 12)}Jump to latest`;
+	jumpEl.addEventListener('click', () => scrollToBottom(true));
+	$('composer').appendChild(jumpEl);
+
+	els.messages.addEventListener('scroll', () => {
+		const m = els.messages;
+		followOutput = m.scrollHeight - m.scrollTop - m.clientHeight <= FOLLOW_SLACK;
+		if (followOutput) { jumpEl.classList.add('hidden'); }
+	}, { passive: true });
+
+	/**
+	 * Scrolls the transcript to its newest output. Without `force` it only does so while the
+	 * reader is following (see `followOutput`) — otherwise it offers "Jump to latest" instead.
+	 * `force` is for the user's own actions and for things that block on them: sending,
+	 * steering, switching tabs, an approval card.
+	 * @param {boolean} [force]
+	 */
+	function scrollToBottom(force = false) {
+		if (!force && !followOutput) {
+			jumpEl.classList.remove('hidden');
+			return;
+		}
+		els.messages.scrollTop = els.messages.scrollHeight;
+		followOutput = true;
+		jumpEl.classList.add('hidden');
+	}
+
+	/** Renders a notice bubble in the active session (no host round-trip). */
+	function showNotice(message, isError) {
+		addNotice(cur(), message, isError);
+	}
+
+	// ---- Approval & question cards -----------------------------------------------
+	// The agent's blocking channels to the user. Built in media/prompts.js so they can be
+	// tested against a DOM stand-in: this file is one big IIFE that needs a live workbench
+	// to load, and these cards are the one place where a silent rendering failure strands
+	// an agent run rather than merely looking wrong.
+	const prompts = OpenVSPrompts.create({
+		// Cards append straight into the transcript, which would leave them below the
+		// working strip — the run is still going, so the strip has to stay at the foot.
+		container: { appendChild: node => { els.messages.appendChild(node); keepWorkingLast(); } },
+		// Answering a card hands the wait back to the model, so the strip's clock starts
+		// over — the seconds the user spent reading a diff are not the model being slow.
+		post: m => {
+			if (m && m.type === 'promptResponse') { noteWorkingProgress(); }
+			vscode.postMessage(m);
+		},
+		// A card blocks the run on the user, so it is brought into view even mid-scroll.
+		scroll: () => scrollToBottom(true),
+	});
+
+	/**
+	 * Remote-control status indicator + "Pair a device" card, built in `media/pairing.js` for
+	 * the same testability reasons as `prompts` above. Lives in the Settings panel
+	 * (`#remotePanel`), not the transcript.
+	 */
+	const pairing = OpenVSPairing.create({ container: els.remotePanel, post: m => vscode.postMessage(m) });
+
+	/** Re-attaches every unanswered card for the active tab after a transcript rebuild. */
+	function renderOpenPrompts() {
+		prompts.reattach(activeSessionId);
+	}
+
+	/**
+	 * Records an info/error notice in a session's transcript (marked `kind` so it is
+	 * never sent back to the model) and renders it when that session is on screen.
+	 */
+	function addNotice(s, text, isError) {
+		if (!s) { return; }
+		const content = (isError ? '⚠️ ' : 'ℹ️ ') + text;
+		s.messages.push({ role: 'assistant', content, kind: isError ? 'error' : 'info' });
+		if (s.id === activeSessionId) {
+			const body = appendMessageEl('assistant', content);
+			body.parentElement?.classList.add(isError ? 'error' : 'info');
+			scrollToBottom();
+		}
+		saveState();
+	}
+
+	// ---- Chat tabs ---------------------------------------------------------------
+
+	const tabsEl = $('tabs');
+
+	/**
+	 * Opens a new chat tab. The host owns tab creation now — this just asks for one; its
+	 * reply (`sessions` + `transcript`) is what actually adds the tab and renders it, via
+	 * `case 'sessions':`/`case 'transcript':` below.
+	 */
+	function createSession(activate = true) {
+		vscode.postMessage({ type: 'createSession', activate, mode: curMode() });
+	}
+
+	function switchSession(id) {
+		if (id === activeSessionId || !sessions.some(s => s.id === id)) { return; }
+		vscode.postMessage({ type: 'switchSession', sessionId: id });
+	}
+
+	/** Human-friendly relative timestamp for history entries. */
+	function relTime(ts) {
+		if (!ts) { return ''; }
+		const min = Math.floor((Date.now() - ts) / 60000);
+		if (min < 1) { return 'just now'; }
+		if (min < 60) { return `${min}m ago`; }
+		const hr = Math.floor(min / 60);
+		if (hr < 24) { return `${hr}h ago`; }
+		const day = Math.floor(hr / 24);
+		if (day < 7) { return `${day}d ago`; }
+		return new Date(ts).toLocaleDateString();
+	}
+
+	/**
+	 * Deletes one archived conversation. Sent by id: the host owns the archive, and sending the
+	 * whole list back (the old `saveHistory`) could only be merged into it, so a deleted entry
+	 * came back with the next archive save. The host's `history` push confirms the removal.
+	 */
+	function deleteHistory(id) {
+		vscode.postMessage({ type: 'deleteHistory', historyId: id });
+	}
+
+	/**
+	 * Reopens a saved conversation from history as a live tab. The host owns history and tab
+	 * creation now — this just asks for it; the reply (`sessions` + `transcript`) does the
+	 * actual work, same as `createSession`/`switchSession` above.
+	 */
+	function restoreChat(id) {
+		els.historyPanel.classList.add('hidden');
+		vscode.postMessage({ type: 'restoreSession', historyId: id, mode: curMode() });
+		els.input.focus();
+	}
+
+	/**
+	 * Closes a chat tab. The host owns archiving and stopping a streaming run now
+	 * (`SessionStore.closeSession`'s `abortSessionId`) — this just asks for it.
+	 */
+	function closeSession(id) {
+		vscode.postMessage({ type: 'closeSession', sessionId: id });
+	}
+
+	/**
+	 * The tabs scroll inside their own list, with + outside it: tabs keep a readable minimum
+	 * width, so a narrow sidebar with many chats overflows, and + inside the scroller could then
+	 * sit off-screen behind a hidden scrollbar — the one way to start a chat, unreachable.
+	 */
+	function renderTabs() {
+		if (!tabsEl) { return; }
+		const previousScroll = tabsEl.querySelector('.tab-list')?.scrollLeft || 0;
+		tabsEl.innerHTML = '';
+		const list = document.createElement('div');
+		list.className = 'tab-list';
+		list.setAttribute('role', 'tablist');
+		list.setAttribute('aria-label', 'Chats');
+		/** @type {HTMLElement | null} */
+		let activeTab = null;
+		for (const s of sessions) {
+			const active = s.id === activeSessionId;
+			const tab = document.createElement('div');
+			tab.className = 'chat-tab' + (active ? ' active' : '') + (s.streaming ? ' busy' : '');
+			tab.title = s.title || 'New chat';
+			// A div, so it is only reachable by keyboard because it says so.
+			tab.tabIndex = 0;
+			tab.setAttribute('role', 'tab');
+			tab.setAttribute('aria-selected', String(active));
+			tab.innerHTML = `<span class="tab-dot"></span><span class="tab-title">${escapeHtml(s.title || 'New chat')}</span>`
+				+ `<a class="tab-close" href="#" title="Close chat (saved to History)" aria-label="Close chat">${icon('close', 12)}</a>`;
+			tab.addEventListener('click', () => switchSession(s.id));
+			tab.addEventListener('keydown', (e) => {
+				if (e.target === tab && (e.key === 'Enter' || e.key === ' ')) {
+					e.preventDefault();
+					switchSession(s.id);
+				}
+			});
+			tab.querySelector('.tab-close')?.addEventListener('click', (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				closeSession(s.id);
+			});
+			list.appendChild(tab);
+			if (active) { activeTab = tab; }
+		}
+		tabsEl.appendChild(list);
+		const add = document.createElement('button');
+		add.className = 'tab-add';
+		add.title = 'New chat (runs in parallel)';
+		add.setAttribute('aria-label', 'New chat');
+		add.textContent = '+';
+		add.addEventListener('click', () => createSession());
+		tabsEl.appendChild(add);
+		// A re-render (every `sessions` push) must not jump the strip back to the start; then the
+		// tab being read is brought into view if it is not — by scrollLeft on the list alone,
+		// since scrollIntoView would also scroll every ancestor.
+		list.scrollLeft = previousScroll;
+		if (activeTab) {
+			// `.tab-list` is positioned, so this is the tab's offset within the list itself.
+			const left = activeTab.offsetLeft;
+			const right = left + activeTab.offsetWidth;
+			if (left < list.scrollLeft) {
+				list.scrollLeft = left;
+			} else if (right > list.scrollLeft + list.clientWidth) {
+				list.scrollLeft = right - list.clientWidth;
+			}
+		}
+	}
+	// The strip's scrollbar is hidden, and a plain mouse wheel scrolls vertically, so without
+	// this an overflowing strip could only be scrolled with Shift+wheel or a trackpad.
+	tabsEl?.addEventListener('wheel', (e) => {
+		const list = /** @type {HTMLElement | null} */ (tabsEl.querySelector('.tab-list'));
+		if (!list || list.scrollWidth <= list.clientWidth || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) { return; }
+		list.scrollLeft += e.deltaY;
+		e.preventDefault();
+	}, { passive: false });
+
+	/**
+	 * Reads an image File (pasted or picked), downscales it to at most MAX_IMAGE_DIM on its long edge,
+	 * re-encodes as JPEG, and resolves a base64 payload ready to attach to a message.
+	 * Rejects if the result is still over MAX_IMAGE_BYTES.
+	 * @param {File} file
+	 * @returns {Promise<{mimeType: string, data: string}>}
+	 */
+	function resizeImage(file) {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onerror = () => reject(reader.error || new Error('Failed to read image.'));
+			reader.onload = () => {
+				const img = new Image();
+				img.onerror = () => reject(new Error('Failed to decode image.'));
+				img.onload = () => {
+					let width = img.naturalWidth;
+					let height = img.naturalHeight;
+					const longEdge = Math.max(width, height);
+					if (longEdge > MAX_IMAGE_DIM) {
+						const scale = MAX_IMAGE_DIM / longEdge;
+						width = Math.round(width * scale);
+						height = Math.round(height * scale);
+					}
+					const canvas = document.createElement('canvas');
+					canvas.width = width;
+					canvas.height = height;
+					const ctx = canvas.getContext('2d');
+					if (!ctx) { reject(new Error('Canvas unavailable.')); return; }
+					// JPEG has no alpha: transparent pixels were encoded as black, so a transparent
+					// PNG (a logo, a diagram, a UI icon) reached the model as dark shapes on black.
+					// White is what such an image is almost always drawn to sit on.
+					ctx.fillStyle = '#ffffff';
+					ctx.fillRect(0, 0, width, height);
+					ctx.drawImage(img, 0, 0, width, height);
+					const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+					const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+					const approxBytes = base64.length * 0.75;
+					if (approxBytes > MAX_IMAGE_BYTES) {
+						reject(new Error('Image is too large even after resizing (over 5MB). Try a smaller image.'));
+						return;
+					}
+					resolve({ mimeType: 'image/jpeg', data: base64 });
+				};
+				img.src = /** @type {string} */ (reader.result);
+			};
+			reader.readAsDataURL(file);
+		});
+	}
+
+	/** Renders the pending-attachment chips above the composer. */
+	function renderImageChips() {
+		els.imageChips.innerHTML = '';
+		if (!pendingImages.length) {
+			els.imageChips.classList.add('hidden');
+			return;
+		}
+		els.imageChips.classList.remove('hidden');
+		pendingImages.forEach((img, index) => {
+			const chip = document.createElement('span');
+			chip.className = 'image-chip';
+			const thumb = document.createElement('img');
+			thumb.src = `data:${img.mimeType};base64,${img.data}`;
+			const remove = document.createElement('a');
+			remove.href = '#';
+			remove.title = 'Remove image';
+			remove.setAttribute('aria-label', 'Remove image');
+			remove.innerHTML = icon('close', 10);
+			remove.addEventListener('click', (e) => {
+				e.preventDefault();
+				pendingImages.splice(index, 1);
+				renderImageChips();
+			});
+			chip.appendChild(thumb);
+			chip.appendChild(remove);
+			els.imageChips.appendChild(chip);
+		});
+	}
+
+	// ---- Providers / models -----------------------------------------------------
+
+	function currentProvider() { return providers.find(p => p.id === selectedProvider); }
+
+	/**
+	 * Whether any provider has a key (saved, from the environment, or a sign-in). The welcome
+	 * screen's "Add a provider key" prompt shows only until one does — it used to show forever,
+	 * telling someone with three working providers to go and add one.
+	 */
+	function hasCredential() { return providers.some(p => p.hasApiKey || p.hasEnvKey); }
+
+	/**
+	 * Mirrors entrySupportsTools() in src/providers/types.ts — keep them in sync.
+	 * Prefers the provider catalog's own capability report (fetched model metadata)
+	 * over the heuristic patterns.
+	 */
+	function modelSupportsTools(provider, model) {
+		if (!provider || !provider.supportsTools) { return false; }
+		const entry = (fetchedModels[provider.id] || []).find(e => e.id === model);
+		if (entry && typeof entry.toolCapable === 'boolean') { return entry.toolCapable; }
+		const patterns = provider.toolModelPatterns || [];
+		if (!patterns.length) { return true; }
+		return patterns.some(p => {
+			try { return new RegExp(p, 'i').test(model || ''); } catch { return false; }
+		});
+	}
+
+	/** Mirrors modelSupportsVision() in src/providers/types.ts — keep them in sync. */
+	function modelSupportsVision(provider, model) {
+		if (!provider) { return false; }
+		const patterns = provider.visionModelPatterns || [];
+		if (!patterns.length) { return true; }
+		return patterns.some(p => {
+			try { return new RegExp(p, 'i').test(model || ''); } catch { return false; }
+		});
+	}
+
+	function isAuto() { return selectedProvider === AUTO_PROVIDER; }
+
+	function renderProviderSelect() {
+		clearOptions(els.providerSelect);
+		const autoOpt = document.createElement('option');
+		autoOpt.value = AUTO_PROVIDER;
+		autoOpt.textContent = '🤖 Auto';
+		els.providerSelect.appendChild(autoOpt);
+		for (const p of providers) {
+			const opt = document.createElement('option');
+			opt.value = p.id;
+			opt.textContent = p.label + (p.requiresApiKey && !p.hasApiKey ? ' ⚠' : '');
+			els.providerSelect.appendChild(opt);
+		}
+		if (selectedProvider) { els.providerSelect.value = selectedProvider; }
+		applyProviderUiMode();
+		renderModelSelect();
+		updateModeAvailability();
+	}
+
+	/** Short, readable model name for the toolbar summary (drops any path prefix). */
+	function shortModel(model) {
+		if (!model) { return '—'; }
+		const slash = model.lastIndexOf('/');
+		return slash === -1 ? model : model.slice(slash + 1);
+	}
+
+	/** Toggles the model picker vs the Auto routing summary based on the selection. */
+	function applyProviderUiMode() {
+		const auto = isAuto();
+		els.modelSelect.classList.toggle('hidden', auto);
+		els.refreshModels.classList.toggle('hidden', auto);
+		els.autoSummary.classList.toggle('hidden', !auto);
+		if (auto) { renderAutoSummary(); }
+	}
+
+	function renderAutoSummary() {
+		const byRole = {};
+		for (const r of autoConfig.roles || []) { byRole[r.role] = r; }
+		const parts = ['plan', 'code', 'review'].map(role => {
+			const r = byRole[role];
+			if (role === 'review' && !autoConfig.reviewEnabled) { return 'Review: off'; }
+			if (!r) { return `${ROLE_LABELS[role]}: —`; }
+			const warn = r.ready ? '' : ' ⚠';
+			return `${ROLE_LABELS[role]}: ${shortModel(r.model)}${warn}`;
+		});
+		els.autoSummary.textContent = parts.join('  ·  ');
+	}
+
+	/**
+	 * Live model lists fetched from each provider's API, keyed by provider id. Each
+	 * entry is `{ id, free?, toolCapable? }` (see ModelEntry in src/providers/types.ts).
+	 */
+	const fetchedModels = {};
+	/** Why a provider's last catalog fetch failed, keyed by provider id — cleared by the next success. */
+	const modelErrors = {};
+	/** Providers whose catalog the user explicitly asked to reload (⟳) and is still waiting on. */
+	const refreshingModels = new Set();
+	/** Auto-Routing role rows' model pickers, by role — refilled in place when a catalog lands. */
+	const roleModelFillers = new Map();
+	/** Sentinel value of the "Custom model id…" entry in an Auto-Routing model picker. */
+	const CUSTOM_MODEL = '__custom__';
+
+	/** Model ids to offer for a provider: the live-fetched catalog wins once it exists,
+	 * falling back to the small hardcoded `suggestedModels` list before anything has been
+	 * fetched. Shared by the main model select and the Auto-Routing role datalists so both
+	 * show the same (real) catalog instead of the latter being stuck on 1-2 suggestions. */
+	function providerModelIds(providerId) {
+		const live = fetchedModels[providerId];
+		if (live && live.length) { return live.map(e => e.id); }
+		const p = providers.find(x => x.id === providerId);
+		return (p && p.suggestedModels) || [];
+	}
+
+	/** Accepts entries or bare id strings (older host builds) and normalizes to entries. */
+	function normalizeModelEntries(models) {
+		return (models || [])
+			.map(m => (typeof m === 'string' ? { id: m } : m))
+			.filter(m => m && typeof m.id === 'string' && m.id);
+	}
+
+	function renderModelSelect() {
+		const p = currentProvider();
+		if (!p) { return; }
+		const live = fetchedModels[p.id] || [];
+		// Once a live list has been fetched it is authoritative: show it (plus the
+		// configured model) instead of mixing in possibly-stale suggested ids. The
+		// suggested models are only the fallback while nothing has been fetched.
+		const entries = [];
+		const seen = new Set();
+		const add = e => { if (e && e.id && !seen.has(e.id)) { seen.add(e.id); entries.push(e); } };
+		if (live.length) {
+			if (p.model) { add(live.find(e => e.id === p.model) || { id: p.model }); }
+			for (const e of live) { add(e); }
+		} else {
+			if (p.model) { add({ id: p.model }); }
+			for (const m of p.suggestedModels || []) { add({ id: m }); }
+		}
+		clearOptions(els.modelSelect);
+		for (const e of entries) {
+			const opt = document.createElement('option');
+			// 🔧 = tool-capable (works in Agent mode); "free" = costs nothing on this provider.
+			opt.value = e.id;
+			opt.textContent = e.id
+				+ (modelSupportsTools(p, e.id) ? '  🔧' : '')
+				+ (e.free ? '  · free' : '');
+			els.modelSelect.appendChild(opt);
+		}
+		els.modelSelect.value = p.model;
+		els.modelSelect.title = modelErrors[p.id]
+			? `Couldn't load ${p.label}'s models (${modelErrors[p.id]}) — showing suggested models`
+			: live.length
+				? `${live.length} models fetched from the provider · 🔧 = supports Agent mode · "free" = no cost`
+				: 'Suggested models — the live list has not loaded yet · 🔧 = supports Agent mode';
+		els.refreshModels.classList.toggle('busy', refreshingModels.has(p.id));
+	}
+
+	function updateModeAvailability() {
+		const agentOpt = /** @type {HTMLOptionElement | null} */ (els.modeSelect.querySelector('option[value="agent"]'));
+		if (!agentOpt) { return; }
+		// Agent is always selectable: picking it auto-switches to a tool-capable model
+		// (see ensureAgentModel) instead of greying the option out.
+		agentOpt.disabled = false;
+		if (isAuto()) {
+			els.modeSelect.title = 'Auto runs plan → implement → review across your configured models.';
+			return;
+		}
+		const p = currentProvider();
+		const model = els.modelSelect.value || (p && p.model) || '';
+		els.modeSelect.title = (!p || modelSupportsTools(p, model))
+			? 'Chat mode'
+			: `Model "${model}" doesn't support tool calling — selecting Agent switches to a 🔧 model automatically.`;
+	}
+
+	/**
+	 * Called when the user picks Agent mode: if the current model can't call tools,
+	 * switch to the first tool-capable model in the dropdown (so Agent always remains
+	 * selectable) and tell the user what happened.
+	 */
+	function ensureAgentModel() {
+		const p = currentProvider();
+		if (!p) { return; }
+		const model = els.modelSelect.value || p.model || '';
+		if (modelSupportsTools(p, model)) { return; }
+		const alt = [...els.modelSelect.options].map(o => o.value).find(m => modelSupportsTools(p, m));
+		if (alt) {
+			els.modelSelect.value = alt;
+			vscode.postMessage({ type: 'setModel', provider: selectedProvider, model: alt });
+			showNotice(`"${model}" can't run Agent mode (no tool calling) — switched the model to "${alt}".`, false);
+		} else {
+			showNotice(`No listed ${p.label} model reports tool-calling support, so Agent runs may fail. Try another provider (e.g. NVIDIA or OpenRouter) or type a tool-capable model id.`, true);
+		}
+	}
+
+	function renderSettings() {
+		// Skip the field the user is actively typing in — a config refresh triggered by an
+		// unrelated action (saving a key, signing in) would otherwise clobber it mid-edit,
+		// same hazard the Auto-Routing role inputs have.
+		if (els.systemPromptInput && document.activeElement !== els.systemPromptInput) {
+			els.systemPromptInput.value = generalConfig.systemPrompt;
+		}
+		if (els.maxTokensInput && document.activeElement !== els.maxTokensInput) {
+			els.maxTokensInput.value = String(generalConfig.maxTokens);
+		}
+		if (els.rulesInput && document.activeElement !== els.rulesInput) {
+			els.rulesInput.value = generalConfig.rules;
+		}
+		if (els.maxStepsInput && document.activeElement !== els.maxStepsInput) {
+			els.maxStepsInput.value = String(generalConfig.maxSteps);
+		}
+		if (els.maxRunMinutesInput && document.activeElement !== els.maxRunMinutesInput) {
+			els.maxRunMinutesInput.value = String(generalConfig.maxRunMinutes);
+		}
+		if (els.completionsEnabled) { els.completionsEnabled.checked = completionsEnabled; }
+		els.providerList.innerHTML = '';
+		for (const p of providers) {
+			const card = document.createElement('div');
+			card.className = 'provider-card';
+			const status = p.authKind === 'oauth'
+				? '<span class="ok">● signed in</span>'
+				: p.hasApiKey
+					? `<span class="ok">● key set${p.hasEnvKey ? ' (env)' : ''}</span>`
+					: (p.requiresApiKey ? '<span class="warn">● no key</span>' : '<span>no key needed</span>');
+			const signInLabel = p.id === 'anthropic' ? 'Sign in with Claude'
+				: p.id === 'openai' ? 'Sign in with ChatGPT'
+					: p.id === 'openrouter' ? 'Sign in with OpenRouter'
+						: 'Sign in';
+			const signInTitle = p.id === 'anthropic'
+				? 'Log in with your Claude (claude.ai) account — works with a Claude subscription, no API key needed'
+				: p.id === 'openai'
+					? 'Log in with your ChatGPT (openai.com) account — works with a ChatGPT subscription, no API key needed'
+					: p.id === 'openrouter'
+						? 'One-click login at openrouter.ai (Google/GitHub/email) — an API key is created for you automatically'
+						: (p.authUrl ? 'Sign in with your configured web login' : 'Opens the provider’s sign-in page in a browser, then paste the key back here');
+			// Cloudflare Workers AI needs the account id too — a token alone can't
+			// authenticate, since the id goes in the request URL, not a header.
+			const hasAccountId = p.cloudflareAccountId !== undefined;
+			// Most providers never need this — it's a collapsed <details> so 11 provider
+			// cards don't each grow a row nobody but the "point this at my own gateway /
+			// local Ollama" user wants open by default.
+			const hasBaseUrl = p.baseUrlOverride !== undefined;
+			// Cloudflare needs both fields to authenticate, so they share ONE Save button.
+				// Two independent buttons each trigger their own full settings refresh
+				// (saveKey/setCloudflareAccountId both call postConfig), which rebuilds every
+				// provider card from the persisted config — including whichever of the two
+				// fields had not been saved yet, wiping out whatever was still typed there.
+				// One button that saves both together closes that window.
+				card.innerHTML = `
+				<div class="provider-title"><strong>${escapeHtml(p.label)}</strong> ${status}
+					${p.supportsTools ? '<span class="tag">agent</span>' : ''}</div>
+				<div class="provider-row">
+					<input type="password" class="key-input" placeholder="${p.requiresApiKey ? 'Paste API key…' : 'Paste API key… (optional)'}" />
+					${hasAccountId ? '' : '<button class="save-key">Save</button>'}
+				</div>
+				${hasAccountId ? `
+				<div class="provider-row">
+					<input type="text" class="account-id-input" placeholder="Cloudflare account id…"
+						value="${escapeHtml(p.cloudflareAccountId || '')}" />
+					<button class="save-credentials" title="Saves the API token above together with this account id">Save</button>
+				</div>` : ''}
+				<div class="provider-actions">
+					<button class="sign-in" title="${signInTitle}">${signInLabel}</button>
+					${p.apiKeyUrl ? '<a class="get-key" href="#">Get API key</a>' : ''}
+					${p.hasApiKey ? '<a class="test-key" href="#">Test connection</a>' : ''}
+					${(p.hasApiKey && !p.hasEnvKey) ? `<a class="clear-key" href="#">${p.authKind === 'oauth' ? 'Sign out' : 'Clear key'}</a>` : ''}
+					${p.hasEnvKey ? '<span class="muted" title="Set via environment variable; unset it (and restart) to remove.">from environment</span>' : ''}
+				</div>
+				${hasBaseUrl ? `
+				<details class="provider-advanced">
+					<summary>Base URL</summary>
+					<div class="provider-row">
+						<input type="text" class="base-url-input"
+							placeholder="${p.id === 'custom' ? 'http://localhost:11434/v1' : 'Default endpoint'}"
+							value="${escapeHtml(p.baseUrlOverride || '')}" />
+						<button class="save-base-url">Save</button>
+					</div>
+				</details>` : ''}
+				${(p.requiresApiKey || p.id === 'web_gemini') ? `
+				<details class="provider-advanced">
+					<summary>Additional API keys${p.extraApiKeyCount ? ` (${p.extraApiKeyCount} saved)` : ''}</summary>
+					<div class="provider-row">
+						<textarea class="extra-keys-input" rows="3"
+							placeholder="${p.id === 'web_gemini'
+								? 'One Chrome user-data-directory path per line — one per additional Google account, rotated in the same way a backup key would be'
+								: 'One backup key per line — rotated in automatically when the primary key is rate-limited or rejected'}"></textarea>
+					</div>
+					<div class="provider-row">
+						<button class="save-extra-keys">Save</button>
+					</div>
+				</details>` : ''}`;
+			const keyInput = /** @type {HTMLInputElement} */ (card.querySelector('.key-input'));
+			if (hasAccountId) {
+				const accountIdInput = /** @type {HTMLInputElement} */ (card.querySelector('.account-id-input'));
+				card.querySelector('.save-credentials')?.addEventListener('click', () => {
+					// The key is optional here (an env var or an already-saved key may cover it),
+					// so an empty box is left alone rather than clearing a stored key — "Clear key"
+					// below already does that explicitly.
+					if (keyInput.value.trim()) {
+						vscode.postMessage({ type: 'saveKey', provider: p.id, key: keyInput.value });
+						keyInput.value = '';
+					}
+					vscode.postMessage({ type: 'setCloudflareAccountId', text: accountIdInput.value.trim() });
+				});
+			} else {
+				card.querySelector('.save-key')?.addEventListener('click', () => {
+					// The box is always blank after a refresh (keys never leave SecretStorage), and
+					// the host treats an empty key as "clear" — so Save on an empty box silently
+					// deleted a working key. "Clear key" is the explicit way to do that.
+					if (!keyInput.value.trim()) {
+						showNotice(`Paste a key for ${p.label} first — use "Clear key" to remove the saved one.`, true);
+						return;
+					}
+					vscode.postMessage({ type: 'saveKey', provider: p.id, key: keyInput.value });
+					keyInput.value = '';
+				});
+			}
+			if (hasBaseUrl) {
+				const baseUrlInput = /** @type {HTMLInputElement} */ (card.querySelector('.base-url-input'));
+				card.querySelector('.save-base-url')?.addEventListener('click', () => {
+					vscode.postMessage({ type: 'setBaseUrl', provider: p.id, text: baseUrlInput.value.trim() });
+				});
+			}
+			if (p.requiresApiKey || p.id === 'web_gemini') {
+				// Never pre-filled from `p` — the actual key values never leave SecretStorage,
+				// only the count does (see `extraApiKeyCount`), matching the primary key-input's
+				// own always-blank-on-refresh behavior above.
+				const extraKeysInput = /** @type {HTMLTextAreaElement} */ (card.querySelector('.extra-keys-input'));
+				card.querySelector('.save-extra-keys')?.addEventListener('click', () => {
+					const keys = extraKeysInput.value.split('\n').map(k => k.trim()).filter(Boolean);
+					vscode.postMessage({ type: 'saveExtraKeys', provider: p.id, keys });
+					// Like the primary key box: saved keys are not left sitting on screen.
+					extraKeysInput.value = '';
+				});
+			}
+			card.querySelector('.get-key')?.addEventListener('click', (e) => {
+				e.preventDefault(); vscode.postMessage({ type: 'openExternal', url: p.apiKeyUrl });
+			});
+			card.querySelector('.sign-in')?.addEventListener('click', (e) => {
+				e.preventDefault(); vscode.postMessage({ type: 'signIn', provider: p.id });
+			});
+			card.querySelector('.test-key')?.addEventListener('click', (e) => {
+				e.preventDefault(); vscode.postMessage({ type: 'testKey', provider: p.id });
+			});
+			card.querySelector('.clear-key')?.addEventListener('click', (e) => {
+				e.preventDefault(); vscode.postMessage({ type: 'clearKey', provider: p.id });
+			});
+			els.providerList.appendChild(card);
+		}
+		renderAutoRouting();
+		renderApprovalList();
+		renderSkillList();
+		vscode.postMessage({ type: 'listMcp' });
+	}
+
+	/** Renders the skills section in the settings panel. */
+	function renderSkillList() {
+		if (!els.skillList) { return; }
+		els.skillList.innerHTML = '';
+		for (const skill of skillsList) {
+			const active = activeSkills.includes(skill.id);
+			const row = document.createElement('div');
+			row.className = 'skill-row' + (active ? ' active' : '');
+			row.innerHTML = `
+				<div class="skill-info">
+					<strong>${escapeHtml(skill.name)}</strong> <code>/skill ${escapeHtml(skill.id)}</code>
+					<div class="skill-desc">${escapeHtml(skill.description || '')}</div>
+				</div>
+				<button class="skill-toggle">${active ? 'Deactivate' : 'Activate'}</button>`;
+			row.querySelector('.skill-toggle')?.addEventListener('click', () => {
+				vscode.postMessage({ type: 'toggleSkill', text: skill.id });
+			});
+			els.skillList.appendChild(row);
+		}
+	}
+
+	/** Renders MCP server status lines in the settings panel. */
+	function renderMcpList(status, toolCount) {
+		if (!els.mcpList) { return; }
+		els.mcpList.innerHTML = '';
+		const summary = document.createElement('div');
+		summary.className = 'mcp-summary';
+		summary.textContent = toolCount > 0
+			? `${toolCount} MCP tool${toolCount === 1 ? '' : 's'} available to the agent.`
+			: 'No MCP tools available yet.';
+		els.mcpList.appendChild(summary);
+		for (const line of status || []) {
+			const row = document.createElement('div');
+			row.className = 'mcp-row' + (line.includes('failed') || line.includes('skipped') ? ' warn' : '');
+			row.textContent = line;
+			els.mcpList.appendChild(row);
+		}
+	}
+
+	/** Renders the Agent-permissions cards in the settings panel (radio-style, one active). */
+	function renderApprovalList() {
+		if (!els.approvalList) { return; }
+		els.approvalList.innerHTML = '';
+		for (const opt of APPROVAL_OPTIONS) {
+			const card = document.createElement('div');
+			card.className = 'approval-card' + (approval === opt.value ? ' active' : '');
+			card.innerHTML = `
+				<div class="approval-head"><strong>${escapeHtml(opt.label)}</strong>
+					${approval === opt.value ? '<span class="tag">active</span>' : ''}</div>
+				<div class="approval-desc">${escapeHtml(opt.desc)}</div>`;
+			card.addEventListener('click', () => {
+				setApproval(opt.value);
+				renderApprovalList();
+			});
+			els.approvalList.appendChild(card);
+		}
+	}
+
+	/** Applies an approval level locally and persists it via the host. */
+	function setApproval(value) {
+		approval = value;
+		if (els.approvalSelect) { els.approvalSelect.value = value; }
+		vscode.postMessage({ type: 'setApproval', approval: value });
+	}
+
+	function renderAutoRouting() {
+		els.autoRoutingList.innerHTML = '';
+		roleModelFillers.clear();
+		for (const r of autoConfig.roles || []) {
+			const pinned = r.source === 'configured';
+			const row = document.createElement('div');
+			row.className = 'role-row' + (r.ready ? '' : ' not-ready');
+			const provOpts = ['<option value="">Auto-select</option>']
+				.concat(providers.map(p =>
+					`<option value="${escapeHtml(p.id)}"${pinned && p.id === r.providerId ? ' selected' : ''}>${escapeHtml(p.label)}</option>`))
+				.join('');
+			const sourceText = pinned
+				? 'pinned'
+				: `auto → ${escapeHtml(shortModel(r.model) || '—')}${r.ready ? '' : ' ⚠'}`;
+			row.innerHTML = `
+				<div class="role-head"><strong>${escapeHtml(r.roleLabel)}</strong>
+					<span class="role-source">${sourceText}</span></div>
+				<div class="role-controls">
+					<select class="role-provider">${provOpts}</select>
+					<select class="role-model"></select>
+				</div>
+				<input class="role-model-custom hidden" type="text" placeholder="Exact model id, e.g. vendor/model-name" />
+				${r.problem ? `<div class="role-problem">⚠ ${escapeHtml(r.problem)}</div>` : ''}`;
+			const provSel = withSelectButton(/** @type {HTMLSelectElement} */ (row.querySelector('.role-provider')));
+			const modelSel = withSelectButton(/** @type {HTMLSelectElement} */ (row.querySelector('.role-model')));
+			const customInput = /** @type {HTMLInputElement} */ (row.querySelector('.role-model-custom'));
+			/** The model this row is pinned to right now — survives catalog refreshes and provider re-renders. */
+			let pinnedModel = pinned ? r.model : '';
+			const save = () => {
+				vscode.postMessage(provSel.value && pinnedModel
+					? { type: 'setRole', role: r.role, provider: provSel.value, model: pinnedModel }
+					: { type: 'setRole', role: r.role, provider: '', model: '' });
+			};
+			// A <select> of what the provider actually offers, not a free-text box over a
+			// <datalist>: Chromium filters a datalist's suggestions by the text already in the
+			// box, so a pinned role only ever offered the one or two ids that happened to contain
+			// its current value — the list looked random and never showed the real catalog.
+			const fill = () => {
+				const providerId = provSel.value;
+				clearOptions(modelSel);
+				if (!providerId) {
+					const o = document.createElement('option');
+					o.value = '';
+					o.textContent = r.model ? `Auto → ${shortModel(r.model)}` : 'Chosen automatically';
+					modelSel.appendChild(o);
+					modelSel.disabled = true;
+					customInput.classList.add('hidden');
+					return;
+				}
+				modelSel.disabled = false;
+				const p = providers.find(x => x.id === providerId);
+				const live = fetchedModels[providerId] || [];
+				const ids = providerModelIds(providerId);
+				const add = (id, label) => {
+					const o = document.createElement('option');
+					o.value = id;
+					o.textContent = label;
+					modelSel.appendChild(o);
+				};
+				if (!ids.length) {
+					add('', modelErrors[providerId] ? 'Couldn’t load models'
+						: (p && p.requiresApiKey && !p.hasApiKey) ? 'Add a key to list models' : 'Loading models…');
+				}
+				const known = new Set(ids);
+				if (pinnedModel && !known.has(pinnedModel)) {
+					add(pinnedModel, `${pinnedModel}  · not in catalog`);
+				}
+				for (const id of ids) {
+					const entry = live.find(e => e.id === id);
+					add(id, id + (modelSupportsTools(p, id) ? '  🔧' : '') + (entry && entry.free ? '  · free' : ''));
+				}
+				add(CUSTOM_MODEL, 'Custom model id…');
+				modelSel.value = pinnedModel || '';
+				if (modelSel.value !== pinnedModel) { modelSel.selectedIndex = -1; }
+				modelSel.title = modelErrors[providerId]
+					? `Couldn't load models: ${modelErrors[providerId]} — showing suggested models`
+					: (live.length ? `${live.length} models from ${p ? p.label : providerId}` : 'Suggested models — the live catalog has not loaded yet');
+			};
+			const ensureLiveModels = (providerId) => {
+				if (!providerId || fetchedModels[providerId]) { return; }
+				// Skip providers with no credentials: listModels would just fail — it's
+				// re-requested once a key is saved, since saving one re-posts the config.
+				const p = providers.find(x => x.id === providerId);
+				if (p && p.requiresApiKey && !p.hasApiKey) { return; }
+				vscode.postMessage({ type: 'listModels', provider: providerId });
+			};
+			roleModelFillers.set(r.role, { providerOf: () => provSel.value, fill });
+			fill();
+			ensureLiveModels(provSel.value);
+			provSel.addEventListener('change', () => {
+				ensureLiveModels(provSel.value);
+				customInput.classList.add('hidden');
+				// A model the previous provider offered cannot follow the switch: pinning
+				// `anthropic:meta/llama-3.3-70b-instruct` 404s on the first request of every
+				// Auto run and, being pinned, is never substituted. Keep it only if the new
+				// provider offers it too, else take that provider's first model.
+				const offered = providerModelIds(provSel.value);
+				if (!provSel.value || !offered.includes(pinnedModel)) {
+					pinnedModel = provSel.value ? (offered[0] || '') : '';
+				}
+				fill();
+				save();
+			});
+			modelSel.addEventListener('change', () => {
+				if (modelSel.value === CUSTOM_MODEL) {
+					customInput.classList.remove('hidden');
+					customInput.value = pinnedModel;
+					customInput.focus();
+					fill();
+					return;
+				}
+				customInput.classList.add('hidden');
+				pinnedModel = modelSel.value;
+				save();
+			});
+			customInput.addEventListener('change', () => {
+				const value = customInput.value.trim();
+				if (!value) { return; }
+				pinnedModel = value;
+				customInput.classList.add('hidden');
+				fill();
+				save();
+			});
+			els.autoRoutingList.appendChild(row);
+		}
+		if (els.enableReview) { els.enableReview.checked = !!autoConfig.reviewEnabled; }
+		if (els.enableDecompose) { els.enableDecompose.checked = !!autoConfig.decompose; }
+	}
+
+	// ---- History panel ----------------------------------------------------------
+
+	function openHistoryPanel() {
+		els.settingsPanel.classList.add('hidden');
+		els.historyPanel.classList.remove('hidden');
+		renderHistoryPanel();
+	}
+
+	function renderHistoryPanel() {
+		els.historyList.innerHTML = '';
+		if (!history.length) {
+			const p = document.createElement('p');
+			p.className = 'hint';
+			p.textContent = 'No saved chats yet — close a chat tab and its conversation lands here.';
+			els.historyList.appendChild(p);
+			return;
+		}
+		for (const h of history) {
+			const count = h.messages.filter(m => !m.kind).length;
+			const row = document.createElement('div');
+			row.className = 'history-row';
+			row.title = 'Reopen this conversation';
+			row.innerHTML = `
+				<div class="history-info">
+					<strong>${escapeHtml(h.title || 'Untitled chat')}</strong>
+					<div class="history-meta">${escapeHtml(relTime(h.savedAt))} · ${count} message${count === 1 ? '' : 's'}</div>
+				</div>
+				<button class="history-delete" title="Delete this conversation permanently" aria-label="Delete conversation">${icon('trash')}</button>`;
+			row.addEventListener('click', () => restoreChat(h.id));
+			row.querySelector('.history-delete')?.addEventListener('click', (e) => {
+				e.stopPropagation();
+				history = history.filter(x => x.id !== h.id);
+				deleteHistory(h.id);
+				renderHistoryPanel();
+			});
+			els.historyList.appendChild(row);
+		}
+	}
+
+	// ---- Modes ------------------------------------------------------------------
+
+	function placeholderFor() {
+		const s = cur();
+		if (s && s.streaming) {
+			return s.runMode === 'agent' && s.steerable !== false
+				? 'Agent is running — type here to steer it live (Enter to send)…'
+				: 'Streaming — type here to queue your next message (Enter to add)…';
+		}
+		const m = curMode();
+		return m === 'plan'
+			? 'Describe the requirement to plan (no changes are made)…'
+			: m === 'agent'
+				? 'Give the agent a task (it can read/write/edit files and run commands)…'
+				: 'Ask anything about this project… (Enter to send, Shift+Enter for newline)';
+	}
+
+	/**
+	 * Reflects the active session's mode in the mode picker and composer without posting a
+	 * change — used whenever something other than the user's own mode pick may have changed
+	 * which session (and thus which mode) is on screen: `switchSession`, `createSession`,
+	 * `restoreSession`, or a `sessions` push from a remote client's own `setMode`.
+	 */
+	function syncModeUI() {
+		const m = curMode();
+		els.modeSelect.value = m;
+		// The permissions pill only matters in Agent mode; keep the bar clean otherwise.
+		els.approvalSelect?.classList.toggle('hidden', m !== 'agent');
+		els.input.placeholder = placeholderFor();
+	}
+
+	/** Sets the active session's mode: updates locally (optimistic — same-machine, effectively
+	 * synchronous) and tells the host, which is what's authoritative on the next `sessions` push. */
+	function setMode(next) {
+		const s = cur();
+		if (s) { s.mode = next; }
+		syncModeUI();
+		if (s) { vscode.postMessage({ type: 'setMode', sessionId: s.id, mode: next }); }
+	}
+
+	// ---- Context ----------------------------------------------------------------
+
+	function renderContext() {
+		if (!currentContext) { els.contextChip.classList.add('hidden'); return; }
+		els.contextChip.classList.remove('hidden');
+		els.contextChip.innerHTML = `${icon('paperclip', 12)}<span class="chip-text">${escapeHtml(currentContext.label)}</span>`
+			+ `<a href="#" id="removeCtx" class="chip-remove" title="Remove attachment" aria-label="Remove attachment">${icon('close', 10)}</a>`;
+		els.contextChip.querySelector('#removeCtx')?.addEventListener('click', (e) => {
+			e.preventDefault(); currentContext = null; renderContext();
+		});
+	}
+
+	function renderSkillChip() {
+		const active = skillsList.filter(s => activeSkills.includes(s.id));
+		if (!active.length) { els.skillChip.classList.add('hidden'); els.skillChip.innerHTML = ''; return; }
+		els.skillChip.classList.remove('hidden');
+		els.skillChip.innerHTML = active.map(skill =>
+			`<span class="skill-chip-item">${icon('book', 12)}<span class="chip-text">${escapeHtml(skill.name)}</span>`
+			+ `<a href="#" class="chip-remove" data-skill="${escapeHtml(skill.id)}" title="Deactivate this skill" aria-label="Deactivate skill">${icon('close', 10)}</a></span>`
+		).join('');
+		for (const link of els.skillChip.querySelectorAll('a[data-skill]')) {
+			link.addEventListener('click', (e) => {
+				e.preventDefault();
+				vscode.postMessage({ type: 'toggleSkill', text: link.getAttribute('data-skill') });
+			});
+		}
+	}
+
+	function enhance() {
+		const text = els.input.value.trim();
+		const s = cur();
+		if (!text || !s || s.streaming || enhancing) { return; }
+		enhancing = true;
+		els.enhanceButton.disabled = true;
+		els.enhanceButton.classList.add('busy');
+		vscode.postMessage({ type: 'enhancePrompt', text, provider: selectedProvider, model: els.modelSelect.value });
+	}
+	function endEnhance() {
+		enhancing = false;
+		els.enhanceButton.disabled = false;
+		els.enhanceButton.classList.remove('busy');
+	}
+
+	// ---- Send / streaming -------------------------------------------------------
+
+	/**
+	 * Reflects the ACTIVE session's state in the composer; other tabs stream on their
+	 * own. The input stays enabled during a run: typed messages queue up (Ask/Plan)
+	 * or steer the live agent run.
+	 */
+	function updateComposer() {
+		const s = cur();
+		const on = !!(s && s.streaming);
+		els.sendButton.classList.toggle('hidden', on);
+		els.stopButton.classList.toggle('hidden', !on);
+		els.enhanceButton.disabled = on || enhancing;
+		els.input.placeholder = placeholderFor();
+		renderQueueChips();
+	}
+
+	/** Renders the active session's queued messages as removable chips above the input. */
+	/**
+	 * Mirrors a session's queue to the host, which owns it and hands it to every client in each
+	 * `sessions` push. Nothing did after session state moved to the host — `saveState` keeps UI
+	 * preferences only — so the next `sessions` push (opening or switching a tab mid-run)
+	 * replaced this panel's queue with the host's empty one, and a follow-up typed during a run
+	 * silently never sent. `pwa/app.js`'s `persistQueue` is the same call.
+	 */
+	function persistQueue(s) {
+		vscode.postMessage({ type: 'setQueue', sessionId: s.id, queue: s.queue.slice() });
+	}
+
+	function renderQueueChips() {
+		if (!els.queueChips) { return; }
+		const s = cur();
+		els.queueChips.innerHTML = '';
+		if (!s || !s.queue.length) {
+			els.queueChips.classList.add('hidden');
+			return;
+		}
+		els.queueChips.classList.remove('hidden');
+		s.queue.forEach((text, index) => {
+			const chip = document.createElement('span');
+			chip.className = 'queue-chip';
+			chip.title = text;
+			chip.innerHTML = `${icon('clock', 12)}<span class="chip-text">${escapeHtml(text)}</span>`
+				+ `<a href="#" class="chip-remove" title="Remove from queue" aria-label="Remove queued message">${icon('close', 10)}</a>`;
+			chip.querySelector('a')?.addEventListener('click', (e) => {
+				e.preventDefault();
+				s.queue.splice(index, 1);
+				renderQueueChips();
+				persistQueue(s);
+			});
+			els.queueChips.appendChild(chip);
+		});
+	}
+
+	/** Injects a steering message into the session's live agent run. */
+	function steer(s, text) {
+		s.messages.push({ role: 'user', content: text });
+		if (s.id === activeSessionId) {
+			const body = appendMessageEl('user', text);
+			body.parentElement?.classList.add('steering');
+			scrollToBottom(true);
+		}
+		saveState();
+		// Optimistic: the bubble says "delivered" before the host has said it can be. The
+		// host bounces it back (see 'steerRejected') when the run has no agent loop, and
+		// undoSteer puts it in the queue instead — where the user can see and edit it.
+		// Stamped with the run it was typed into, exactly like every other run-scoped
+		// message. Without it a correction typed as one run finished was delivered to
+		// whichever run started next in this tab — the user watched their instruction be
+		// applied to the wrong task.
+		vscode.postMessage({ type: 'steer', sessionId: s.id, runId: s.runId, text });
+	}
+
+	/**
+	 * Takes back a steering message the host could not deliver and queues it as an ordinary
+	 * follow-up, sent when the run finishes. The optimistic turn is removed from both the
+	 * transcript and the DOM first — leaving it would send the model an instruction it was
+	 * never given an answer to, and show the user a message that was silently ignored.
+	 */
+	function undoSteer(s, text) {
+		for (let i = s.messages.length - 1; i >= 0; i--) {
+			const m = s.messages[i];
+			if (m.role === 'user' && m.content === text) {
+				s.messages.splice(i, 1);
+				break;
+			}
+		}
+		if (s.id === activeSessionId) {
+			// The last steering bubble is the one just posted; ids would be a bigger change
+			// to the transcript model than this narrow case is worth.
+			const steering = els.messages.querySelectorAll('.message.steering');
+			steering[steering.length - 1]?.remove();
+		}
+		// The bounce can arrive after the run already ended, and the queue is only drained
+		// by the 'done' that has then been and gone — so send it straight away instead of
+		// leaving it as a chip the user has to notice. Same mode the drain would have used.
+		if (s.streaming) {
+			s.queue.push(text);
+			if (s.id === activeSessionId) { renderQueueChips(); }
+			persistQueue(s);
+			return;
+		}
+		saveState();
+		sendText(text, s.runMode && s.runMode !== 'edit' ? { mode: s.runMode } : undefined, s);
+	}
+
+	// ---- Working indicator ------------------------------------------------------
+	// Claude-style "…doing something" feedback: an empty streaming bubble immediately
+	// shows a whimsical cycling verb + elapsed time, so a queued or slow model never
+	// looks like the chat went idle. The first real token replaces it.
+
+	// Two halves on purpose. The plain verbs are the ones that read as "a mind is working"
+	// — they carry the message. The Asgard lines are flavour; they only land because they
+	// are the minority, so keep the first block at least as long as the second.
+	const WORKING_WORDS = [
+		'Thinking', 'Pondering', 'Musing', 'Imagining', 'Percolating', 'Noodling',
+		'Brewing', 'Cogitating', 'Ruminating', 'Marinating', 'Conjuring', 'Untangling',
+		'Scheming', 'Simmering', 'Whirring', 'Crunching', 'Focusing', 'Deliberating',
+		'Reticulating splines', 'Herding tokens', 'Warming neurons', 'Wrangling bits',
+		'Summoning lightning', 'Swinging Mjolnir', 'Charging Stormbreaker',
+		'Calling the storm', 'Gathering thunder', 'Proving worthy', 'Sharpening the axe',
+		'Consulting Heimdall', 'Opening the Bifrost', 'Channeling the Odinforce',
+		'Rousing Asgard', 'Waking the Warriors Three', 'Out-scheming Loki',
+		'Assembling the Avengers', 'Rallying the Revengers', 'Consulting the Ancient One',
+		'Checking 14,000,605 outcomes', 'Bargaining with the Grandmaster',
+	];
+	// Thor-themed glyphs shown beside the verb, one picked per rotation: Mjolnir, a
+	// lightning bolt, and Thor's winged helm. Inline SVG rather than emoji or an image
+	// asset so they inherit the theme colour, stay crisp at any zoom, and need no
+	// extra CSP resource root. Each class gets its own animation in main.css.
+	//
+	// 19px is a floor, not a preference: the bolt survives any size, but below ~19 the
+	// hammer collapses into a featureless "T" and the helm into a blob. Shrinking these
+	// means redrawing them, not just changing the attribute.
+	const GLYPH_PX = 19;
+	const THOR_GLYPHS = [
+		// Mjolnir, verbatim as supplied — gray body, black outline, red haft. Left alone
+		// deliberately: recolouring it to follow the editor theme washes the art out, and
+		// the art is the point. It carries its own contrast on both light and dark.
+		`<svg class="thor-glyph hammer" viewBox="0 0 64 64" width="${GLYPH_PX}" height="${GLYPH_PX}" aria-hidden="true">`
+		+ '<polygon fill="gray" points="11 1 53 1 60 8 60 22 53 29 11 29 4 22 4 8 11 1"/>'
+		+ '<path fill="#000000" d="M53.41,30H10.59L3,22.41V7.59L10.59,0H53.41L61,7.59V22.41Zm-42-2H52.59L59,21.59V8.41L52.59,2H11.41L5,8.41V21.59Z"/>'
+		+ '<polygon fill="gray" points="7 9 11 5 11 25 7 21 7 9"/>'
+		+ '<path fill="#000000" d="M12,27.41l-6-6V8.59l6-6ZM8,20.59l2,2V7.41l-2,2Z"/>'
+		+ '<polygon fill="gray" points="57 9 53 5 53 25 57 21 57 9"/>'
+		+ '<path fill="#000000" d="M52,27.41V2.59l6,6V21.41Zm2-20V22.59l2-2V9.41Z"/>'
+		+ '<polygon fill="#000000" points="50 27 39.59 27 37.59 25 26.41 25 24.41 27 14 27 14 25 23.59 25 25.59 23 38.41 23 40.41 25 50 25 50 27"/>'
+		+ '<rect fill="#d21f23" width="8" height="25" x="28" y="29"/>'
+		+ '<path fill="#000000" d="M37,55H27V28H37Zm-8-2h6V30H29Z"/>'
+		+ '<path fill="gray" d="M36,63H28c-1.38,0-2.27-.91-2-2l2-7h8l2,7C38.27,62.09,37.38,63,36,63Z"/>'
+		+ '<path fill="#000000" d="M36,64H28a3.15,3.15,0,0,1-2.53-1.12A2.43,2.43,0,0,1,25,60.76L27.25,53h9.51L39,60.73a2.45,2.45,0,0,1-.43,2.16A3.15,3.15,0,0,1,36,64Zm-7.25-9L27,61.27a.43.43,0,0,0,.08.38A1.21,1.21,0,0,0,28,62h8a1.21,1.21,0,0,0,1-.35.45.45,0,0,0,.07-.41L35.25,55Z"/>'
+		+ '<rect fill="#000000" width="9.43" height="2" x="27.28" y="32.5" transform="rotate(-31.8 32.146 33.419)"/>'
+		+ '<rect fill="#000000" width="9.43" height="2" x="27.28" y="41.5" transform="rotate(-31.8 32.18 42.428)"/>'
+		+ '<rect fill="#000000" width="9.43" height="2" x="27.28" y="49.5" transform="rotate(-31.8 32.216 50.438)"/>'
+		+ '</svg>',
+		// Stormbreaker, verbatim as supplied, with two framing changes and no recolouring:
+		// mirrored (`scale(-1 1)`) so the blade faces the same way as the reference art,
+		// and the viewBox cropped to the drawing's own bounds — at a square 100x100 nearly
+		// half the box is empty margin, which renders it visibly punier than the hammer.
+		// It is tall and narrow, so it gets its own box; `.working-glyph` pins the overall
+		// slot size to stop the text jittering as glyphs rotate.
+		`<svg class="thor-glyph stormbreaker" viewBox="20 0 60 99" width="13" height="${GLYPH_PX + 3}" aria-hidden="true">`
+		+ '<g transform="translate(100 0) scale(-1 1)">'
+		+ '<rect width="7.876" height="2.343" x="41.114" y="38.759" fill="#eaa871"/>'
+		+ '<path fill="#d1dae7" d="M68.019,1.991C63.114,7.979,57.924,11.89,54.21,14.213L54,13h-4l-1.228,0.429L47.057,11H43 l-1.964,2.455l-1.146-0.497l-2.361,0.054l-0.548,0.315L26.019,9.991L22,14.949V23.5l-0.019-0.009v8.551L26,37l12.342-3.756 C38.704,34.638,51.965,34.923,52,32c3.741,2.198,10.568,6.361,16,13c0,0,11.014-6,11.014-21.525 C79.014,8,68.019,1.991,68.019,1.991z"/>'
+		+ '<path fill="#b1bdd0" d="M71.81,4.791l-6.052,6.278c0,0,3.878,4.431,4.242,7.931H52l1.745-4.896l5.005-2.912l9.269-9.201 L71.81,4.791z"/>'
+		+ '<path fill="#b1bdd0" d="M51.168,28.5h18.627c0,0-3.28,6.319-4.038,6.909l6.341,6.434L68,45c0,0-14.905-12.455-16.453-13.228 L51.168,28.5z"/>'
+		+ '<polygon fill="#b1bdd0" points="26.5,36.75 26.5,28.752 27,28 38.994,28 38.546,31.55 38.521,33.467"/>'
+		+ '<polygon fill="#b1bdd0" points="26.5,10.5 26.5,18.329 38.079,18.329 37.244,16.357 36.684,13.237"/>'
+		+ '<path fill="#b77748" d="M53.464,13.139c0,0,0.793,6.503-6.711,11.166c-5.012,3.114-2.588,10.372-2.588,10.372h1.482 c0,0,1.117-2.24,0.875-4.256c-0.539-4.487-10.066-11.802-9.605-16.816l4.007-0.467c0,0,1.967,5.693,5.873,9.027 s4.614,5.644,4.745,8.615s-2.667,7.287-2.667,7.287S49.193,80.594,44,92l-5,2l-2.099,3.088L30,91c0,0,12.708-17.141,11.009-52.5 c0,0-3.283-3.558-2.424-8.672s10.621-11.916,10.49-16.689H53.464z"/>'
+		+ '<polygon fill="#eaa871" points="46.5,79.5 36.304,79.384 38.5,67.244 47.326,67.244"/>'
+		+ '<rect width="7.375" height="8.346" x="41.5" y="38.759" fill="#eaa871"/>'
+		+ '<polygon fill="#b1bdd0" points="25.67,23.33 27.41,21.59 40.269,21.59 41.771,23.33 40.013,25.5 27.793,25.5 25.729,23.436"/>'
+		+ '<polygon fill="#b1bdd0" points="49.734,21.5 71.5,21.5 73.33,23.33 71.442,25.5 50,25.5 48.11,23.198"/>'
+		+ '<g fill="none" stroke="#24262e" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10">'
+		+ '<path stroke-width="2" d="M68.019,1.991C63.114,7.979,57.924,11.89,54.21,14.213L54,13h-4l-1.228,0.429L47.057,11H43l-1.964,2.455l-1.146-0.497l-2.361,0.054 l-0.548,0.315L26.019,9.991L22,14.949V23.5l-0.019-0.009v8.551L26,37l12.342-3.756C38.704,34.638,39.45,36.45,41,38c0,0,1,39-11,53 l6.526,6.638L39,94l5-2c0,0,5-14,5-54c0,0,2.965-3.077,3-6c3.741,2.198,10.568,6.361,16,13c0,0,11.014-6,11.014-21.525 C79.014,8,68.019,1.991,68.019,1.991z"/>'
+		+ '<path d="M36.5,79.5h10M37.5,76.5h9M37.5,73.5h9M38.5,70.5h8M39.5,67.5h8"/>'
+		+ '<path d="M41.5,47.5h7M41.5,44.5h7M41.5,41.5h7M41.5,38.5h7"/>'
+		+ '<path d="M38.925,33.521c-0.768-2.447-1.064-7.176,5.08-12.132c5.4-4.53,5.07-8.251,5.07-8.251"/>'
+		+ '<path d="M53.464,14.104c0,0-0.071,4.277-5.692,9.226c-5.132,4.52-4.566,9.163-3.748,11.176"/>'
+		+ '<path d="M41.901,23.33c-4.06-4.261-5.298-7.335-4.919-10.003"/>'
+		+ '<path d="M45.647,34.506c0.621-1.126,1.879-4.106-0.598-7.838"/>'
+		+ '<path d="M47.921,23.198c3.146,3.281,4.661,7.361,2.845,11.479"/>'
+		+ '<path d="M41.114,13.867c0,0,0.863,3.317,3.935,6.591"/>'
+		+ '<polyline points="38.172,18.5 26.5,18.5 26.5,10.5"/>'
+		+ '<polyline points="29.086,28.5 26.5,28.5 26.5,36.5"/>'
+		+ '<path d="M38.172,28.5h-5.111M65.634,11.192l6.176-6.175M65.758,35.675l6.168,6.169"/>'
+		+ '<path d="M69.796,28.5c-0.782,2.708-2.182,5.154-4.039,7.175"/>'
+		+ '<path d="M65.634,11.192c1.918,2.046,3.363,4.54,4.162,7.308"/>'
+		+ '<polyline points="40.013,25.5 27.5,25.5 25.5,23.5 27.5,21.5 40.147,21.5"/>'
+		+ '<polyline points="49.734,21.5 71.5,21.5 73.5,23.5 71.5,25.5 49.896,25.5"/>'
+		+ '<path d="M69.796,18.5H64.5M51.889,18.5h5.611M69.796,28.5H51.334"/>'
+		+ '</g></g></svg>',
+		// Thunder and Thor's winged helm. Both are drawn to the supplied artwork's
+		// conventions rather than as flat silhouettes — a 100 grid, a heavy #24262e
+		// outline, and the same #d1dae7 / #b1bdd0 / #b77748 palette Stormbreaker uses —
+		// so the four glyphs read as one set as they rotate. Kept deliberately flat:
+		// two-tone shading seams are invisible at 19px and only muddy the shape.
+		`<svg class="thor-glyph bolt" viewBox="0 0 100 100" width="${GLYPH_PX}" height="${GLYPH_PX}" aria-hidden="true">`
+		+ '<path fill="#f0b840" stroke="#24262e" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" d="M64 8 26 54h18l-8 38 38-48H56Z"/>'
+		+ '</svg>',
+		`<svg class="thor-glyph helm" viewBox="0 0 100 100" width="${GLYPH_PX}" height="${GLYPH_PX}" aria-hidden="true">`
+		+ '<g stroke="#24262e" stroke-width="4" stroke-linejoin="round" stroke-linecap="round">'
+		+ '<path fill="#d1dae7" d="M24 44 4 14l4 32 16 8Z"/>'
+		+ '<path fill="#d1dae7" d="m76 44 20-30-4 32-16 8Z"/>'
+		+ '<path fill="#d1dae7" d="M50 18c-15 0-26 12-26 26v18h52V44c0-14-11-26-26-26Z"/>'
+		+ '<path fill="#b1bdd0" stroke="none" d="M50 18c15 0 26 12 26 26v18H50Z"/>'
+		+ '<path fill="none" d="M50 18c-15 0-26 12-26 26v18h52V44c0-14-11-26-26-26Z"/>'
+		+ '<path fill="#b77748" d="M19 61h62a5 5 0 0 1 0 10H19a5 5 0 0 1 0-10Z"/>'
+		+ '<path fill="#b1bdd0" d="M45 71h10v15a5 5 0 0 1-10 0Z"/>'
+		+ '</g></svg>',
+	];
+	let workingTimer = 0;
+	let lastWorkingWord = '';
+	let lastGlyph = '';
+	/** The live status strip, or null when the visible tab has nothing running. */
+	let workingEl = null;
+
+	function pickWorkingWord() {
+		let word = lastWorkingWord;
+		while (word === lastWorkingWord) {
+			word = WORKING_WORDS[Math.floor(Math.random() * WORKING_WORDS.length)];
+		}
+		lastWorkingWord = word;
+		return word;
+	}
+
+	/** Picks a Thor glyph, never the one already on screen. */
+	function pickGlyph() {
+		let glyph = lastGlyph;
+		while (glyph === lastGlyph) {
+			glyph = THOR_GLYPHS[Math.floor(Math.random() * THOR_GLYPHS.length)];
+		}
+		lastGlyph = glyph;
+		return glyph;
+	}
+
+	/**
+	 * When the wait now on the clock began. Reset on every sign of progress rather than
+	 * once per run: a run that streams, calls ten tools and streams again is not one wait,
+	 * and reporting it as one produced numbers like "1059s" that say nothing about whether
+	 * anything is stuck. What the user is actually asking the strip is "how long has *this*
+	 * been going", so that is what it counts.
+	 */
+	let workingSince = 0;
+	/** Whether the provider-queue hint is currently on the strip. */
+	let workingHintShown = false;
+
+	function stopWorking() {
+		clearInterval(workingTimer);
+		workingTimer = 0;
+		workingEl?.remove();
+		workingEl = null;
+		workingHintShown = false;
+	}
+
+	/**
+	 * Restarts the strip's clock — something visibly happened (a token, a tool starting or
+	 * finishing, a new phase). Also retracts the "still queued at the provider" hint, which
+	 * is a claim about silence and is simply false once output is moving again.
+	 */
+	function noteWorkingProgress() {
+		if (!workingEl) { return; }
+		workingSince = Date.now();
+		if (workingHintShown) {
+			workingEl.querySelector('.working-hint')?.remove();
+			workingHintShown = false;
+		}
+	}
+
+	/** Seconds as a clock a human reads at a glance: past a minute, "17m 39s" not "1059s". */
+	function formatElapsed(secs) {
+		if (secs < 60) { return `${secs}s`; }
+		return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+	}
+
+	/** Keeps the strip at the foot of the transcript as bubbles and tool blocks land. */
+	function keepWorkingLast() {
+		if (workingEl && workingEl.parentElement === els.messages && workingEl.nextSibling) {
+			els.messages.appendChild(workingEl);
+		}
+	}
+
+	/**
+	 * Shows the animated working indicator for the visible tab's run.
+	 *
+	 * It is a strip pinned to the foot of the transcript rather than a placeholder inside
+	 * the empty streaming bubble, because that bubble's first token overwrote it about a
+	 * second in — so for the whole rest of a run, the part that actually feels slow, the
+	 * only sign of life left was the caret. The strip lives as long as the run does, so
+	 * the verb and the rotating Thor glyph stay on screen across streaming and tool calls.
+	 *
+	 * Idempotent: every agent step re-opens a stream, so a second call re-anchors the
+	 * existing strip instead of building a new one. The clock it shows is not this
+	 * function's business — `noteWorkingProgress` owns it, and restarts it per wait.
+	 */
+	function startWorking() {
+		if (workingEl) {
+			// A transcript rebuild (tab switch, history restore) empties #messages and
+			// detaches the strip without the run having ended. Re-attach the same element
+			// rather than building a new one, so the clock keeps counting the wait in
+			// progress instead of restarting from zero every time the user looks away.
+			if (!workingEl.isConnected) { els.messages.appendChild(workingEl); }
+			keepWorkingLast();
+			return;
+		}
+		stopWorking();
+		workingSince = Date.now();
+		const el = document.createElement('div');
+		el.className = 'working';
+		el.innerHTML = '<span class="working-glyph"></span><span class="working-word"></span><span class="working-meta"></span>';
+		els.messages.appendChild(el);
+		workingEl = el;
+		const glyphEl = /** @type {HTMLElement} */ (el.querySelector('.working-glyph'));
+		const wordEl = /** @type {HTMLElement} */ (el.querySelector('.working-word'));
+		const metaEl = /** @type {HTMLElement} */ (el.querySelector('.working-meta'));
+		let word = pickWorkingWord();
+		let glyph = pickGlyph();
+		// Compared against the string we last wrote, not against glyphEl.innerHTML: the DOM
+		// re-serializes the SVG (attribute order, self-closing form), so reading it back
+		// never matches and the glyph was being rewritten every tick — which restarted the
+		// CSS animation each second, so the swing/hover never played through.
+		let drawn = '';
+		const render = () => {
+			const secs = Math.floor((Date.now() - workingSince) / 1000);
+			if (drawn !== glyph) { glyphEl.innerHTML = glyph; drawn = glyph; }
+			wordEl.textContent = `${word}…`;
+			metaEl.textContent = secs >= 8 ? ` ${formatElapsed(secs)}` : '';
+			// Long silence is almost always the provider-side free-tier queue: say so once.
+			// 25s of *silence*, not of run time — mid-run this used to accuse the provider of
+			// queueing while tool output was actively scrolling past. An open approval or
+			// question card is the other false positive: there the run is blocked on the
+			// user, who is looking at the card the hint would be talking over.
+			if (secs >= 25 && !workingHintShown && !prompts.size()) {
+				workingHintShown = true;
+				const hint = document.createElement('span');
+				hint.className = 'working-hint';
+				hint.textContent = 'Still queued at the provider — free-tier models can take a minute or two when busy. Consistently slow? Try a smaller model or another provider.';
+				el.appendChild(hint);
+			}
+		};
+		render();
+		let ticks = 0;
+		workingTimer = setInterval(() => {
+			// Strip gone (transcript re-rendered out from under it) — self-dispose.
+			if (!el.isConnected) {
+				stopWorking();
+				return;
+			}
+			ticks++;
+			if (ticks % 3 === 0) { word = pickWorkingWord(); glyph = pickGlyph(); }
+			render();
+		}, 1000);
+	}
+
+	/** Starts an in-flight assistant turn on a session (DOM bubble only when visible). */
+	function openStream(s) {
+		// A frame queued against the bubble this replaces would otherwise paint the new
+		// session's text into the old element (or the old text into the new one).
+		flushStreamRender();
+		s.pending = '';
+		if (s.id === activeSessionId) {
+			activeAssistantBody = appendMessageEl('assistant', '');
+			// 'awaiting' hides the bubble until its first token: with the strip carrying the
+			// status, an empty bubble is a grey box with a lone caret in it.
+			activeAssistantBody.parentElement?.classList.add('streaming', 'awaiting');
+			startWorking();
+			// Agent steps and Auto phases re-open a stream mid-run; that is a new wait.
+			noteWorkingProgress();
+		}
+	}
+
+	/**
+	 * Normalizes finished assistant text before it is stored and re-sent as history:
+	 * strips trailing spaces, collapses 3+ blank lines to one, and trims the ends. Content
+	 * inside fenced ``` code blocks is left byte-for-byte untouched so code/indentation
+	 * survives. Cuts wasted characters (and thus tokens) without changing meaning.
+	 */
+	function tidyResponse(text) {
+		if (!text) { return text; }
+		const parts = text.split(/(```[\s\S]*?```)/g);
+		const cleaned = parts.map((part, i) => {
+			if (i % 2 === 1) { return part; } // odd chunks are fenced code blocks — keep as-is
+			return part
+				.replace(/[ \t]+$/gm, '')      // trailing whitespace per line
+				.replace(/\n{3,}/g, '\n\n');   // no runs of blank lines
+		}).join('');
+		return cleaned.trim();
+	}
+
+	/**
+	 * Coalesced repaint of the streaming bubble.
+	 *
+	 * A token used to repaint synchronously: re-render the WHOLE accumulated answer to
+	 * markdown, reparse it through innerHTML, walk it twice for open thinking blocks, and
+	 * scroll. That is O(n²) over a response — and reasoning models stream thousands of
+	 * tokens — so a long answer progressively froze the panel and starved the message pump
+	 * the same run was using to report its progress. `s.pending` is still updated on every
+	 * token, so the model of record is unchanged; only the painting is rate-limited to one
+	 * frame.
+	 * @type {number}
+	 */
+	let streamFrame = 0;
+	/** @type {Session | null} The session whose pending text the queued frame will paint. */
+	let streamTarget = null;
+
+	function paintStream() {
+		const s = streamTarget;
+		streamTarget = null;
+		if (!s || s.id !== activeSessionId || !activeAssistantBody) { return; }
+		activeAssistantBody.parentElement?.classList.remove('awaiting');
+		setBodyMarkdown(activeAssistantBody, s.pending || '');
+		scrollToBottom();
+	}
+
+	/** Requests a repaint of `s`'s streaming bubble on the next frame (at most one queued). */
+	function scheduleStreamRender(s) {
+		streamTarget = s;
+		if (streamFrame) { return; }
+		streamFrame = requestAnimationFrame(() => { streamFrame = 0; paintStream(); });
+	}
+
+	/**
+	 * Paints any queued frame immediately. Every path that reads the bubble's DOM or
+	 * replaces it has to call this first, or the last tokens before a step/tool boundary
+	 * would be dropped from the rendered turn while still present in `s.pending`.
+	 */
+	function flushStreamRender() {
+		if (!streamFrame) { return; }
+		cancelAnimationFrame(streamFrame);
+		streamFrame = 0;
+		paintStream();
+	}
+
+	/**
+	 * Drops a queued frame without painting it. For callers that are about to rebuild the
+	 * transcript wholesale — painting into DOM that is one statement away from being
+	 * discarded is pure waste, and the rebuild renders `pending` itself.
+	 */
+	function cancelStreamRender() {
+		if (streamFrame) { cancelAnimationFrame(streamFrame); streamFrame = 0; }
+		streamTarget = null;
+	}
+
+	/** Commits a session's in-flight assistant turn into its transcript. */
+	function commitPending(s) {
+		// The queued frame holds tokens that are in `s.pending` but not yet on screen;
+		// enhanceCodeBlocks below reads the rendered DOM, so it has to see them.
+		flushStreamRender();
+		// Only the visible tab owns the working indicator; a background tab finishing must
+		// not cancel the one running for the active tab. The `streaming` guard matters as
+		// much: this runs at every tool call and agent step too, and the strip has to
+		// outlive those — only the terminal 'done' (which clears the flag first) ends it.
+		if (s.id === activeSessionId && !s.streaming) {
+			stopWorking();
+		}
+		if (s.pending) {
+			s.messages.push({ role: 'assistant', content: tidyResponse(s.pending) });
+		}
+		if (s.id === activeSessionId && activeAssistantBody) {
+			const wrap = activeAssistantBody.parentElement;
+			wrap?.classList.remove('streaming');
+			if (s.pending) {
+				enhanceCodeBlocks(activeAssistantBody);
+			} else {
+				wrap?.remove();
+			}
+			activeAssistantBody = null;
+		}
+		s.pending = null;
+		saveState();
+	}
+
+	function sendText(text, opts, target) {
+		const s = target || cur();
+		if (!s || (!text && !pendingImages.length) || s.streaming) { return; }
+		// Inline code actions run in the internal 'edit' mode without changing the
+		// session's own mode — they pass it as an override instead.
+		const sendMode = (opts && opts.mode) || s.mode || 'ask';
+		// `pendingImages`/`currentContext` are both singleton "what's attached to the composer
+		// right now" state, not per-session — this function isn't always called for the *active*
+		// tab (`undoSteer`'s resend and the `done` handler's queue drain below both pass a
+		// `target` that can be a background session finishing while the user is looking at, and
+		// attaching an image or context to, a different one entirely). Taking them
+		// unconditionally used to mean a background tab's resend could silently staple whatever
+		// the user had staged for their *current* composer onto an unrelated chat, and then
+		// clear it out from under them.
+		const isActiveSend = s.id === activeSessionId;
+		const images = (isActiveSend && pendingImages.length) ? pendingImages.slice() : undefined;
+		s.messages.push({ role: 'user', content: text, images });
+		if (!s.title && text) {
+			s.title = text.length > 28 ? text.slice(0, 27) + '…' : text;
+		}
+		if (isActiveSend) {
+			appendMessageEl('user', text, images);
+			pendingImages = [];
+			renderImageChips();
+		}
+		// Remember how this run was started so mid-run input knows whether to steer or
+		// queue. Agent runs steer, everything else queues — Auto included, since its
+		// implementer phase is an agent loop and the orchestrator forwards steering to it.
+		s.runMode = sendMode;
+		// Assume the run can be steered; the host says otherwise (see the 'steerable'
+		// message) for a turn it answers without an agent loop. Reset per run, or one
+		// downgraded turn would leave the tab unable to steer every run after it.
+		s.steerable = true;
+
+		// In Auto mode the per-phase header creates its own bubble; otherwise pre-create one
+		// for non-agent streaming. (openStream only touches the DOM for the visible tab.)
+		if (sendMode !== 'agent' && !isAuto()) {
+			openStream(s);
+		} else if (s.id === activeSessionId) {
+			// Agent and Auto open their own bubbles later (per step / per phase), so the
+			// strip has to start here or the first — longest — wait shows nothing at all.
+			startWorking();
+		}
+		s.streaming = true;
+		renderTabs();
+		updateComposer();
+		saveState();
+		scrollToBottom(true);
+		// Stamped on every message the host posts back, so a superseded run's stragglers
+		// can be ignored instead of ending the run that replaced it.
+		s.runId = newRunId();
+		// `text`/`images` are the new turn itself — the host appends it to the session store
+		// before reading history back out, since `send` no longer carries the whole
+		// conversation. Must match what was just pushed into `s.messages` above.
+		// `fromQueue` marks a queue drain: a paired phone drains the same queue on the same
+		// `done`, and the host accepts only the first drain per finished run (see handleSend).
+		vscode.postMessage({
+			type: 'send',
+			sessionId: s.id,
+			runId: s.runId,
+			mode: sendMode,
+			provider: selectedProvider,
+			model: els.modelSelect.value,
+			context: (isActiveSend && currentContext) || undefined,
+			inline: !!(opts && opts.inline),
+			fromEditor: !!(opts && opts.fromEditor),
+			fromQueue: !!(opts && opts.fromQueue),
+			text: text,
+			images: images,
+		});
+	}
+
+	function send() {
+		hideSlashMenu();
+		const s = cur();
+		if (!s) { return; }
+		const text = els.input.value.trim();
+		if (!text && !pendingImages.length) { return; }
+		if (text.startsWith('/') && handleSlash(text)) { els.input.value = ''; autoSize(); return; }
+		if (s.streaming) {
+			// Mid-run input: steer a live agent run, queue for anything else.
+			if (!text) { return; }
+			if (s.runMode === 'agent' && s.steerable !== false) {
+				steer(s, text);
+			} else {
+				s.queue.push(text);
+				renderQueueChips();
+				persistQueue(s);
+			}
+			els.input.value = ''; autoSize();
+			return;
+		}
+		if (pendingImages.length && !isAuto() && !modelSupportsVision(currentProvider(), els.modelSelect.value)) {
+			showNotice(`The model "${els.modelSelect.value}" doesn't support image input. Remove the attachment or pick a vision-capable model.`, true);
+			return;
+		}
+		els.input.value = ''; autoSize();
+		sendText(text);
+	}
+
+	/** Filtered matches currently shown in the slash menu, and which one is highlighted. */
+	let slashMatches = [];
+	let slashIndex = 0;
+
+	function slashMenuOpen() {
+		return !!els.slashMenu && !els.slashMenu.classList.contains('hidden');
+	}
+
+	function hideSlashMenu() {
+		if (!els.slashMenu || els.slashMenu.classList.contains('hidden')) { return; }
+		els.slashMenu.classList.add('hidden');
+		els.slashMenu.innerHTML = '';
+		slashMatches = [];
+	}
+
+	function renderSlashMenu() {
+		els.slashMenu.innerHTML = '';
+		for (let i = 0; i < slashMatches.length; i++) {
+			const c = slashMatches[i];
+			const row = document.createElement('div');
+			row.className = 'slash-item' + (i === slashIndex ? ' active' : '');
+			row.setAttribute('role', 'option');
+			row.innerHTML = `<span class="slash-cmd">/${escapeHtml(c.cmd)}</span><span class="slash-desc">${escapeHtml(c.desc)}</span>`;
+			// mousedown, not click: it fires before the textarea would blur, so preventing
+			// it here keeps focus (and the caret) in the composer instead of tearing the
+			// menu down before the click is read.
+			row.addEventListener('mousedown', (e) => {
+				e.preventDefault();
+				slashIndex = i;
+				applySlashSelection();
+			});
+			els.slashMenu.appendChild(row);
+		}
+	}
+
+	/**
+	 * Shows or hides the slash-command menu for the composer's current content.
+	 *
+	 * Only while the whole draft is still just `/` plus the command word being typed —
+	 * once a space follows, the command is decided and `handleSlash` takes it from there;
+	 * suggesting matches against a command already chosen would be noise, not help.
+	 */
+	function updateSlashMenu() {
+		if (!els.slashMenu) { return; }
+		const m = /^\/(\w*)$/.exec(els.input.value);
+		if (!m) { hideSlashMenu(); return; }
+		const partial = m[1].toLowerCase();
+		slashMatches = slashCommands.filter(c => c.cmd.startsWith(partial));
+		if (!slashMatches.length) { hideSlashMenu(); return; }
+		slashIndex = 0;
+		renderSlashMenu();
+		els.slashMenu.classList.remove('hidden');
+	}
+
+	function moveSlashSelection(delta) {
+		if (!slashMatches.length) { return; }
+		slashIndex = (slashIndex + delta + slashMatches.length) % slashMatches.length;
+		renderSlashMenu();
+	}
+
+	/** Completes the composer with the highlighted command, ready for its argument. */
+	function applySlashSelection() {
+		const chosen = slashMatches[slashIndex];
+		if (!chosen) { return; }
+		els.input.value = '/' + chosen.cmd + ' ';
+		hideSlashMenu();
+		autoSize();
+		els.input.focus();
+		const len = els.input.value.length;
+		els.input.setSelectionRange(len, len);
+	}
+
+	/**
+	 * Handles a leading slash command. `/history` and `/enhance` are the two the host has no
+	 * business acting on — opening a UI panel and filling the composer are inherently
+	 * client-owned (see `src/session/slash.ts`'s `runSlash` doc) — so they stay fully local.
+	 * Everything else forwards the whole line to the host via `slash`, which owns mode/
+	 * provider switches, clearing/archiving the session, skills, and MCP (Phase 6a of
+	 * "remote control"); `/clear` and `/auto` additionally touch composer-attachment state and
+	 * the still-webview-global provider/model pickers respectively, neither of which the host
+	 * can reach into, so those stay mirrored locally alongside the host round trip. Returns
+	 * true if `text` was consumed as a slash command — an unrecognized one (a typo like
+	 * `/foo`) is still forwarded and still consumes the input; the host's own "unrecognized —
+	 * treat as a normal message" fallback sends it back exactly as before.
+	 */
+	function handleSlash(text) {
+		const m = /^\/(\w+)\s*([\s\S]*)$/.exec(text);
+		if (!m) { return false; }
+		const s = cur();
+		if (!s) { return false; }
+		const cmd = m[1].toLowerCase();
+		if (cmd === 'history') { openHistoryPanel(); return true; }
+		if (cmd === 'enhance') { els.input.value = m[2].trim(); enhance(); return true; }
+		if (cmd === 'clear') {
+			// Composer attachments are client-only UI state; the host owns archiving/resetting
+			// the session itself (`SessionStore.clearSession`, reached via `slash` below).
+			currentContext = null;
+			pendingImages = [];
+			renderContext(); renderImageChips();
+		} else if (cmd === 'auto') {
+			// The provider/model pickers are still webview-global, not yet reactive to a
+			// session's own `provider`/`model` (see `case 'sessions':`'s doc) — mirrored
+			// locally alongside the host's own record of it.
+			selectedProvider = AUTO_PROVIDER;
+			els.providerSelect.value = AUTO_PROVIDER;
+			saveState(); applyProviderUiMode(); renderModelSelect(); updateModeAvailability();
+		}
+		vscode.postMessage({ type: 'slash', sessionId: s.id, command: text });
+		return true;
+	}
+
+	function appendPhaseHeader(label, provider, model, source) {
+		const el = document.createElement('div');
+		el.className = 'auto-phase';
+		const modelText = `${provider || ''} · ${model || ''}`;
+		el.innerHTML =
+			`<span class="phase-name">${escapeHtml(label || '')}</span>` +
+			`<span class="phase-model" title="${escapeHtml(modelText)}">${escapeHtml(modelText)}</span>` +
+			`<span class="phase-tag">${source === 'configured' ? 'pinned' : 'auto'}</span>`;
+		els.messages.appendChild(el);
+		scrollToBottom();
+	}
+
+	/**
+	 * Closing "which models ran" line for an Auto run. Auto chooses the models, and the
+	 * per-phase headers are scrolled away by the time the run ends — and after a fallback
+	 * they no longer name the model that actually answered. `phases` is what really ran.
+	 */
+	function appendAutoSummary(phases) {
+		if (!Array.isArray(phases) || !phases.length) { return; }
+		const el = document.createElement('div');
+		el.className = 'auto-summary';
+		const label = document.createElement('span');
+		label.className = 'summary-label';
+		label.textContent = 'Models used';
+		el.appendChild(label);
+		for (const phase of phases) {
+			const item = document.createElement('span');
+			item.className = 'summary-item';
+			const role = document.createElement('b');
+			role.textContent = phase.label || phase.role || '';
+			const model = document.createElement('code');
+			model.textContent = `${phase.provider || ''} · ${phase.model || ''}`;
+			const tag = document.createElement('i');
+			tag.textContent = phase.source === 'configured' ? 'pinned' : 'auto';
+			item.append(role, model, tag);
+			el.appendChild(item);
+		}
+		els.messages.appendChild(el);
+		scrollToBottom();
+	}
+
+	function autoSize() {
+		els.input.style.height = 'auto';
+		els.input.style.height = Math.min(els.input.scrollHeight, 200) + 'px';
+	}
+
+	// ---- Events -----------------------------------------------------------------
+
+	els.modeSelect.addEventListener('change', () => {
+		if (els.modeSelect.value === 'agent' && !isAuto()) { ensureAgentModel(); }
+		setMode(els.modeSelect.value);
+	});
+	els.approvalSelect?.addEventListener('change', () => setApproval(els.approvalSelect.value));
+	els.providerSelect.addEventListener('change', () => {
+		selectedProvider = els.providerSelect.value;
+		saveState();
+		applyProviderUiMode();
+		renderModelSelect(); updateModeAvailability();
+		// Already in Agent mode? Keep the invariant: the selected model must do tools.
+		if (curMode() === 'agent' && !isAuto()) { ensureAgentModel(); }
+		vscode.postMessage({ type: 'setProvider', provider: selectedProvider });
+		// Ask for the live model list the first time this provider is selected.
+		if (!isAuto() && !fetchedModels[selectedProvider]) {
+			vscode.postMessage({ type: 'listModels', provider: selectedProvider });
+		}
+	});
+	els.enableReview?.addEventListener('change', () => {
+		vscode.postMessage({ type: 'setReviewEnabled', reviewEnabled: els.enableReview.checked });
+	});
+	els.enableDecompose?.addEventListener('change', () => {
+		vscode.postMessage({ type: 'setDecompose', decompose: els.enableDecompose.checked });
+	});
+	els.completionsEnabled?.addEventListener('change', () => {
+		vscode.postMessage({ type: 'setCompletionsEnabled', value: !!els.completionsEnabled.checked });
+	});
+	els.saveSystemPrompt?.addEventListener('click', () => {
+		generalConfig.systemPrompt = els.systemPromptInput.value;
+		vscode.postMessage({ type: 'setSystemPrompt', text: els.systemPromptInput.value });
+	});
+	els.saveMaxTokens?.addEventListener('click', () => {
+		const n = parseInt(els.maxTokensInput.value, 10);
+		if (!Number.isFinite(n) || n <= 0) {
+			showNotice('Max reply tokens must be a positive number.', true);
+			return;
+		}
+		generalConfig.maxTokens = n;
+		vscode.postMessage({ type: 'setMaxTokens', maxTokens: n });
+	});
+	els.saveRules?.addEventListener('click', () => {
+		generalConfig.rules = els.rulesInput.value;
+		vscode.postMessage({ type: 'setRules', text: els.rulesInput.value });
+	});
+	els.saveMaxSteps?.addEventListener('click', () => {
+		const n = parseInt(els.maxStepsInput.value, 10);
+		if (!Number.isFinite(n) || n <= 0) {
+			showNotice('Max agent steps must be a positive number.', true);
+			return;
+		}
+		generalConfig.maxSteps = n;
+		vscode.postMessage({ type: 'setMaxSteps', maxSteps: n });
+	});
+	els.saveMaxRunMinutes?.addEventListener('click', () => {
+		const n = parseInt(els.maxRunMinutesInput.value, 10);
+		if (!Number.isFinite(n) || n <= 0) {
+			showNotice('Max agent run time must be a positive number.', true);
+			return;
+		}
+		generalConfig.maxRunMinutes = n;
+		vscode.postMessage({ type: 'setMaxRunMinutes', maxRunMinutes: n });
+	});
+	els.modelSelect.addEventListener('change', () => {
+		updateModeAvailability();
+		vscode.postMessage({ type: 'setModel', provider: selectedProvider, model: els.modelSelect.value });
+	});
+	els.refreshModels.addEventListener('click', () => {
+		if (isAuto() || refreshingModels.has(selectedProvider)) { return; }
+		refreshingModels.add(selectedProvider);
+		els.refreshModels.classList.add('busy');
+		// `refresh` skips the host's cached catalog — without it ⟳ re-posted the very list
+		// it was pressed to replace.
+		vscode.postMessage({ type: 'listModels', provider: selectedProvider, refresh: true });
+	});
+	els.settingsButton.addEventListener('click', () => {
+		// From the sidebar chat, ⚙ opens Settings in its own editor tab (a proper, roomy
+		// window) rather than the cramped in-sidebar overlay.
+		vscode.postMessage({ type: 'requestOpenSettings' });
+	});
+	els.closeSettings.addEventListener('click', () => {
+		if (SETTINGS_ONLY) { vscode.postMessage({ type: 'closeSettingsWindow' }); }
+		else { els.settingsPanel.classList.add('hidden'); }
+	});
+	els.historyButton?.addEventListener('click', () => {
+		if (els.historyPanel.classList.contains('hidden')) { openHistoryPanel(); }
+		else { els.historyPanel.classList.add('hidden'); }
+	});
+	els.closeHistory?.addEventListener('click', () => els.historyPanel.classList.add('hidden'));
+	els.newSkill?.addEventListener('click', () => vscode.postMessage({ type: 'createSkill' }));
+	els.mcpAdd?.addEventListener('click', () => vscode.postMessage({ type: 'mcpAdd' }));
+	els.mcpReconnectBtn?.addEventListener('click', () => {
+		if (els.mcpList) { els.mcpList.textContent = 'Reconnecting…'; }
+		vscode.postMessage({ type: 'mcpReconnect' });
+	});
+	els.mcpOpenConfig?.addEventListener('click', () => vscode.postMessage({ type: 'mcpOpenConfig' }));
+	els.attachButton.addEventListener('click', () => vscode.postMessage({ type: 'attachContext' }));
+	els.imageButton.addEventListener('click', () => {
+		// Said before the dialog, not after: otherwise the user picks files only to have every
+		// one of them refused.
+		if (pendingImages.length >= MAX_IMAGES_PER_MESSAGE) {
+			showNotice(`You can attach at most ${MAX_IMAGES_PER_MESSAGE} images per message — remove one to add another.`, true);
+			return;
+		}
+		vscode.postMessage({ type: 'pickImages' });
+	});
+	/**
+	 * Resizes image files and queues them for the next send, within the per-message cap. The
+	 * one path for every way an image arrives — a paste, or files from the "Attach image"
+	 * dialog (see 'pickedImages').
+	 * @param {File[]} files
+	 */
+	function addImageFiles(files) {
+		const availableSlots = Math.max(0, MAX_IMAGES_PER_MESSAGE - pendingImages.length);
+		if (files.length > availableSlots) {
+			showNotice(`You can attach at most ${MAX_IMAGES_PER_MESSAGE} images per message.`, true);
+		}
+		for (const file of files.slice(0, availableSlots)) {
+			resizeImage(file).then(resized => {
+				// Re-checked here: the slots above were counted before any resize finished, so two
+				// quick pastes could both claim them.
+				if (pendingImages.length >= MAX_IMAGES_PER_MESSAGE) {
+					showNotice(`You can attach at most ${MAX_IMAGES_PER_MESSAGE} images per message.`, true);
+					return;
+				}
+				pendingImages.push(resized);
+				renderImageChips();
+			}).catch(err => {
+				showNotice(err instanceof Error ? err.message : String(err), true);
+			});
+		}
+	}
+	els.input.addEventListener('paste', (e) => {
+		const items = e.clipboardData ? [...e.clipboardData.items] : [];
+		const imageItems = items.filter(it => it.type.startsWith('image/'));
+		if (!imageItems.length) { return; }
+		e.preventDefault();
+		addImageFiles(/** @type {File[]} */ (imageItems.map(item => item.getAsFile()).filter(Boolean)));
+	});
+	els.enhanceButton.addEventListener('click', enhance);
+	els.sendButton.addEventListener('click', send);
+	els.stopButton.addEventListener('click', () => vscode.postMessage({ type: 'stop', sessionId: activeSessionId }));
+	els.input.addEventListener('input', () => { autoSize(); updateSlashMenu(); });
+	els.input.addEventListener('blur', hideSlashMenu);
+	els.input.addEventListener('keydown', (e) => {
+		// An input method (Chinese, Japanese, Korean…) confirms its candidate with Enter; that
+		// keystroke belongs to the IME, and treating it as "send" sent a half-typed message.
+		// keyCode 229 is how some Chromium builds report the same keystroke instead.
+		if (e.isComposing || e.keyCode === 229) { return; }
+		if (slashMenuOpen()) {
+			if (e.key === 'ArrowDown') { e.preventDefault(); moveSlashSelection(1); return; }
+			if (e.key === 'ArrowUp') { e.preventDefault(); moveSlashSelection(-1); return; }
+			if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+				e.preventDefault();
+				// The command is already fully typed and unambiguous ("/ask" with only
+				// "ask" matching) — Enter sends it, same as it would with the menu closed.
+				// Completing it instead (a no-op: it already reads "/ask") would eat the
+				// Enter and leave the user pressing it a second time to actually send.
+				// Tab never sends — it only completes, so it stays predictable either way.
+				const chosen = slashMatches[slashIndex];
+				if (e.key === 'Enter' && chosen && els.input.value.toLowerCase() === '/' + chosen.cmd) {
+					hideSlashMenu();
+					send();
+				} else {
+					applySlashSelection();
+				}
+				return;
+			}
+			if (e.key === 'Escape') { e.preventDefault(); hideSlashMenu(); return; }
+		}
+		if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+	});
+
+	// ---- Clipboard & editing shortcuts --------------------------------------------
+	// Keystrokes inside the webview are also forwarded to the workbench for keybinding
+	// dispatch, and on some setups that swallows the native clipboard shortcuts before
+	// Chromium's default editing behaviour runs. Implement copy / cut / paste /
+	// select-all / undo / redo here so they always work in the chat box and key fields.
+
+	/** The focused editable element (chat box or a settings input), if any. */
+	function editableTarget() {
+		const el = document.activeElement;
+		if (el instanceof HTMLTextAreaElement) { return el; }
+		if (el instanceof HTMLInputElement && ['text', 'password', 'search', 'url'].includes(el.type)) { return el; }
+		return null;
+	}
+
+	/**
+	 * Inserts text at the element's cursor, replacing any selection.
+	 * @param {HTMLTextAreaElement | HTMLInputElement} el
+	 * @param {string} text
+	 */
+	function insertText(el, text) {
+		el.setRangeText(text, el.selectionStart ?? 0, el.selectionEnd ?? 0, 'end');
+		el.dispatchEvent(new Event('input', { bubbles: true }));
+	}
+
+	/**
+	 * Pastes clipboard content into the element. For the chat box a rich read is
+	 * attempted first so copied screenshots become image attachments (mirroring the
+	 * `paste` event handler above, which doesn't fire when we handle the keystroke).
+	 * @param {HTMLTextAreaElement | HTMLInputElement} el
+	 */
+	async function pasteFromClipboard(el) {
+		try {
+			let text = '';
+			if (el === els.input && navigator.clipboard?.read) {
+				const items = await navigator.clipboard.read();
+				/** @type {File[]} */
+				const images = [];
+				for (const item of items) {
+					const imageType = item.types.find(t => t.startsWith('image/'));
+					if (imageType) {
+						images.push(new File([await item.getType(imageType)], 'pasted', { type: imageType }));
+						continue;
+					}
+					if (item.types.includes('text/plain')) {
+						text += await (await item.getType('text/plain')).text();
+					}
+				}
+				if (images.length) { addImageFiles(images); }
+			} else {
+				text = await navigator.clipboard.readText();
+			}
+			if (text) { insertText(el, text); }
+		} catch {
+			// Rich read can be refused where plain text is still allowed — retry.
+			try {
+				const text = await navigator.clipboard.readText();
+				if (text) { insertText(el, text); }
+			} catch (err) {
+				showNotice('Could not read the clipboard: ' + (err instanceof Error ? err.message : String(err)), true);
+			}
+		}
+	}
+
+	document.addEventListener('keydown', (e) => {
+		// Escape closes the settings / history panels from anywhere in the view.
+		if (e.key === 'Escape' && !els.settingsPanel.classList.contains('hidden')) {
+			e.preventDefault();
+			els.settingsPanel.classList.add('hidden');
+			els.input.focus();
+			return;
+		}
+		if (e.key === 'Escape' && els.historyPanel && !els.historyPanel.classList.contains('hidden')) {
+			e.preventDefault();
+			els.historyPanel.classList.add('hidden');
+			els.input.focus();
+			return;
+		}
+		const mod = e.ctrlKey || e.metaKey;
+		if (!mod || e.altKey) { return; }
+		const key = e.key.toLowerCase();
+		const el = editableTarget();
+		if (key === 'a' && el) {
+			e.preventDefault();
+			el.select();
+		} else if (key === 'c' && !e.shiftKey) {
+			// Works for editable fields and for selected transcript text alike. No
+			// preventDefault: if the default copy also runs it writes the same text.
+			const selected = el
+				? el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0)
+				: String(window.getSelection() ?? '');
+			if (selected) { navigator.clipboard?.writeText(selected); }
+		} else if (key === 'x' && !e.shiftKey && el) {
+			e.preventDefault();
+			const start = el.selectionStart ?? 0;
+			const end = el.selectionEnd ?? 0;
+			if (start !== end) {
+				navigator.clipboard?.writeText(el.value.slice(start, end));
+				el.setRangeText('', start, end, 'start');
+				el.dispatchEvent(new Event('input', { bubbles: true }));
+			}
+		} else if (key === 'v' && !e.shiftKey && el) {
+			e.preventDefault();
+			void pasteFromClipboard(el);
+		} else if (key === 'z' && el) {
+			e.preventDefault();
+			document.execCommand(e.shiftKey ? 'redo' : 'undo');
+		} else if (key === 'y' && el) {
+			e.preventDefault();
+			document.execCommand('redo');
+		}
+	});
+
+	/**
+	 * Chat-stream messages the host broadcasts to every webview. The detached Settings tab
+	 * shares no live conversation, so it must ignore these — otherwise they would mutate a
+	 * phantom session and race the sidebar over persisted history.
+	 *
+	 * `'remote'` deliberately does NOT belong here, even though it looks like it fits the
+	 * "session-ownership traffic" group below: connection status, pairing replies, device
+	 * lists and errors are the desktop's one global remote-control state, not chat/session
+	 * data, and the "Remote control" section lives inside the Settings panel itself — which
+	 * IS the detached tab whenever it's opened via the gear icon (`requestOpenSettings` →
+	 * `openSettingsWindow`). Filtering it out here left that tab's status dot stuck at "off"
+	 * forever regardless of the real connection state, and silently dropped every pairing
+	 * reply and error `media/pairing.js` needed to show — see `scripts/test-webview.mjs`'s
+	 * assertion on this list for the guard against it recurring.
+	 */
+	const CHAT_ONLY_MESSAGES = [
+		'token', 'agentStepStart', 'agentStepEnd', 'toolStart', 'toolEnd',
+		'done', 'newChat', 'inline', 'autoPhase', 'autoSummary', 'editProposal', 'compacted', 'steerable', 'steerRejected',
+		'approvalRequest', 'askRequest', 'promptCancel',
+		// Session-ownership traffic (see i-need-your-help-unified-scott.md's "remote control"
+		// plan): the detached Settings tab shares no live conversation, so a `sessions`/
+		// `transcript` push (or a run announcing itself via `runStart`) has nothing to attach
+		// to there.
+		'sessions', 'transcript', 'runStart', 'userTurn', 'commands',
+		// Images for the composer, which the Settings tab does not show.
+		'pickedImages',
+	];
+
+	window.addEventListener('message', (event) => {
+		const msg = event.data;
+		if (SETTINGS_ONLY && CHAT_ONLY_MESSAGES.includes(msg.type)) { return; }
+		switch (msg.type) {
+			case 'config': {
+				providers = msg.providers || [];
+				if (msg.auto) { autoConfig = msg.auto; }
+				if (msg.approval) {
+					approval = msg.approval;
+					if (els.approvalSelect) { els.approvalSelect.value = approval; }
+				}
+				if (typeof msg.systemPrompt === 'string') { generalConfig.systemPrompt = msg.systemPrompt; }
+				if (typeof msg.maxTokens === 'number') { generalConfig.maxTokens = msg.maxTokens; }
+				if (typeof msg.rules === 'string') { generalConfig.rules = msg.rules; }
+				if (typeof msg.maxSteps === 'number') { generalConfig.maxSteps = msg.maxSteps; }
+				if (typeof msg.maxRunMinutes === 'number') { generalConfig.maxRunMinutes = msg.maxRunMinutes; }
+				if (typeof msg.completionsEnabled === 'boolean') { completionsEnabled = msg.completionsEnabled; }
+				// Auto stays local-only (the host never persists it as `defaultProvider`), so it's
+				// never touched here. Otherwise, always follow the host's `selectedProvider`: it's
+				// the one shared setting every connected client (this tab, a detached Settings
+				// window, a paired phone) can change, and a change made anywhere — including a
+				// remote client's own `setProvider` — has to reach every other one, not just get
+				// picked up once this tab's own selection happens to have gone invalid (e.g. its
+				// provider's key was removed). Falling back to "keep the invalid selection" here
+				// used to mean a provider switch made on a phone silently never showed up in the
+				// desktop panel.
+				if (selectedProvider !== AUTO_PROVIDER) {
+					if (typeof msg.selectedProvider === 'string' && providers.some(p => p.id === msg.selectedProvider)) {
+						selectedProvider = msg.selectedProvider;
+					} else if (!providers.some(p => p.id === selectedProvider)) {
+						selectedProvider = (providers[0] && providers[0].id) || '';
+					}
+				}
+				renderProviderSelect();
+				// The welcome screen may already be up from before this config arrived.
+				els.messages.querySelector('.empty-footnote')?.classList.toggle('hidden', hasCredential());
+				if (!els.settingsPanel.classList.contains('hidden')) { renderSettings(); }
+				break;
+			}
+			case 'selectProvider':
+				if (msg.provider === AUTO_PROVIDER || providers.some(p => p.id === msg.provider)) {
+					selectedProvider = msg.provider;
+					els.providerSelect.value = selectedProvider;
+					saveState();
+					applyProviderUiMode();
+					renderModelSelect(); updateModeAvailability();
+				}
+				break;
+			case 'openSettings':
+				els.settingsPanel.classList.remove('hidden'); renderSettings();
+				break;
+			case 'models':
+				fetchedModels[msg.provider] = normalizeModelEntries(msg.models);
+				if (typeof msg.error === 'string' && msg.error) {
+					modelErrors[msg.provider] = msg.error;
+					// Only an explicit ⟳ earns a notice; the background refresh after every
+					// settings change would otherwise repeat the same failure on each one.
+					if (refreshingModels.has(msg.provider)) { showNotice(msg.error, true); }
+				} else {
+					delete modelErrors[msg.provider];
+				}
+				if (refreshingModels.delete(msg.provider) && msg.provider === selectedProvider) {
+					els.refreshModels.classList.remove('busy');
+				}
+				if (msg.provider === selectedProvider) {
+					renderModelSelect(); updateModeAvailability();
+					// The live catalog may reveal the current model can't do tools.
+					if (curMode() === 'agent' && !isAuto()) { ensureAgentModel(); }
+				}
+				// Refill any Auto-Routing role picker showing this provider in place — not a
+				// full renderAutoRouting(), which would drop an in-progress custom id.
+				for (const filler of roleModelFillers.values()) {
+					if (filler.providerOf() === msg.provider) { filler.fill(); }
+				}
+				break;
+			case 'token': {
+				const s = sessionFor(msg);
+				if (!s) { break; }
+				if (s.pending === null) { openStream(s); }
+				s.pending += msg.delta;
+				if (s.id === activeSessionId && activeAssistantBody) {
+					noteWorkingProgress();
+					scheduleStreamRender(s);
+				}
+				break;
+			}
+			case 'autoPhase': {
+				// Finalize whatever the previous phase streamed, then open this phase.
+				const s = sessionFor(msg);
+				if (!s) { break; }
+				commitPending(s);
+				if (s.id === activeSessionId) {
+					noteWorkingProgress();
+					appendPhaseHeader(msg.label, msg.provider, msg.model, msg.source);
+				}
+				if (msg.streaming) { openStream(s); }
+				break;
+			}
+			case 'autoSummary': {
+				// Posted once per Auto run, just before 'done'. Recorded in the transcript
+				// (with a `kind`, so it is never sent back to a model as conversation) rather
+				// than only drawn: a background tab renders nothing at all, and the drawn node
+				// is thrown away by the next renderAll.
+				const s = sessionFor(msg);
+				if (!s || !Array.isArray(msg.phases) || !msg.phases.length) { break; }
+				commitPending(s);
+				const text = 'Models used — ' + msg.phases
+					.map(p => `${p.label || p.role}: ${p.provider} · ${p.model} (${p.source === 'configured' ? 'pinned' : 'auto'})`)
+					.join('; ');
+				s.messages.push({ role: 'assistant', content: text, kind: 'auto', phases: msg.phases });
+				saveState();
+				if (s.id === activeSessionId) { appendAutoSummary(msg.phases); }
+				break;
+			}
+			case 'steerable': {
+			// The host answered this turn without an agent loop even though the tab sent it
+			// as one — a greeting in Auto. Steering only reaches a live loop, so input typed
+			// into this run has to be queued instead; `runMode` deliberately stays as it was,
+			// since a queued follow-up must still run in the mode the user picked.
+			const s = sessionFor(msg);
+			if (!s) { break; }
+			s.steerable = !!msg.steerable;
+			// Not persisted, and must not be: saveState keeps only the transcript-shaped
+			// fields, and a reload restores `streaming: false` with no `runMode` at all —
+			// so the reloaded tab cannot steer anything regardless of this flag.
+			if (s.id === activeSessionId) { updateComposer(); }
+			break;
+		}
+		case 'steerRejected': {
+			const s = sessionFor(msg);
+			if (!s || typeof msg.text !== 'string') { break; }
+			undoSteer(s, msg.text);
+			break;
+		}
+		case 'agentStepStart': {
+				// Open a fresh streaming bubble for the implementer's next step.
+				const s = sessionFor(msg);
+				if (!s) { break; }
+				commitPending(s);
+				openStream(s);
+				break;
+			}
+			case 'agentStepEnd': {
+				// Authoritative full text for the step (covers non-streaming providers too).
+				const s = sessionFor(msg);
+				if (!s) { break; }
+				if (typeof msg.content === 'string' && msg.content) {
+					if (s.pending === null) { openStream(s); }
+					s.pending = msg.content;
+					if (s.id === activeSessionId && activeAssistantBody) {
+						activeAssistantBody.parentElement?.classList.remove('awaiting');
+						setBodyMarkdown(activeAssistantBody, s.pending);
+					}
+				}
+				commitPending(s);
+				scrollToBottom();
+				break;
+			}
+			case 'toolStart': {
+				// Commit any open assistant bubble so the tool block renders after it.
+				const s = sessionFor(msg);
+				if (!s) { break; }
+				commitPending(s);
+				// Tool blocks are rendered live only for the visible tab.
+				if (s.id === activeSessionId) {
+					noteWorkingProgress();
+					// `parentCallId` names a delegate's `spawn_subagent` card; when that card
+					// is still on screen this call nests under it. A named parent that is not
+					// found (e.g. scrolled out of a windowed transcript) falls back to a plain
+					// top-level card — visible but unparented beats vanishing silently.
+					const parent = msg.parentCallId ? toolEls.get(toolKey(s.id, msg.parentCallId)) : undefined;
+					const el = appendToolEl(msg.name, msg.args, parent ? childrenContainer(parent) : undefined);
+					toolEls.set(toolKey(s.id, msg.id || ('t' + (toolSeq++))), el);
+				}
+				break;
+			}
+			case 'toolEnd': {
+				const s = sessionFor(msg);
+				// Blocks only exist for the visible tab; a background tab's toolEnd used to
+				// fall through to the id-less lookup and close an unrelated live block.
+				if (!s || s.id !== activeSessionId) { break; }
+				const prefix = toolKey(s.id, '');
+				const key = msg.id ? toolKey(s.id, msg.id) : [...toolEls.keys()].find(k => k.startsWith(prefix));
+				const t = key ? toolEls.get(key) : undefined;
+				// Outside the block lookup: a tool that started while this tab was in the
+				// background has no block here, but its finishing is still progress.
+				noteWorkingProgress();
+				if (key && t) {
+					t.wrap.classList.remove('running');
+					t.wrap.classList.toggle('tool-error', !!msg.isError);
+					t.out.textContent = String(msg.result).slice(0, 4000);
+					t.summary.textContent = summarizeToolResult(msg.name, msg.result, msg.isError);
+					// Failures stay open: an error the user has to click to discover is a bug report waiting to happen.
+					t.details.open = !!msg.isError;
+					toolEls.delete(key);
+					scrollToBottom();
+				}
+				break;
+			}
+			case 'approvalRequest':
+			case 'askRequest': {
+				// Prompts belong to a live run: a straggler from a superseded one has no
+				// answerable question, and the host has already torn its promise down.
+				const s = sessionFor(msg);
+				if (!s) { break; }
+				commitPending(s);
+				if (s.id === activeSessionId) {
+					noteWorkingProgress();
+					prompts.render(msg);
+				} else {
+					// Belongs to a background tab: remember it so switching there draws it,
+					// rather than losing a card the run is still blocked on.
+					prompts.track(msg);
+				}
+				break;
+			}
+			case 'promptCancel':
+				prompts.cancel(msg.id, msg.reason);
+				break;
+			case 'compacted': {
+				const s = sessionFor(msg);
+				if (!s) { break; }
+				// `replaced` counts messages from the start of the payload we last sent (the previous
+				// summary turn, when one existed, followed by the un-compacted tail). That payload's
+				// first user-role message is always index 0 — either the old summary turn, or (on the
+				// very first compaction) the transcript's own first turn, which every session opens
+				// with. The host keeps that one leading message verbatim ahead of its new summary, so
+				// the untouched prefix is 1 message when there was no prior summary and 0 when there
+				// was (the old summary turn is itself what this response supersedes). Advancing
+				// `compactedUpTo` by `replaced` plus that prefix lines the next tail up with exactly
+				// the "recent turns" window the host just kept — otherwise one boundary message would
+				// be resent raw every round, re-growing on top of what the summary already covers.
+				const hadSummary = s.compactSummary ? 1 : 0;
+				const replaced = Math.max(0, msg.replaced || 0);
+				s.compactedUpTo = (s.compactedUpTo || 0) + replaced + (hadSummary ? 0 : 1);
+				s.compactSummary = typeof msg.summary === 'string' && msg.summary ? msg.summary : s.compactSummary;
+				saveState();
+				break;
+			}
+			case 'editProposal': {
+				const bar = document.createElement('div');
+				bar.className = 'edit-apply';
+				bar.innerHTML = `<span>Proposed changes to <code>${escapeHtml(msg.path || 'file')}</code></span> <button id="applyEditBtn">Apply</button>`;
+				els.messages.appendChild(bar);
+				bar.querySelector('#applyEditBtn')?.addEventListener('click', () => {
+					vscode.postMessage({ type: 'applyEdit', proposalId: msg.proposalId });
+					bar.querySelector('button')?.setAttribute('disabled', 'true');
+				});
+				scrollToBottom();
+				break;
+			}
+			case 'context':
+				currentContext = msg.context; renderContext();
+				break;
+			case 'pickedImages': {
+				// The host's reply to 'pickImages': files it read and typed by their bytes, still
+				// full size — they go through the same resize and cap as a pasted screenshot.
+				const picked = Array.isArray(msg.images) ? msg.images : [];
+				addImageFiles(picked.map(img => {
+					const binary = atob(String(img.data || ''));
+					const bytes = new Uint8Array(binary.length);
+					for (let i = 0; i < binary.length; i++) { bytes[i] = binary.charCodeAt(i); }
+					return new File([bytes], String(img.name || 'image'), { type: String(img.mimeType || '') });
+				}));
+				if (Array.isArray(msg.skipped) && msg.skipped.length) {
+					showNotice(`Not attached: ${msg.skipped.join(', ')}.`, true);
+				}
+				els.input.focus();
+				break;
+			}
+			case 'enhancedPrompt':
+				endEnhance();
+				els.input.value = msg.text || els.input.value;
+				autoSize(); els.input.focus();
+				break;
+			case 'enhanceError':
+				endEnhance();
+				appendMessageEl('assistant', 'ℹ️ ' + msg.message).parentElement?.classList.add('info');
+				scrollToBottom();
+				break;
+			case 'skills':
+				skillsList = msg.skills || [];
+				// The host sends an array; tolerate the legacy single-string form.
+				activeSkills = Array.isArray(msg.active) ? msg.active : (msg.active ? [msg.active] : []);
+				renderSkillChip();
+				if (!els.settingsPanel.classList.contains('hidden')) { renderSkillList(); }
+				break;
+			case 'history': {
+				// Host-persisted archive (survives restarts). Nothing populates `history`
+				// locally anymore — closing/clearing a tab archives on the host now — so this
+				// is a plain replace rather than the old client/host merge.
+				const emptyBefore = !cur()?.messages.length;
+				history = Array.isArray(msg.history) ? msg.history : [];
+				if (!els.historyPanel.classList.contains('hidden')) { renderHistoryPanel(); }
+				if (emptyBefore) { renderAll(); }
+				break;
+			}
+			case 'mcp':
+				renderMcpList(msg.status, msg.toolCount || 0);
+				break;
+			case 'checkpoint': {
+				const s = sessionFor(msg);
+				if (!s) { break; }
+				const files = Array.isArray(msg.files) ? msg.files.map(String) : [];
+				const runId = String(msg.checkpointRunId || '');
+				if (files.length) {
+					s.undo = { runId, files };
+				} else if (s.undo && s.undo.runId === runId) {
+					s.undo = undefined;
+				}
+				if (s.id === activeSessionId) { renderUndoBar(s); }
+				break;
+			}
+			case 'todos': {
+				const s = sessionFor(msg);
+				if (!s) { break; }
+				s.todos = Array.isArray(msg.items) ? msg.items : [];
+				if (s.id === activeSessionId) { renderTodos(); }
+				break;
+			}
+			case 'info':
+				addNotice(sessionFor(msg), msg.message, false);
+				break;
+			case 'error': {
+				addNotice(sessionFor(msg), msg.message, true);
+				// A missing key needs Settings, but not stuffed into the cramped sidebar
+				// overlay over top of the chat — open it the same way the ⚙ button does,
+				// as its own roomy editor tab. (Already the case if this webview IS that tab.)
+				if (msg.needsKey) {
+					if (SETTINGS_ONLY) { els.settingsPanel.classList.remove('hidden'); renderSettings(); }
+					else { vscode.postMessage({ type: 'requestOpenSettings' }); }
+				}
+				break;
+			}
+			case 'done': {
+				const s = sessionFor(msg);
+				if (!s) { break; }
+				s.streaming = false;
+				// A run that ends between toolStart and toolEnd — an abort, or an error
+				// thrown out of an approval the user never answered — leaves its block
+				// spinning forever. Close every one this tab still has open.
+				for (const [key, t] of [...toolEls]) {
+					if (!key.startsWith(toolKey(s.id, ''))) { continue; }
+					t.wrap.classList.remove('running');
+					if (t.summary.textContent === 'running…') { t.summary.textContent = 'stopped'; }
+					toolEls.delete(key);
+				}
+				commitPending(s);
+				renderTabs();
+				if (s.id === activeSessionId) { updateComposer(); }
+				// A queued follow-up starts as soon as the tab is idle again.
+				if (s.queue.length) {
+					const next = s.queue.shift();
+					persistQueue(s);
+					if (s.id === activeSessionId) { renderQueueChips(); }
+					sendText(next, s.runMode && s.runMode !== 'edit' ? { mode: s.runMode, fromQueue: true } : { fromQueue: true }, s);
+				}
+				break;
+			}
+			case 'inline':
+				// Triggered by an editor command / code action. Runs in the requested mode
+				// ('edit' for Fix/Doc/Optimize/Edit, 'ask' for Explain) without touching the
+				// user's selected chat mode — 'edit' is no longer a selectable option.
+				// `fromEditor`: the prompt embeds the desktop's selected code, which the host
+				// keeps off paired phones (see remoteSink.ts's redactForRemote).
+				sendText(msg.prompt, { inline: !!msg.inline, mode: msg.mode, fromEditor: true });
+				break;
+			case 'newChat':
+				// The + button opens a fresh tab; existing chats keep running in parallel.
+				createSession();
+				break;
+			case 'sessions': {
+				// Metadata for every tab — never a transcript (see `SessionSummary`, which
+				// excludes `messages`). Merge by id so a metadata-only update (e.g. after a
+				// `setMode`/`toggleSkill` round trip) doesn't blank every open tab's transcript;
+				// a session this cache has never seen yet starts with an empty one until its
+				// own `transcript` push arrives.
+				const prevById = new Map(sessions.map(s => [s.id, s]));
+				sessions = (msg.sessions || []).map(s => ({ ...s, messages: prevById.get(s.id)?.messages || [] }));
+				activeSessionId = msg.activeSessionId;
+				syncModeUI();
+				renderTabs();
+				renderAll();
+				updateComposer();
+				break;
+			}
+			case 'transcript': {
+				// For this phase always the full transcript (`truncated` is always false) —
+				// windowing is a later phase's work.
+				const s = sessions.find(x => x.id === msg.sessionId);
+				if (!s) { break; }
+				s.messages = Array.isArray(msg.messages) ? msg.messages : [];
+				if (s.id === activeSessionId) { renderAll(); }
+				break;
+			}
+			case 'runStart': {
+				// Not `sessionFor`: this message is what *sets* `runId` in the first place, so
+				// fencing on it matching would reject the very run it announces.
+				const s = sessions.find(x => x.id === msg.sessionId);
+				if (!s) { break; }
+				s.runId = msg.runId;
+				s.runMode = msg.mode;
+				// A run this panel didn't start (a paired phone sent it) arrives with nothing set
+				// up locally: without this the tab never showed as running, Stop stayed hidden,
+				// and every agent step's commitPending took `!s.streaming` as the run being over
+				// and tore the working strip down mid-run. A local send already did all of it.
+				if (!s.streaming) {
+					s.streaming = true;
+					s.steerable = true;
+					if (s.id === activeSessionId) { startWorking(); }
+					renderTabs();
+					if (s.id === activeSessionId) { updateComposer(); }
+				}
+				break;
+			}
+			case 'userTurn': {
+				// A turn typed on another client — this panel's own sends are echoed by
+				// sendText and never come back (the host skips the sink that sent them).
+				const s = sessions.find(x => x.id === msg.sessionId);
+				if (!s) { break; }
+				const content = typeof msg.content === 'string' ? msg.content : '';
+				const images = Array.isArray(msg.images) && msg.images.length ? msg.images : undefined;
+				s.messages.push({ role: 'user', content, images });
+				if (s.id === activeSessionId) {
+					appendMessageEl('user', content, images);
+					scrollToBottom();
+				}
+				break;
+			}
+			case 'commands':
+				slashCommands = Array.isArray(msg.commands) ? msg.commands : [];
+				if (slashMenuOpen()) { updateSlashMenu(); }
+				break;
+			case 'remote':
+				pairing.update(msg);
+				break;
+		}
+	});
+
+	// ---- Init -------------------------------------------------------------------
+
+	for (const select of [els.modeSelect, els.approvalSelect, els.providerSelect, els.modelSelect]) {
+		withSelectButton(select);
+	}
+	// `sessions`/`activeSessionId` start empty (see their own doc) — nothing to reflect in
+	// the mode picker yet, so this just applies the 'ask' default rather than a real session's
+	// mode. The host's first `sessions` push (see `case 'sessions':` above) is what replaces it.
+	syncModeUI();
+	renderTabs();
+	renderAll();
+	renderContext();
+	renderImageChips();
+	updateComposer();
+	autoSize();
+	if (SETTINGS_ONLY) {
+		// Detached Settings tab: pin the panel open; the incoming config push renders it.
+		els.settingsPanel.classList.remove('hidden');
+		renderSettings();
+	}
+	vscode.postMessage({ type: 'ready' });
+}());
