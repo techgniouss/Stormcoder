@@ -106,6 +106,26 @@ try {
 	assert.ok(await page.locator('#paletteList li', { hasText: 'MCP' }).count() > 0);
 	await page.keyboard.press('Escape');
 
+	// 5. Creating a skill walks three prompts, writes the file, opens it in the built-in editor,
+	//    and the skill then shows up in Settings.
+	await page.keyboard.press('Control+k');
+	await page.fill('#paletteInput', 'new skill');
+	await page.keyboard.press('Enter');
+	await page.locator('#palette:not(.hidden)').waitFor();
+	await page.fill('#paletteInput', 'api-reviewer');
+	await page.keyboard.press('Enter');
+	await page.waitForFunction(() => document.getElementById('paletteTitle').textContent.includes('2/3'));
+	await page.keyboard.press('Enter');
+	await page.waitForFunction(() => document.getElementById('paletteTitle').textContent.includes('3/3'));
+	await page.fill('#paletteInput', 'Reviews API changes');
+	await page.keyboard.press('Enter');
+	await page.locator('#editor:not(.hidden)').waitFor();
+	assert.match(await page.inputValue('#editorText'), /Reviews API changes/);
+	assert.ok(fs.existsSync(path.join(project, '.openvs/skills/api-reviewer.md')));
+	await page.keyboard.press('Escape');
+	await page.click('[data-view=skills]');
+	await settings.locator('.area.active[data-area=skills]').getByText('Api Reviewer').first().waitFor({ timeout: 10000 });
+
 	assert.deepEqual(errors, [], 'no uncaught page errors');
 	console.log('e2e: ok');
 } catch (err) {
