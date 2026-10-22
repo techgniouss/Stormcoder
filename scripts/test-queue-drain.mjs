@@ -33,7 +33,7 @@ import { QueueDrainGate } from '../out/session/queueDrain.js';
 {
 	const read = path => fs.readFileSync(new URL(path, import.meta.url), 'utf8');
 	const panel = read('../media/main.js');
-	const phone = read('../../../openvs-relay/pwa/app.js');
+	const phone = read('../openvs-relay/pwa/app.js');
 	const host = read('../src/chatViewProvider.ts');
 	assert.deepStrictEqual([
 		/sendText\(next, [^\n]*fromQueue: true/.test(panel),

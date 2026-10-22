@@ -9,7 +9,7 @@
 // test-relay-pwa-sync.mjs fails while the two differ.
 import fs from 'node:fs';
 
-const source = new URL('../../../openvs-relay/pwa/', import.meta.url);
+const source = new URL('../openvs-relay/pwa/', import.meta.url);
 const target = new URL('../relay-pwa/', import.meta.url);
 
 fs.rmSync(target, { recursive: true, force: true });

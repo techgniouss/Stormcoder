@@ -183,7 +183,7 @@ interface WebviewToHost {
 	fromEditor?: boolean;
 	/** `send` only: a client draining its tab's queue after `done` — see `session/queueDrain.ts`. */
 	fromQueue?: boolean;
-	/** The new checked state for a boolean settings-panel toggle, e.g. `setCompletionsEnabled`. */
+	/** The new checked state for a boolean settings-panel toggle, . */
 	value?: boolean;
 	/**
 	 * The inline-action kind for `slashInline` (e.g. `'explain'`). For `slash` this instead
@@ -1517,11 +1517,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			case 'setReviewEnabled':
 				await vscode.workspace.getConfiguration('openvsChat').update(
 					'auto.enableReview', !!message.reviewEnabled, vscode.ConfigurationTarget.Global);
-				await this.postConfig();
-				break;
-			case 'setCompletionsEnabled':
-				await vscode.workspace.getConfiguration('openvsChat').update(
-					'completions.enabled', !!message.value, vscode.ConfigurationTarget.Global);
 				await this.postConfig();
 				break;
 			case 'setModel':
@@ -3638,7 +3633,6 @@ ${context.content}` }
 			rules: cfg.get<string>('rules') ?? '',
 			maxSteps: cfg.get<number>('agent.maxSteps') ?? 100,
 			maxRunMinutes: cfg.get<number>('agent.maxRunMinutes') ?? 30,
-			completionsEnabled: cfg.get<boolean>('completions.enabled') ?? true,
 		});
 		await this.postSkills();
 		this.pushAvailableModels(providers);

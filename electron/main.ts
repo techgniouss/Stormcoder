@@ -125,7 +125,13 @@ function createWindow(): void {
 		}
 	});
 	window.on('closed', () => { window = undefined; controller.rendererGone(); });
-	window.webContents.on('did-start-loading', () => controller.rendererGone());
+	// Only the shell page itself: iframe navigations (the chat and settings views) also fire
+	// `did-start-loading`, and treating those as a reload would strand every queued message.
+	window.webContents.on('did-start-navigation', details => {
+		if (details.isMainFrame && !details.isSameDocument) {
+			controller.rendererGone();
+		}
+	});
 	void window.loadURL(`${ASSET_SCHEME}://app/shell/index.html`);
 }
 

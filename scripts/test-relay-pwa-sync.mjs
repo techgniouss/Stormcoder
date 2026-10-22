@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const source = new URL('../../../openvs-relay/pwa/', import.meta.url);
+const source = new URL('../openvs-relay/pwa/', import.meta.url);
 const copy = new URL('../relay-pwa/', import.meta.url);
 
 /** Text compared with line endings normalized — git may check the two out differently. */

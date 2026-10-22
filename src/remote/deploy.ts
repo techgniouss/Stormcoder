@@ -58,8 +58,15 @@ function killTree(child: ChildProcess): void {
 		// so there is nothing for `command`/`cwd` (already attacker-adjacent: `deployRelay`'s
 		// `relayDir` is a filesystem path) to inject into even in principle.
 		execFile('taskkill', ['/pid', String(child.pid), '/T', '/F']);
-	} else {
-		child.kill();
+	} else if (child.pid) {
+		// The child leads its own process group (see `defaultRunProcess`), so the whole group
+		// goes. Killing only the shell would orphan the real command and leave its pipes open,
+		// which is what kept a cancelled deploy "running" until its timeout.
+		try {
+			process.kill(-child.pid, 'SIGTERM');
+		} catch {
+			child.kill();
+		}
 	}
 }
 
@@ -75,7 +82,7 @@ export function defaultRunProcess(
 	signal?: AbortSignal, timeoutMs: number = DEPLOY_STEP_TIMEOUT_MS,
 ): Promise<ProcessResult> {
 	return new Promise(resolve => {
-		const child = spawn(command, { cwd, shell: true, windowsHide: true, env: env ? { ...process.env, ...env } : undefined });
+		const child = spawn(command, { cwd, shell: true, windowsHide: true, detached: process.platform !== 'win32', env: env ? { ...process.env, ...env } : undefined });
 		const chunks: string[] = [];
 		let settled = false;
 		let timedOut = false;

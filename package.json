@@ -2,19 +2,22 @@
 	"name": "mjolnir",
 	"productName": "Mjolnir",
 	"version": "1.0.0",
-	"description": "Mjolnir — a standalone desktop AI coding workspace: multi-provider chat, Plan and Agent modes, MCP, skills and phone remote control.",
+	"description": "Mjolnir \u2014 a standalone desktop AI coding workspace: multi-provider chat, Plan and Agent modes, MCP, skills and phone remote control.",
 	"main": "dist/main.js",
 	"license": "MIT",
 	"author": "Srikanth Reddy",
 	"type": "commonjs",
 	"scripts": {
-		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"typecheck": "tsc -p tsconfig.json --noEmit && npm run typecheck:webview",
 		"build": "node scripts/build.mjs",
 		"start": "npm run build && electron .",
-		"test": "npm run build:tests && node scripts/run-tests.mjs",
-		"build:tests": "tsc -p tsconfig.test.json",
+		"test": "npm run typecheck && npm run build && node scripts/build-tests.mjs && node scripts/run-tests.mjs && node test/e2e.mjs",
+		"build:tests": "node scripts/build-tests.mjs",
 		"dist": "npm run build && electron-builder",
-		"dist:dir": "npm run build && electron-builder --dir"
+		"dist:dir": "npm run build && electron-builder --dir",
+		"typecheck:webview": "tsc -p tsconfig.webview.json",
+		"dev:web": "npm run build && MJ_PORT=4800 node dist/dev-host.js",
+		"gen": "node scripts/gen-config.mjs"
 	},
 	"dependencies": {
 		"sql.js": "1.14.2"

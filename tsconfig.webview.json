@@ -1,0 +1,14 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"types": [],
+		"allowJs": true,
+		"checkJs": true,
+		"noEmit": true,
+		"noImplicitAny": false,
+		"strictNullChecks": true,
+		"skipLibCheck": true
+	},
+	"files": ["media/main.js", "media/prompts.js", "media/markdown.js", "media/qr.js", "media/pairing.js", "media/webview.d.ts"]
+}

@@ -561,7 +561,7 @@ function remoteStatus(remoteService: RemoteService): void {
  * non-interactive spawn.
  */
 async function remoteDeployRelay(context: vscode.ExtensionContext, registry: ProviderRegistry): Promise<void> {
-	const relayDir = vscode.Uri.joinPath(context.extensionUri, '..', '..', 'openvs-relay').fsPath;
+	const relayDir = vscode.Uri.joinPath(context.extensionUri, 'openvs-relay').fsPath;
 	if (!fs.existsSync(relayDir)) {
 		vscode.window.showErrorMessage(
 			'Could not find openvs-relay/ next to this extension — this command only works from a full source checkout of the Mjolnir repo. '
