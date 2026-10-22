@@ -10,9 +10,9 @@ const watch = process.argv.includes('--watch');
 fs.mkdirSync(dist, { recursive: true });
 
 // Static files the UI loads at runtime.
-for (const dir of ['media', 'shell', 'skills', 'relay-pwa']) {
+for (const dir of ['media', 'shell', 'skills', 'relay-pwa', 'openvs-relay']) {
 	fs.rmSync(path.join(dist, dir), { recursive: true, force: true });
-	fs.cpSync(path.join(root, dir), path.join(dist, dir), { recursive: true });
+	fs.cpSync(path.join(root, dir), path.join(dist, dir), { recursive: true, filter: src => !src.includes(`${path.sep}node_modules`) });
 }
 
 const common = {
@@ -24,7 +24,7 @@ const common = {
 	logLevel: 'info',
 	alias: { vscode: path.join(root, 'host/vscode.ts') },
 	// sql.js finds its .wasm next to itself, so it stays a real package at runtime.
-	external: ['electron', 'sql.js', 'ws'],
+	external: ['electron', 'sql.js', 'ws', 'electron-updater'],
 };
 
 const builds = [

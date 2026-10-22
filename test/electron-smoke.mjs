@@ -8,8 +8,10 @@ import assert from 'node:assert/strict';
 
 const root = path.resolve(import.meta.dirname, '..');
 const data = fs.mkdtempSync(path.join(os.tmpdir(), 'mj-electron-'));
-const electronBin = (await import('node:module')).createRequire(import.meta.url)('electron');
-const app = await electron.launch({ executablePath: electronBin, args: [root, '--no-sandbox', '--disable-gpu', `--user-data-dir=${data}`] });
+// MJ_PACKAGED=release/linux-unpacked/mjolnir tests the installed layout (asar) instead of the source tree.
+const packaged = process.env.MJ_PACKAGED ? path.resolve(process.env.MJ_PACKAGED) : undefined;
+const electronBin = packaged ?? (await import('node:module')).createRequire(import.meta.url)('electron');
+const app = await electron.launch({ executablePath: electronBin, args: [...(packaged ? [] : [root]), '--no-sandbox', '--disable-gpu', `--user-data-dir=${data}`] });
 let failed = false;
 const page = await app.firstWindow();
 const proc = app.process();

@@ -1,9 +1,8 @@
 // Opens the dev host in Chromium and writes screenshots. Usage: node scripts/shot.mjs <url> <out.png> [width height] [steps...]
-import { chromium } from 'playwright-core';
+import { launchChromium } from '../test/browser.mjs';
 import fs from 'node:fs';
 const [url, out, w = '1440', h = '900', ...steps] = process.argv.slice(2);
-const exe = fs.readdirSync('/opt/pw-browsers').filter(d => d.startsWith('chromium-')).map(d => `/opt/pw-browsers/${d}/chrome-linux/chrome`).find(p => fs.existsSync(p));
-const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox'] });
+const browser = await launchChromium();
 const page = await browser.newPage({ viewport: { width: +w, height: +h } });
 page.on('console', m => { if (m.type() === 'error') console.log('console.error:', m.text()); });
 page.on('pageerror', e => console.log('pageerror:', e.message));

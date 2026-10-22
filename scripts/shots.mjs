@@ -1,7 +1,6 @@
-import { chromium } from 'playwright-core';
+import { launchChromium } from '../test/browser.mjs';
 import fs from 'node:fs';
-const exe = fs.readdirSync('/opt/pw-browsers').filter(d => d.startsWith('chromium-')).map(d => `/opt/pw-browsers/${d}/chrome-linux/chrome`).find(p => fs.existsSync(p));
-const b = await chromium.launch({ executablePath: exe, args: ['--no-sandbox'] });
+const b = await launchChromium();
 const p = await b.newPage({ viewport: { width: 1440, height: 900 } });
 p.on('pageerror', e => console.log('pageerror:', e.message));
 p.on('console', m => { if (m.type() === 'error') console.log('console.error:', m.text()); });

@@ -1,7 +1,7 @@
 // End-to-end: the real engine and the real UI in Chromium, against a mock OpenAI-compatible
 // server. Covers a chat turn (streaming), an Agent run that writes a file through the tool
 // loop, and that the transcript survives a reload.
-import { chromium } from 'playwright-core';
+import { launchChromium } from './browser.mjs';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -69,8 +69,7 @@ const url = await new Promise((resolve, reject) => {
 	host.stdout.on('data', d => { const m = /MJOLNIR_DEV (\S+)/.exec(String(d)); if (m) { clearTimeout(t); resolve(m[1]); } });
 });
 
-const exe = fs.readdirSync('/opt/pw-browsers').filter(d => d.startsWith('chromium-')).map(d => `/opt/pw-browsers/${d}/chrome-linux/chrome`).find(p => fs.existsSync(p));
-const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox'] });
+const browser = await launchChromium();
 let failed = false;
 try {
 	const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });

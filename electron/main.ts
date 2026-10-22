@@ -14,6 +14,33 @@ import { prepareViewHtml } from './viewHtml';
 import { buildMenu } from './menu';
 import * as extension from '../src/extension';
 
+/** Looks for a newer release on GitHub; only meaningful in an installed build. */
+async function checkForUpdates(interactive: boolean): Promise<void> {
+	if (!app.isPackaged) {
+		if (interactive) {
+			void dialog.showMessageBox({ message: 'Updates are only checked in an installed build.' });
+		}
+		return;
+	}
+	try {
+		const { autoUpdater } = await import('electron-updater');
+		autoUpdater.autoDownload = true;
+		if (interactive) {
+			autoUpdater.once('update-not-available', () => void dialog.showMessageBox({ message: `You are on the latest version (${app.getVersion()}).` }));
+		}
+		autoUpdater.once('update-downloaded', info => {
+			void dialog.showMessageBox({ type: 'info', message: `Mjolnir ${info.version} is ready.`, detail: 'It installs when you quit, or restart now.', buttons: ['Restart Now', 'Later'], defaultId: 0 })
+				.then(r => { if (r.response === 0) { autoUpdater.quitAndInstall(); } });
+		});
+		await autoUpdater.checkForUpdates();
+	} catch (err) {
+		console.error('update check failed', err);
+		if (interactive) {
+			dialog.showErrorBox('Update check failed', err instanceof Error ? err.message : String(err));
+		}
+	}
+}
+
 const SCHEME = 'mjolnir';
 const ASSET_SCHEME = 'mjolnir-asset';
 const APP_NAME = 'Mjolnir';
@@ -225,10 +252,12 @@ if (!app.requestSingleInstanceLock()) {
 			getWindow: () => window,
 			recent: () => controller.recentFolders(),
 			openRecent: f => void controller.openFolder(f),
+			checkForUpdates: () => void checkForUpdates(true),
 			appName: APP_NAME,
 		}));
 		createWindow();
 		await controller.start();
+		setTimeout(() => void checkForUpdates(false), 15_000);
 		const link = process.argv.find(a => a.startsWith(`${SCHEME}://`));
 		if (link) {
 			handleDeepLink(link);
