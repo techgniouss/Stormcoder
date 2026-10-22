@@ -16,6 +16,7 @@ export interface MenuActions {
 	recent(): string[];
 	openRecent(folder: string): void;
 	checkForUpdates(): void;
+	openLogs(): void;
 	appName: string;
 }
 
@@ -65,6 +66,7 @@ export function buildMenu(a: MenuActions): Menu {
 			role: 'help',
 			submenu: [
 				{ label: 'Check for Updates…', click: a.checkForUpdates },
+				{ label: 'Open Logs Folder', click: a.openLogs },
 				{ label: `${a.appName} on GitHub`, click: () => void shell.openExternal('https://github.com/techgniouss/Stormcoder') },
 			],
 		},

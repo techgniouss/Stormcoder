@@ -3,7 +3,7 @@
  *  Licensed under the MIT License.
  *--------------------------------------------------------------------------------------------*/
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, protocol, safeStorage, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, protocol, safeStorage, session, shell } from 'electron';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -55,6 +55,28 @@ const windowFile = path.join(userDataDir, 'window.json');
 
 let window: BrowserWindow | undefined;
 let controller: Controller;
+
+/** Appends to `logs/main.log`, trimming it when it grows past 2 MB so it never fills a disk. */
+function logMain(level: string, ...parts: unknown[]): void {
+	try {
+		const file = path.join(userDataDir, 'logs', 'main.log');
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		if (fs.existsSync(file) && fs.statSync(file).size > 2_000_000) {
+			fs.renameSync(file, file + '.old');
+		}
+		const text = parts.map(p => p instanceof Error ? (p.stack ?? p.message) : typeof p === 'string' ? p : JSON.stringify(p)).join(' ');
+		fs.appendFileSync(file, `${new Date().toISOString()} ${level} ${text}\n`);
+	} catch {
+		// logging must never take the app down
+	}
+}
+
+for (const level of ['log', 'warn', 'error'] as const) {
+	const original = console[level].bind(console);
+	console[level] = (...args: unknown[]) => { original(...args); if (level !== 'log') { logMain(level, ...args); } };
+}
+process.on('uncaughtException', err => { logMain('fatal', err); });
+process.on('unhandledRejection', reason => { logMain('error', 'unhandled rejection', reason instanceof Error ? reason : String(reason)); });
 
 /**
  * Secrets use the OS keychain through `safeStorage`. Where none exists (a bare Linux
@@ -144,6 +166,13 @@ function createWindow(): void {
 		return { action: 'deny' };
 	});
 	window.webContents.on('will-navigate', e => e.preventDefault());
+	window.webContents.on('will-attach-webview', e => e.preventDefault());
+	window.webContents.on('render-process-gone', (_e, details) => {
+		logMain('fatal', 'renderer gone', details);
+		if (details.reason !== 'clean-exit') {
+			window?.reload();
+		}
+	});
 	window.on('close', () => {
 		if (window && !window.isDestroyed() && !window.isMinimized()) {
 			const maximized = window.isMaximized();
@@ -194,6 +223,9 @@ if (!app.requestSingleInstanceLock()) {
 	}
 
 	void app.whenReady().then(async () => {
+		// The UI needs no camera, microphone, geolocation or notification access; refuse every request.
+		session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+		session.defaultSession.setPermissionCheckHandler(() => false);
 		controller = new Controller({
 			appRoot,
 			userDataDir,
@@ -253,6 +285,7 @@ if (!app.requestSingleInstanceLock()) {
 			recent: () => controller.recentFolders(),
 			openRecent: f => void controller.openFolder(f),
 			checkForUpdates: () => void checkForUpdates(true),
+			openLogs: () => void shell.openPath(path.join(userDataDir, 'logs')),
 			appName: APP_NAME,
 		}));
 		createWindow();
