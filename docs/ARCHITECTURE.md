@@ -2,9 +2,9 @@
 
 ## Processes
 
-- **Main process** (`electron/main.ts`) creates the window, registers the `mjolnir-asset://` protocol that serves the UI, and owns a `Controller` (`host/controller.ts`). The Controller runs the chat engine in the same process.
+- **Main process** (`electron/main.ts`) creates the window, registers the `stormcoder-asset://` protocol that serves the UI, and owns a `Controller` (`host/controller.ts`). The Controller runs the chat engine in the same process.
 - **Shell page** (`shell/`) is the only renderer. It draws the rail, command palette, prompts, toasts and file editor, and hosts two iframes: `chat` and `settings`. The iframes load the chat UI (`media/`) exactly as it was written for an editor webview.
-- **Preload** (`electron/preload.ts`) exposes a fixed set of named calls as `window.mjolnir`. The page has no Node access and cannot reach other IPC channels.
+- **Preload** (`electron/preload.ts`) exposes a fixed set of named calls as `window.stormcoder`. The page has no Node access and cannot reach other IPC channels.
 
 ## Messages
 

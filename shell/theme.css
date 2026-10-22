@@ -1,7 +1,7 @@
 /* Applied inside the chat and settings frames. The chat UI was written against the editor's
    theme variables; defining every one of them from the tokens lets its stylesheet render here
    unchanged, and the rules below then restyle what the data-terminal style does differently. */
-@import url("mjolnir-asset://app/shell/tokens.css");
+@import url("stormcoder-asset://app/shell/tokens.css");
 
 :root {
 	--vscode-font-family: var(--font);
@@ -70,7 +70,7 @@ html, body {
 /* ---- Style overrides: flat surfaces, no ambient wash, one accent line ---- */
 #messages, #messages.is-empty { background: none; }
 .empty-hero {
-	content: url("mjolnir-asset://app/shell/mark.svg");
+	content: url("stormcoder-asset://app/shell/mark.svg");
 	width: 44px; height: 44px; border: 0; border-radius: 0; box-shadow: none; animation: none; opacity: .95;
 }
 .empty-title { font-size: var(--fs-section); font-weight: 400; color: var(--muted); letter-spacing: 0; margin-top: 10px; }

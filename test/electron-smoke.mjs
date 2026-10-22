@@ -1,4 +1,4 @@
-// Launches the real Electron app (main process, preload, mjolnir-asset protocol) and checks the
+// Launches the real Electron app (main process, preload, stormcoder-asset protocol) and checks the
 // shell and both frames come up and talk to the engine. Needs a display (xvfb-run on CI).
 import { _electron as electron } from 'playwright-core';
 import fs from 'node:fs';
@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 const root = path.resolve(import.meta.dirname, '..');
 const data = fs.mkdtempSync(path.join(os.tmpdir(), 'mj-electron-'));
-// MJ_PACKAGED=release/linux-unpacked/mjolnir tests the installed layout (asar) instead of the source tree.
+// MJ_PACKAGED=release/linux-unpacked/stormcoder tests the installed layout (asar) instead of the source tree.
 const packaged = process.env.MJ_PACKAGED ? path.resolve(process.env.MJ_PACKAGED) : undefined;
 const electronBin = packaged ?? (await import('node:module')).createRequire(import.meta.url)('electron');
 const app = await electron.launch({ executablePath: electronBin, args: [...(packaged ? [] : [root]), '--no-sandbox', '--disable-gpu', `--user-data-dir=${data}`] });
@@ -23,7 +23,7 @@ try {
 	await page.waitForSelector('#rail');
 	const chat = page.frameLocator('#view-chat');
 	await chat.locator('#input').waitFor({ timeout: 20000 });
-	assert.equal(await page.title(), 'Mjolnir');
+	assert.equal(await page.title(), 'Stormcoder');
 
 	// The bridge reached the engine: the provider list rendered from host data.
 	await page.click('[data-view=settings]');
@@ -35,8 +35,8 @@ try {
 	await page.locator('#palette:not(.hidden)').waitFor();
 	await page.keyboard.press('Escape');
 
-	// Deep link: the OS hands the app a mjolnir:// URL; it must not crash the main process.
-	await app.evaluate(({ app: a }) => a.emit('open-url', { preventDefault() { } }, 'mjolnir://openvs.openvs-chat/auth-callback?state=none'));
+	// Deep link: the OS hands the app a stormcoder:// URL; it must not crash the main process.
+	await app.evaluate(({ app: a }) => a.emit('open-url', { preventDefault() { } }, 'stormcoder://openvs.openvs-chat/auth-callback?state=none'));
 	assert.deepEqual(errors, [], 'no uncaught page errors');
 	await page.screenshot({ path: path.join(os.tmpdir(), 'electron-smoke.png') });
 	console.log('electron-smoke: ok');

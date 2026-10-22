@@ -143,7 +143,7 @@ export class RemoteService implements vscode.Disposable {
 			return undefined;
 		}
 		const fix = 'On the phone, set Private DNS to one.one.one.one (Android: Settings → Network & internet → Private DNS; '
-			+ 'iPhone: install Cloudflare’s 1.1.1.1 app), then scan again — or run "Mjolnir: Remote: Use My Cloudflare Tunnel" '
+			+ 'iPhone: install Cloudflare’s 1.1.1.1 app), then scan again — or run "Remote: Use My Cloudflare Tunnel" '
 			+ 'for your own address that isn’t blocked and never changes.';
 		return this.local.dnsBlocked
 			? `This network blocks Cloudflare quick-tunnel addresses, so the link probably won’t open on a phone on the same Wi-Fi or carrier. ${fix}`
@@ -224,7 +224,7 @@ export class RemoteService implements vscode.Disposable {
 		if (getRelayMode() === 'local') {
 			const local = new LocalHosting(this.context, () => {
 				void vscode.window.showWarningMessage(
-					'The OpenVS Remote public address changed (the Cloudflare quick tunnel restarted), so paired phones need to pair again. Set up a named tunnel ("Mjolnir: Remote: Use My Cloudflare Tunnel") for an address that never changes.',
+					'The OpenVS Remote public address changed (the Cloudflare quick tunnel restarted), so paired phones need to pair again. Set up a named tunnel ("Remote: Use My Cloudflare Tunnel") for an address that never changes.',
 					'Pair a Device').then(choice => {
 					if (choice) {
 						void vscode.commands.executeCommand('openvsChat.openSettings');
@@ -424,7 +424,7 @@ export class RemoteService implements vscode.Disposable {
 				revokeDevice(this.socket, deviceId).then(
 					confirmed => confirmed
 						? vscode.window.showInformationMessage(`${name} was revoked.`)
-						: vscode.window.showWarningMessage(`The relay did not confirm revoking ${name}. Check the device list in Mjolnir settings.`),
+						: vscode.window.showWarningMessage(`The relay did not confirm revoking ${name}. Check the device list in Stormcoder settings.`),
 					err => vscode.window.showErrorMessage(err instanceof Error ? err.message : String(err)));
 			}
 		});

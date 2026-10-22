@@ -3,7 +3,7 @@
 // between them and the host process.
 (function () {
 	'use strict';
-	const api = window.mjolnir;
+	const api = window.stormcoder;
 	const ORIGIN = location.origin;
 	const $ = id => document.getElementById(id);
 

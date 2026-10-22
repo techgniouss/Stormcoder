@@ -7,7 +7,7 @@ import { randomBytes } from 'crypto';
 import { ChildProcess, execFile, spawn } from 'child_process';
 
 /**
- * The "Mjolnir: Remote: Deploy Your Own Relay" command's logic: turns the manual
+ * The "Remote: Deploy Your Own Relay" command's logic: turns the manual
  * `cd openvs-relay && npm install && npx wrangler secret put RELAY_PEPPER && npx wrangler
  * deploy` sequence into one click. There is still no *default* relay — this deploys the user's
  * own Cloudflare Worker, under their own account, same as if they had typed the commands

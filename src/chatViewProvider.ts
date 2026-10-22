@@ -548,7 +548,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	) {
 		this.router = new RoleRouter(registry, id => this.modelCache.get(id));
 		this.skills = new SkillRegistry(context.extensionUri);
-		this.sessionOutput = vscode.window.createOutputChannel('Mjolnir: Sessions');
+		this.sessionOutput = vscode.window.createOutputChannel('Stormcoder: Sessions');
 		context.subscriptions.push(this.sessionOutput);
 		this.sessionMemento = {
 			get: (key, defaultValue) => context.workspaceState.get(key, defaultValue),
@@ -560,7 +560,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		// with no network transport — see the "remote control" plan's Phase 3 staging note.
 		// Read once at construction, like `traceSessions`: no live toggling.
 		if (vscode.workspace.getConfiguration('openvsChat').get<boolean>('remote.loopback')) {
-			const channel = vscode.window.createOutputChannel('Mjolnir: Loopback Sink');
+			const channel = vscode.window.createOutputChannel('Stormcoder: Loopback Sink');
 			context.subscriptions.push(channel);
 			const loopbackSink: MessageSink = {
 				id: LOOPBACK_SINK_ID,
@@ -3877,7 +3877,7 @@ ${context.content}` }
 	<meta http-equiv="Content-Security-Policy" content="${csp}" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 	<link href="${mediaUri('main.css')}" rel="stylesheet" />
-	<title>${settingsOnly ? 'OpenVS Settings' : 'Mjolnir'}</title>
+	<title>${settingsOnly ? 'OpenVS Settings' : 'Stormcoder'}</title>
 </head>
 <body class="${settingsOnly ? 'settings-window' : ''}">
 	<script nonce="${nonce}">window.__OPENVS_SETTINGS_ONLY__ = ${settingsOnly ? 'true' : 'false'};

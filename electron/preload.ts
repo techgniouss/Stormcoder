@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Mjolnir contributors. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License.
  *--------------------------------------------------------------------------------------------*/
 
@@ -17,7 +17,7 @@ function subscribe<T>(channel: string, listener: Listener<T>): () => void {
  * The only door between the shell page and the main process. Everything is a named,
  * fixed-purpose call — the page cannot reach `ipcRenderer` or any channel not listed here.
  */
-contextBridge.exposeInMainWorld('mjolnir', {
+contextBridge.exposeInMainWorld('stormcoder', {
 	ready: () => ipcRenderer.send('renderer:ready'),
 	sendToView: (view: string, message: unknown) => ipcRenderer.send('view:message', view, message),
 	respond: (id: number, value: unknown) => ipcRenderer.send('ui:response', id, value),

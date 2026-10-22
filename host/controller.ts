@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Mjolnir contributors. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License.
  *--------------------------------------------------------------------------------------------*/
 
@@ -179,7 +179,7 @@ export class Controller {
 				this.engine.activate(this.context);
 			} catch (err) {
 				console.error('activation failed', err);
-				this.opts.showFatal('Mjolnir could not start', err instanceof Error ? (err.stack ?? err.message) : String(err));
+				this.opts.showFatal('Stormcoder could not start', err instanceof Error ? (err.stack ?? err.message) : String(err));
 			}
 			this.toRenderer('app:state', this.publicState());
 		});
@@ -201,7 +201,7 @@ export class Controller {
 			return;
 		}
 		if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) {
-			this.opts.showFatal('Mjolnir', `${target} is not a folder.`);
+			this.opts.showFatal('Stormcoder', `${target} is not a folder.`);
 			return;
 		}
 		if (!this.state.trusted.includes(target)) {

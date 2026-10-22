@@ -35,7 +35,7 @@ const mock = http.createServer((req, res) => {
 		const alreadyWrote = json.messages.some(m => m.role === 'tool');
 		if (json.tools?.some(t => t.function?.name === 'write_file') && !alreadyWrote) {
 			send({ role: 'assistant', content: 'Creating the file.' });
-			send({ tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'hello.txt', content: 'hello from mjolnir\n' }) } }] });
+			send({ tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'hello.txt', content: 'hello from stormcoder\n' }) } }] });
 			send({}, 'tool_calls');
 		} else if (alreadyWrote) {
 			send({ role: 'assistant', content: 'Done: hello.txt written.' });
@@ -66,7 +66,7 @@ let hostLog = '';
 host.stderr.on('data', d => { hostLog += d; });
 const url = await new Promise((resolve, reject) => {
 	const t = setTimeout(() => reject(new Error('dev host did not start\n' + hostLog)), 15000);
-	host.stdout.on('data', d => { const m = /MJOLNIR_DEV (\S+)/.exec(String(d)); if (m) { clearTimeout(t); resolve(m[1]); } });
+	host.stdout.on('data', d => { const m = /STORMCODER_DEV (\S+)/.exec(String(d)); if (m) { clearTimeout(t); resolve(m[1]); } });
 });
 
 const browser = await launchChromium();
@@ -89,7 +89,7 @@ try {
 	await chat.locator('#input').fill('create hello.txt');
 	await chat.locator('#input').press('Enter');
 	await chat.getByText('Done: hello.txt written.').first().waitFor({ timeout: 20000 });
-	assert.equal(fs.readFileSync(path.join(project, 'hello.txt'), 'utf8'), 'hello from mjolnir\n');
+	assert.equal(fs.readFileSync(path.join(project, 'hello.txt'), 'utf8'), 'hello from stormcoder\n');
 	assert.ok(seen.some(r => r.tools?.some(t => t.function?.name === 'write_file')), 'the agent request offered write_file');
 	if (process.env.E2E_SHOT) { await page.screenshot({ path: process.env.E2E_SHOT }); }
 

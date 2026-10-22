@@ -25,7 +25,7 @@ fs.writeFileSync(path.join(project, 'src/deep/b.ts'), 'b');
 fs.writeFileSync(path.join(project, 'node_modules/x/c.ts'), 'c');
 const notices = [];
 env.configureHost({
-	appRoot: root, userDataDir: data, workspaceFolder: project, workspaceTrusted: true, uriScheme: 'mjolnir', appVersion: 't',
+	appRoot: root, userDataDir: data, workspaceFolder: project, workspaceTrusted: true, uriScheme: 'stormcoder', appVersion: 't',
 	request: async r => (r.kind === 'message' ? r.actions[0] : r.kind === 'pick' ? 1 : r.kind === 'input' ? 'typed' : undefined),
 	notify: e => notices.push(e), postToView: () => undefined, setViewHtml: () => undefined,
 	openExternal: async () => true, readClipboard: async () => '', writeClipboard: async () => undefined,
@@ -36,8 +36,8 @@ env.configureHost({
 const f = vs.Uri.file('/a/b c/d.txt');
 assert.equal(f.fsPath, process.platform === 'win32' ? '\\a\\b c\\d.txt' : '/a/b c/d.txt');
 assert.equal(vs.Uri.joinPath(vs.Uri.file('/a'), 'b', '..', 'c').path, '/a/c');
-const link = vs.Uri.parse('mjolnir://openvs.openvs-chat/auth-callback?state=ab%3D&token=t');
-assert.deepEqual([link.scheme, link.authority, link.path, link.query], ['mjolnir', 'openvs.openvs-chat', '/auth-callback', 'state=ab=&token=t']);
+const link = vs.Uri.parse('stormcoder://openvs.openvs-chat/auth-callback?state=ab%3D&token=t');
+assert.deepEqual([link.scheme, link.authority, link.path, link.query], ['stormcoder', 'openvs.openvs-chat', '/auth-callback', 'state=ab=&token=t']);
 
 // Globs, the way the search tools write them.
 const g = vs.globToRegExp;
@@ -101,7 +101,7 @@ assert.equal(ran, 'arg');
 assert.equal(await vs.commands.executeCommand('editor.action.unknown'), undefined);
 let got;
 vs.window.registerUriHandler({ handleUri: u => { got = u.path; } });
-vs.deliverUri('mjolnir://x/auth-callback?token=1');
+vs.deliverUri('stormcoder://x/auth-callback?token=1');
 assert.equal(got, '/auth-callback');
 
 fs.rmSync(tmp, { recursive: true, force: true });

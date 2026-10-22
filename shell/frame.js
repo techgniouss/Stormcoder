@@ -40,7 +40,7 @@
 		showArea('providers');
 	}
 
-	window.addEventListener('mjolnir-nav', e => {
+	window.addEventListener('stormcoder-nav', e => {
 		const d = e.detail || {};
 		if (settingsWindow && d.area) { showArea(d.area); }
 		if (!settingsWindow && d.to) {

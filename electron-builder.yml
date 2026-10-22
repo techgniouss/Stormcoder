@@ -1,6 +1,6 @@
-appId: dev.mjolnir.app
-productName: Mjolnir
-copyright: Copyright (c) Mjolnir contributors
+appId: dev.stormcoder.app
+productName: Stormcoder
+copyright: Copyright (c) Stormcoder contributors
 directories:
   output: release
   buildResources: build
@@ -13,8 +13,8 @@ asarUnpack:
   - dist/openvs-relay/**
   - node_modules/sql.js/**
 protocols:
-  - name: Mjolnir
-    schemes: [mjolnir]
+  - name: Stormcoder
+    schemes: [stormcoder]
 publish:
   provider: github
   releaseType: release
@@ -30,4 +30,4 @@ mac:
 linux:
   category: Development
   target: [AppImage, deb]
-  maintainer: Mjolnir contributors
+  maintainer: Stormcoder contributors

@@ -125,7 +125,7 @@ const REMOTE_DEPLOY_NUDGE_DISMISSED_KEY = 'openvsChat.remote.deployNudgeDismisse
  * empty — e.g. a settings sync/import, or the setting flipped by hand — without ever going
  * through {@link remoteEnable}'s prompt. `RemoteService.status()` already reports this case, but
  * nothing surfaced it: the host would sit silently unpaired until the user thought to run
- * "Mjolnir: Remote: Status". Gives the same one-click "Deploy Your Own Relay"
+ * "Remote: Status". Gives the same one-click "Deploy Your Own Relay"
  * `remoteEnable()` gives on first ask. Called at activation and on every relevant config change
  * — see the `onDidChangeConfiguration` listener in {@link activate}.
  *
@@ -147,7 +147,7 @@ async function warnIfRemoteMisconfigured(context: vscode.ExtensionContext): Prom
 	}
 	const action = await vscode.window.showWarningMessage(
 		'OpenVS remote control is enabled, but no relay is deployed yet — pairing won\'t work until you do. '
-		+ 'Run "Mjolnir: Remote: Deploy Your Own Relay" to do that in one step.',
+		+ 'Run "Remote: Deploy Your Own Relay" to do that in one step.',
 		'Deploy Your Own Relay', 'Don\'t Ask Again');
 	if (action === 'Deploy Your Own Relay') {
 		await vscode.commands.executeCommand('openvsChat.remoteDeployRelay');
@@ -460,7 +460,7 @@ async function remoteEnable(remoteService: RemoteService, quiet = false): Promis
 	if (!getRelayUrl()) {
 		const action = await vscode.window.showWarningMessage(
 			'Remote relay mode is set to "hosted", but no relay URL is set. Set "openvsChat.remote.relayMode" to "auto" to have OpenVS host the relay on this computer, '
-			+ 'or run "Mjolnir: Remote: Deploy Your Own Relay" to deploy one to Cloudflare.',
+			+ 'or run "Remote: Deploy Your Own Relay" to deploy one to Cloudflare.',
 			'Deploy Your Own Relay');
 		if (action) {
 			await vscode.commands.executeCommand('openvsChat.remoteDeployRelay');
@@ -559,7 +559,7 @@ async function remoteDeployRelay(context: vscode.ExtensionContext, registry: Pro
 	const relayDir = vscode.Uri.joinPath(context.extensionUri, 'openvs-relay').fsPath;
 	if (!fs.existsSync(relayDir)) {
 		vscode.window.showErrorMessage(
-			'Could not find openvs-relay/ next to this extension — this command only works from a full source checkout of the Mjolnir repo. '
+			'Could not find the bundled openvs-relay/ — the relay package is missing from this installation. '
 			+ 'From a checkout: cd openvs-relay && npm install && npx wrangler deploy, then paste the printed URL into "openvsChat.remote.relayUrl".');
 		return;
 	}
@@ -579,7 +579,7 @@ async function remoteDeployRelay(context: vscode.ExtensionContext, registry: Pro
 		return;
 	}
 
-	const channel = vscode.window.createOutputChannel('Mjolnir: Deploy Relay');
+	const channel = vscode.window.createOutputChannel('Stormcoder: Deploy Relay');
 	channel.show(true);
 	channel.appendLine(`Deploying your own OpenVS relay from ${relayDir} …`);
 

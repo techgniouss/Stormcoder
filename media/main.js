@@ -417,7 +417,7 @@
 			// screen reader announcing the mark as well would just say it twice.
 			empty.innerHTML = `
 				<img class="empty-hero" src="${HERO_URI}" alt="" draggable="false" />
-				<div class="empty-title">Mjolnir</div>
+				<div class="empty-title">Stormcoder</div>
 				<div class="empty-sub">Ask about your code, plan a change, or hand the whole task to the agent — powered by the provider and model you choose.</div>
 				<div class="empty-chips"></div>
 				<div class="empty-footnote${hasCredential() ? ' hidden' : ''}">Add a provider key or sign in under Settings.</div>`;
@@ -1771,14 +1771,14 @@
 		'Brewing', 'Cogitating', 'Ruminating', 'Marinating', 'Conjuring', 'Untangling',
 		'Scheming', 'Simmering', 'Whirring', 'Crunching', 'Focusing', 'Deliberating',
 		'Reticulating splines', 'Herding tokens', 'Warming neurons', 'Wrangling bits',
-		'Summoning lightning', 'Swinging Mjolnir', 'Charging Stormbreaker',
+		'Summoning lightning', 'Swinging Stormcoder', 'Charging Stormbreaker',
 		'Calling the storm', 'Gathering thunder', 'Proving worthy', 'Sharpening the axe',
 		'Consulting Heimdall', 'Opening the Bifrost', 'Channeling the Odinforce',
 		'Rousing Asgard', 'Waking the Warriors Three', 'Out-scheming Loki',
 		'Assembling the Avengers', 'Rallying the Revengers', 'Consulting the Ancient One',
 		'Checking 14,000,605 outcomes', 'Bargaining with the Grandmaster',
 	];
-	// Thor-themed glyphs shown beside the verb, one picked per rotation: Mjolnir, a
+	// Thor-themed glyphs shown beside the verb, one picked per rotation: Stormcoder, a
 	// lightning bolt, and Thor's winged helm. Inline SVG rather than emoji or an image
 	// asset so they inherit the theme colour, stay crisp at any zoom, and need no
 	// extra CSP resource root. Each class gets its own animation in main.css.
@@ -1788,7 +1788,7 @@
 	// means redrawing them, not just changing the attribute.
 	const GLYPH_PX = 19;
 	const THOR_GLYPHS = [
-		// Mjolnir, verbatim as supplied — gray body, black outline, red haft. Left alone
+		// Stormcoder, verbatim as supplied — gray body, black outline, red haft. Left alone
 		// deliberately: recolouring it to follow the editor theme washes the art out, and
 		// the art is the point. It carries its own contrast on both light and dark.
 		`<svg class="thor-glyph hammer" viewBox="0 0 64 64" width="${GLYPH_PX}" height="${GLYPH_PX}" aria-hidden="true">`

@@ -24,7 +24,7 @@
 (function () {
 	'use strict';
 
-	/** Mjolnir's bolt, drawn once and reused by every Thor mark in the UI. */
+	/** Stormcoder's bolt, drawn once and reused by every Thor mark in the UI. */
 	const THOR_BOLT_PATH = 'M13.8 1.5 4.2 13.6c-.3.4 0 1 .5 1h4.6l-1.3 7.6c-.1.6.7.9 1.1.4l9.6-12.1c.3-.4 0-1-.5-1h-4.6l1.3-7.6c.1-.6-.7-.9-1.1-.4Z';
 
 	// Reasoning arrives inline in the token stream, fenced by these markers (see

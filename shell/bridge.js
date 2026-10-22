@@ -3,7 +3,7 @@
 // the host process. The UI's own scripts are untouched.
 (function () {
 	const view = location.pathname.split('/').filter(Boolean).pop() || 'chat';
-	const stateKey = 'mjolnir-state-' + view;
+	const stateKey = 'stormcoder-state-' + view;
 	window.acquireVsCodeApi = function () {
 		return {
 			postMessage: function (message) { parent.postMessage({ mj: 'toHost', view: view, message: message }, location.origin); },
@@ -23,7 +23,7 @@
 		if (d.mj === 'toView') {
 			window.dispatchEvent(new MessageEvent('message', { data: d.message }));
 		} else if (d.mj === 'nav') {
-			window.dispatchEvent(new CustomEvent('mjolnir-nav', { detail: d }));
+			window.dispatchEvent(new CustomEvent('stormcoder-nav', { detail: d }));
 		}
 	}, true);
 	window.addEventListener('keydown', function (e) {

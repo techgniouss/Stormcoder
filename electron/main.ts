@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Mjolnir contributors. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License.
  *--------------------------------------------------------------------------------------------*/
 
@@ -29,7 +29,7 @@ async function checkForUpdates(interactive: boolean): Promise<void> {
 			autoUpdater.once('update-not-available', () => void dialog.showMessageBox({ message: `You are on the latest version (${app.getVersion()}).` }));
 		}
 		autoUpdater.once('update-downloaded', info => {
-			void dialog.showMessageBox({ type: 'info', message: `Mjolnir ${info.version} is ready.`, detail: 'It installs when you quit, or restart now.', buttons: ['Restart Now', 'Later'], defaultId: 0 })
+			void dialog.showMessageBox({ type: 'info', message: `Stormcoder ${info.version} is ready.`, detail: 'It installs when you quit, or restart now.', buttons: ['Restart Now', 'Later'], defaultId: 0 })
 				.then(r => { if (r.response === 0) { autoUpdater.quitAndInstall(); } });
 		});
 		await autoUpdater.checkForUpdates();
@@ -41,9 +41,9 @@ async function checkForUpdates(interactive: boolean): Promise<void> {
 	}
 }
 
-const SCHEME = 'mjolnir';
-const ASSET_SCHEME = 'mjolnir-asset';
-const APP_NAME = 'Mjolnir';
+const SCHEME = 'stormcoder';
+const ASSET_SCHEME = 'stormcoder-asset';
+const APP_NAME = 'Stormcoder';
 
 protocol.registerSchemesAsPrivileged([
 	{ scheme: ASSET_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },

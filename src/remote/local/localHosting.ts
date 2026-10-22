@@ -180,7 +180,7 @@ export class LocalHosting implements vscode.Disposable {
 		const binary = await ensureCloudflared(this.context, askBeforeInstall);
 		if (!binary) {
 			this.tunnelError = 'Cloudflare Tunnel (cloudflared) is not installed';
-			throw new Error('OpenVS Remote needs Cloudflare Tunnel (cloudflared) to reach your phone. Run "Mjolnir: Remote: Install Cloudflare Tunnel", or set "openvsChat.remote.cloudflaredPath".');
+			throw new Error('OpenVS Remote needs Cloudflare Tunnel (cloudflared) to reach your phone. Run "Remote: Install Cloudflare Tunnel", or set "openvsChat.remote.cloudflaredPath".');
 		}
 		if (this.disposed) {
 			throw new Error('Local hosting stopped.');

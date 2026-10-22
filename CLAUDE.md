@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Mjolnir is a standalone Electron desktop app. Its chat engine (`src/`) was written as a VS Code extension and runs unchanged on top of `host/vscode.ts`, a Node implementation of the slice of the `vscode` API it uses. Read `docs/ARCHITECTURE.md` first.
+Stormcoder is a standalone Electron desktop app. Its chat engine (`src/`) was written as a VS Code extension and runs unchanged on top of `host/vscode.ts`, a Node implementation of the slice of the `vscode` API it uses. Read `docs/ARCHITECTURE.md` first.
 
 ## Commands
 

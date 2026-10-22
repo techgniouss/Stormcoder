@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Mjolnir contributors. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License.
  *--------------------------------------------------------------------------------------------*/
 
@@ -65,7 +65,7 @@ export function buildMenu(a: MenuActions): Menu {
 			role: 'help',
 			submenu: [
 				{ label: 'Check for Updates…', click: a.checkForUpdates },
-				{ label: `${a.appName} on GitHub`, click: () => void shell.openExternal('https://github.com/techgniouss/mjolnir') },
+				{ label: `${a.appName} on GitHub`, click: () => void shell.openExternal('https://github.com/techgniouss/Stormcoder') },
 			],
 		},
 	];

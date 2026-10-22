@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Mjolnir contributors. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License.
  *--------------------------------------------------------------------------------------------*/
 
@@ -30,7 +30,7 @@ const key = crypto.randomBytes(32);
 const controller = new Controller({
 	appRoot,
 	userDataDir,
-	uriScheme: 'mjolnir',
+	uriScheme: 'stormcoder',
 	appVersion: 'dev',
 	platform: process.platform,
 	secureStorage: false,
@@ -100,7 +100,7 @@ server.listen(port, '127.0.0.1', async () => {
 	} else {
 		await controller.start();
 	}
-	console.log(`MJOLNIR_DEV http://127.0.0.1:${actual}/shell/index.html?port=${actual}`);
+	console.log(`STORMCODER_DEV http://127.0.0.1:${actual}/shell/index.html?port=${actual}`);
 });
 
 process.on('SIGTERM', () => { void controller.shutdown().finally(() => process.exit(0)); });

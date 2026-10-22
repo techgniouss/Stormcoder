@@ -5,7 +5,7 @@
  "seed": 1136961747,
  "input": {
   "kind": "devtools",
-  "brief": "Mjolnir: standalone desktop AI coding chat and agent workspace with multi-provider models, tabs, sessions, skills, MCP",
+  "brief": "Stormcoder: standalone desktop AI coding chat and agent workspace with multi-provider models, tabs, sessions, skills, MCP",
   "theme": "dark",
   "screens": [
    "inbox",

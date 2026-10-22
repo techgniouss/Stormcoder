@@ -1,8 +1,8 @@
-# Mjolnir
+# Stormcoder
 
 A standalone desktop AI coding workspace. Chat with any model, plan a change, or hand a task to an agent that reads, edits and runs code in your project. It is its own application: there is no VS Code underneath.
 
-Mjolnir is the desktop home of the OpenVS Thor chat engine (previously an extension for a VS Code fork), rebuilt as an Electron app with its own interface.
+Stormcoder is the desktop home of the OpenVS Thor chat engine (previously an extension for a VS Code fork), rebuilt as an Electron app with its own interface.
 
 ## What you get
 
@@ -18,7 +18,7 @@ Mjolnir is the desktop home of the OpenVS Thor chat engine (previously an extens
 
 Download an installer from the Releases page, open a project folder, and add a provider in Settings. Press `Ctrl+K` (`Cmd+K`) for the command palette. `Ctrl+1` to `Ctrl+4` jump between Chat, History, Skills and MCP servers, and `Ctrl+,` opens Settings.
 
-Settings are in `settings.json` (palette: *Edit settings.json*). API keys are stored with your operating system's keychain; where there is none, they are encrypted in a local file and Mjolnir says so in the title bar.
+Settings are in `settings.json` (palette: *Edit settings.json*). API keys are stored with your operating system's keychain; where there is none, they are encrypted in a local file and Stormcoder says so in the title bar.
 
 ## Develop
 

@@ -1483,20 +1483,20 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 	height: 22px;
 	line-height: 0;
 }
-/* One animation per glyph: Mjolnir swings, the bolt strikes, the helm hovers. */
+/* One animation per glyph: Stormcoder swings, the bolt strikes, the helm hovers. */
 .thor-glyph { display: block; }
 .thor-glyph.hammer {
 	/* Percentages, not px: transform-origin resolves against the rendered element box,
 	   not the glyph's viewBox units, so px values silently drift if the size changes.
-	   50% 96% is the pommel — Mjolnir swings from the butt of the handle.
+	   50% 96% is the pommel — Stormcoder swings from the butt of the handle.
 	   No colour override: it inherits the surrounding text colour so the outline stays
 	   theme-correct, leaving the handle's red as the only accent. */
 	transform-origin: 50% 96%;
-	animation: mjolnir-swing 1.8s ease-in-out infinite;
+	animation: stormcoder-swing 1.8s ease-in-out infinite;
 }
 .thor-glyph.stormbreaker {
 	transform-origin: 50% 92%;
-	animation: mjolnir-swing 2.1s ease-in-out infinite;
+	animation: stormcoder-swing 2.1s ease-in-out infinite;
 }
 .thor-glyph.bolt {
 	color: var(--vscode-charts-yellow, #e2c08d);
@@ -1516,7 +1516,7 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 	vertical-align: -1px;
 	opacity: 0.85;
 }
-@keyframes mjolnir-swing {
+@keyframes stormcoder-swing {
 	0%, 100% { transform: rotate(-16deg); }
 	42% { transform: rotate(14deg); }
 	52% { transform: rotate(9deg) translateY(1px); }

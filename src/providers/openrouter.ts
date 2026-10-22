@@ -54,7 +54,7 @@ export class OpenRouterProvider extends OpenAICompatibleProvider {
 
 	protected override extraHeaders(): Record<string, string> {
 		// App attribution headers recommended by OpenRouter (shown on their rankings).
-		return { 'HTTP-Referer': 'https://github.com/openvs', 'X-Title': 'Mjolnir' };
+		return { 'HTTP-Referer': 'https://github.com/openvs', 'X-Title': 'Stormcoder' };
 	}
 
 	/**

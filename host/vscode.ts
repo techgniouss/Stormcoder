@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Mjolnir contributors. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License.
  *--------------------------------------------------------------------------------------------*/
 
@@ -750,7 +750,7 @@ export interface StatusBarItem {
 export interface UriHandler { handleUri(uri: Uri): unknown }
 const uriHandlers: UriHandler[] = [];
 
-/** Delivers an OS-routed `mjolnir://` link to the registered handler (OAuth callbacks). */
+/** Delivers an OS-routed `stormcoder://` link to the registered handler (OAuth callbacks). */
 export function deliverUri(uri: string): void {
 	for (const h of uriHandlers) {
 		h.handleUri(Uri.parse(uri));
@@ -876,7 +876,7 @@ export interface WebviewViewProvider {
 }
 
 /** The origin the shell serves bundled assets from; webview HTML references files below it. */
-export const ASSET_ORIGIN = 'mjolnir-asset://app';
+export const ASSET_ORIGIN = 'stormcoder-asset://app';
 
 const liveViews = new Map<ViewId, ReturnType<typeof createView>>();
 
@@ -924,7 +924,7 @@ export function deliverToView(id: ViewId, message: unknown): void {
 
 export const env = {
 	get uriScheme(): string { return host().uriScheme; },
-	appName: 'Mjolnir',
+	appName: 'Stormcoder',
 	language: 'en',
 	get machineId(): string { return crypto.createHash('sha256').update(os.hostname() + os.userInfo().username).digest('hex'); },
 	openExternal: (uri: Uri | string): Thenable<boolean> => host().openExternal(typeof uri === 'string' ? uri : uri.toString(true)),

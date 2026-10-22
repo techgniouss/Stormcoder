@@ -2,7 +2,7 @@
 // instead of Electron, there is no preload bridge, so the same API is carried over a local
 // WebSocket to the host. In the app this file does nothing.
 (function () {
-	if (window.mjolnir) { return; }
+	if (window.stormcoder) { return; }
 	const params = new URLSearchParams(location.search);
 	const socket = new WebSocket('ws://127.0.0.1:' + (params.get('port') || '0') + '/');
 	const listeners = {};
@@ -18,7 +18,7 @@
 	});
 	const on = channel => cb => { (listeners[channel] = listeners[channel] || []).push(cb); return () => { listeners[channel] = listeners[channel].filter(x => x !== cb); }; };
 	const invoke = (name, ...args) => new Promise((resolve, reject) => { const id = ++seq; calls.set(id, { resolve, reject }); send({ call: name, id, args }); });
-	window.mjolnir = {
+	window.stormcoder = {
 		ready: () => send({ call: 'ready', args: [] }),
 		sendToView: (view, message) => send({ call: 'sendToView', args: [view, message] }),
 		respond: (id, value) => send({ call: 'respond', args: [id, value] }),
