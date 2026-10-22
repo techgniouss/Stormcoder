@@ -4,6 +4,8 @@ A standalone desktop AI coding workspace. Chat with any model, plan a change, or
 
 Stormcoder is the desktop home of the OpenVS Thor chat engine (previously an extension for a VS Code fork), rebuilt as an Electron app with its own interface.
 
+![An agent run in Stormcoder](docs/screenshots/agent-run.png)
+
 ## What you get
 
 - **Many providers, one place.** OpenAI, Anthropic, Google Gemini, OpenRouter, NVIDIA, Groq, Mistral, Cloudflare Workers AI, Kimi, Qwen, Z.AI, OpenCode Zen, GitHub Copilot, Grok, Kiro, and any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM). Sign in with a ChatGPT or Claude account where the provider allows it, or paste a key. Keys rotate on rate limits and cool down on quota errors.
@@ -13,6 +15,10 @@ Stormcoder is the desktop home of the OpenVS Thor chat engine (previously an ext
 - **MCP servers.** Stdio and HTTP (Streamable HTTP and legacy SSE), per project or global. Project servers ask before they start.
 - **Remote control.** Pair a phone through a relay (hosted on Cloudflare, or served from your machine through a tunnel) to send messages and answer approvals away from the desk.
 - **Hard guardrails.** Protected paths, denied commands, workspace confinement and untrusted-folder write blocking are enforced in code, whatever the model says.
+
+| Settings | Command palette |
+| --- | --- |
+| ![Settings](docs/screenshots/settings.png) | ![Command palette](docs/screenshots/palette.png) |
 
 ## Using it
 
