@@ -3,11 +3,11 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { execFile } from 'child_process';
 import * as vscode from 'vscode';
 import { ProviderRegistry } from '../providers/registry';
 import { withProviderResilience } from '../providers/resilience';
 import { isAbortError, streamChatWithContinuation } from '../providers/types';
-import { API, GitExtension, Repository } from './git';
 
 /**
  * How much of the staged diff to hand the model. A large diff costs proportionally more and
@@ -48,65 +48,46 @@ export function stripWrappingFence(text: string): string {
 	return match ? match[1].trim() : text;
 }
 
-/**
- * Picks the repository the command should act on. The `scm/inputBox` toolbar passes the
- * clicked input's repository root as the first command argument, so this only needs to guess
- * when the command is invoked another way (e.g. the Command Palette, which passes nothing).
- */
-function pickRepository(git: API, rootUri: vscode.Uri | undefined): Repository | undefined {
-	if (rootUri) {
-		const byRoot = git.getRepository(rootUri);
-		if (byRoot) {
-			return byRoot;
+/** Runs `git` in `cwd` and resolves with stdout; rejects with git's own message on failure. */
+function git(args: string[], cwd: string, input?: string): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const child = execFile('git', args, { cwd, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+			if (err) {
+				reject(new Error(stderr.trim() || err.message));
+			} else {
+				resolve(stdout);
+			}
+		});
+		if (input !== undefined) {
+			child.stdin?.end(input);
 		}
-	}
-	if (git.repositories.length === 1) {
-		return git.repositories[0];
-	}
-	const activeUri = vscode.window.activeTextEditor?.document.uri;
-	if (activeUri) {
-		const match = git.getRepository(activeUri);
-		if (match) {
-			return match;
-		}
-	}
-	return git.repositories[0];
-}
-
-async function getGitApi(): Promise<API | undefined> {
-	const ext = vscode.extensions.getExtension<GitExtension>('vscode.git');
-	if (!ext) {
-		return undefined;
-	}
-	const exports = ext.isActive ? ext.exports : await ext.activate();
-	return exports.enabled ? exports.getAPI(1) : undefined;
+	});
 }
 
 /**
- * Generates a commit message from the currently staged changes using whichever provider is
- * configured (`openvsChat.defaultProvider`), and writes it into the repository's SCM input
- * box. Bound to the `scm/inputBox` toolbar button; `rootUri` and `token` are the arguments
- * that toolbar passes to the command it runs.
+ * Generates a commit message from the staged changes of the open project using whichever
+ * provider is configured (`openvsChat.defaultProvider`), then offers to commit with it or copy
+ * it. Reads the repository through the `git` command line, so it works wherever git is
+ * installed — there is no editor Git extension to depend on.
  */
 export async function generateCommitMessage(
 	registry: ProviderRegistry,
-	rootUri: vscode.Uri | undefined,
 	token: vscode.CancellationToken,
 ): Promise<void> {
-	const git = await getGitApi();
-	if (!git) {
-		vscode.window.showErrorMessage('The built-in Git extension is not available.');
+	const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+	if (!cwd) {
+		vscode.window.showErrorMessage('Open a project folder first.');
 		return;
 	}
-	const repo = pickRepository(git, rootUri);
-	if (!repo) {
-		vscode.window.showErrorMessage('No git repository found in this workspace.');
+	let diff: string;
+	try {
+		diff = await git(['diff', '--cached', '--no-color'], cwd);
+	} catch (err) {
+		vscode.window.showErrorMessage(`Could not read the staged changes: ${err instanceof Error ? err.message : String(err)}`);
 		return;
 	}
-
-	const diff = await repo.diff(true);
 	if (!diff.trim()) {
-		vscode.window.showInformationMessage('No staged changes to generate a commit message from.');
+		vscode.window.showInformationMessage('No staged changes to generate a commit message from. Stage some with `git add` first.');
 		return;
 	}
 
@@ -139,15 +120,17 @@ export async function generateCommitMessage(
 		// Continuation matters here even at a small maxTokens: a model that ignores the
 		// brevity instruction and writes a long body would otherwise hand back a message
 		// chopped off mid-sentence with no indication anything was cut.
-		result = await withProviderResilience(registry, providerId, model, apiKey => streamChatWithContinuation(provider, {
-			messages: [{ role: 'user', content: buildCommitMessagePrompt(diff) }],
-			model,
-			apiKey,
-			baseUrl: registry.getBaseUrl(providerId),
-			maxTokens: MAX_REPLY_TOKENS,
-			signal: controller.signal,
-			onToken: () => { /* no incremental UI to update while this runs */ },
-		}));
+		result = await vscode.window.withProgress(
+			{ location: vscode.ProgressLocation.Notification, title: 'Writing a commit message…' },
+			() => withProviderResilience(registry, providerId, model, apiKey => streamChatWithContinuation(provider, {
+				messages: [{ role: 'user', content: buildCommitMessagePrompt(diff) }],
+				model,
+				apiKey,
+				baseUrl: registry.getBaseUrl(providerId),
+				maxTokens: MAX_REPLY_TOKENS,
+				signal: controller.signal,
+				onToken: () => { /* the progress notice is the only feedback while this runs */ },
+			})));
 	} catch (err) {
 		if (isAbortError(err)) {
 			return;
@@ -163,8 +146,16 @@ export async function generateCommitMessage(
 		vscode.window.showWarningMessage(`${provider.info.label} returned an empty commit message.`);
 		return;
 	}
-	repo.inputBox.value = message;
-	if (result.truncated) {
-		vscode.window.showWarningMessage('The generated commit message may be incomplete — it hit the model\'s output limit even after continuing.');
+	const note = result.truncated ? '\n\n(It hit the model\'s output limit even after continuing, so it may be incomplete.)' : '';
+	const action = await vscode.window.showInformationMessage(`Commit message:\n\n${message}${note}`, 'Commit', 'Copy');
+	if (action === 'Copy') {
+		await vscode.env.clipboard.writeText(message);
+	} else if (action === 'Commit') {
+		try {
+			await git(['commit', '-F', '-'], cwd, message + '\n');
+			vscode.window.showInformationMessage('Committed the staged changes.');
+		} catch (err) {
+			vscode.window.showErrorMessage(`Commit failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 }

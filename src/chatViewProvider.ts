@@ -1961,10 +1961,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		await this.publishModels(providerId, refresh);
 	}
 
+	/** Largest file the paperclip attaches whole; bigger ones should be read by the agent in pages. */
+	private static readonly ATTACH_MAX_BYTES = 300_000;
+
+	/**
+	 * With no editor to take "the active file" from, the paperclip asks which file to attach.
+	 * Binary and oversized files are refused with the reason, not truncated silently.
+	 */
+	private async attachPickedFile(): Promise<void> {
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+		const picked = await vscode.window.showOpenDialog({
+			title: 'Attach a file as context', canSelectFiles: true, canSelectFolders: false, canSelectMany: false, defaultUri: root,
+		});
+		const uri = picked?.[0];
+		if (!uri) {
+			return;
+		}
+		const name = vscode.workspace.asRelativePath(uri);
+		try {
+			const bytes = await vscode.workspace.fs.readFile(uri);
+			if (bytes.byteLength > ChatViewProvider.ATTACH_MAX_BYTES) {
+				this.post({ type: 'info', message: `${name} is ${Math.round(bytes.byteLength / 1024)} KB — too large to attach whole. Ask the agent to read the part you need.` });
+				return;
+			}
+			if (bytes.subarray(0, 8000).includes(0)) {
+				this.post({ type: 'info', message: `${name} looks like a binary file, so it was not attached.` });
+				return;
+			}
+			const text = Buffer.from(bytes).toString('utf8');
+			this.bus.postTo(WEBVIEW_SINK_ID, { type: 'context', context: { label: name, content: `File: ${name}\n\n${text}` } });
+		} catch (err) {
+			this.post({ type: 'info', message: `Could not read ${name}: ${err instanceof Error ? err.message : String(err)}` });
+		}
+	}
+
 	private async handleAttachContext(): Promise<void> {
 		const editor = vscode.window.activeTextEditor;
 		if (!editor) {
-			this.post({ type: 'info', message: 'Open a file to attach it as context.' });
+			await this.attachPickedFile();
 			return;
 		}
 		const sel = editor.selection;

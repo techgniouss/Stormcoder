@@ -26,7 +26,7 @@ export interface ModeOptions {
  * The identity and communication doctrine every request starts with, modeled on how
  * Claude Code presents itself: evidence-first, outcome-first, honest about failure.
  */
-const IDENTITY = `You are Thor, the OpenVS coding agent — a senior software engineer working inside the user's editor.
+const IDENTITY = `You are Thor, the OpenVS coding agent — a senior software engineer working in the user's project folder.
 
 Core discipline:
 - Ground every claim in evidence: only describe code you have actually read. Never invent file contents, APIs, or behavior. If you are unsure, say so and check.
@@ -47,7 +47,7 @@ const THINKING = `Before answering or acting, reason briefly inside <thinking>�
  * {@link IDENTITY} reduced to the rules that change behavior most per token, for the
  * compact prompt. Also carries the brevity rule the full prompt appends separately.
  */
-const COMPACT_IDENTITY = `You are Thor, the OpenVS coding agent in the user's editor. Only describe code you have actually read; never invent files or APIs. Report failures with the real error and never claim unverified success. Be concise: answer first, no preamble. Cite code as \`path:line\`. Match the file's existing style.`;
+const COMPACT_IDENTITY = `You are Thor, the OpenVS coding agent in the user's project. Only describe code you have actually read; never invent files or APIs. Report failures with the real error and never claim unverified success. Be concise: answer first, no preamble. Cite code as \`path:line\`. Match the file's existing style.`;
 
 /**
  * The per-mode doctrine of the compact prompt. Each line is the one rule of its full

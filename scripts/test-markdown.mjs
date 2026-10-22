@@ -75,7 +75,7 @@ assert.equal(render('[docs](https://example.com/a)'), '<a href="https://example.
 assert.equal(render('see https://example.com/x, ok'),
 	'see <a href="https://example.com/x">https://example.com/x</a>, ok<br />');
 assert.equal(render('[x](javascript:alert(1))'), '[x](javascript:alert(1))<br />');
-assert.match(render('![shot](https://example.com/a.png)'), /^<a href="https:\/\/example\.com\/a\.png">🖼 shot<\/a>/);
+assert.match(render('![shot](https://example.com/a.png)'), /^<a href="https:\/\/example\.com\/a\.png">Image: shot<\/a>/);
 
 // 7. Model text is escaped exactly once, wherever it lands — prose, a table cell, a code
 // block, a link label.
@@ -88,7 +88,7 @@ assert.equal(escapeHtml(`<&"'>`), '&lt;&amp;&quot;&#39;&gt;');
 // 8. Reasoning blocks still collapse, and the fences inside one do not pair with the
 // answer's — the reason the thinking split runs before the code-fence pass at all.
 {
-	const html = render('🤔 *Thinking…*\n\n```js\nx\n```\n[thought for 3s]\n\n---\n\nAnswer');
+	const html = render('*Thinking…*\n\n```js\nx\n```\n[thought for 3s]\n\n---\n\nAnswer');
 	assert.match(html, /<details class="thinking" data-think="0">/);
 	assert.match(html, /Thought for 3s/);
 	assert.match(html, /<\/details>Answer<br \/>$/);

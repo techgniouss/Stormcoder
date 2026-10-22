@@ -137,7 +137,7 @@
 			const decide = act => answer(
 				request.id,
 				{ approved: act !== 'deny', always: act === 'always', feedback: String(feedback.value || '').trim() },
-				act === 'deny' ? '✕ Denied' : act === 'always' ? '✓ Allowed (and for the rest of this run)' : '✓ Allowed',
+				act === 'deny' ? 'Denied' : act === 'always' ? 'Allowed (and for the rest of this run)' : 'Allowed',
 			);
 
 			for (const [act, label, extra] of /** @type {[('allow'|'always'|'deny'), string, string][]} */ ([
@@ -166,7 +166,7 @@
 			const card = shell(request, 'prompt-ask');
 			const options = Array.isArray(request.options) ? request.options : [];
 			const multi = !!request.multiSelect;
-			card.appendChild(el('div', 'prompt-title', `🙋 ${request.question || 'The agent has a question'}`));
+			card.appendChild(el('div', 'prompt-title', `${request.question || 'The agent has a question'}`));
 			if (request.detail) {
 				card.appendChild(el('div', 'prompt-detail', request.detail));
 			}
@@ -191,7 +191,7 @@
 			const submit = text => {
 				const value = String(text || '').trim();
 				if (!value) { return; }
-				answer(request.id, { answer: value }, `🙋 ${value}`);
+				answer(request.id, { answer: value }, value);
 			};
 
 			const list = el('div', 'prompt-options');
@@ -271,8 +271,8 @@
 			 */
 			cancel(id, reason) {
 				const summary = reason === 'answered'
-					? '✓ Answered on another device.'
-					: '✕ Cancelled — the run was stopped.';
+					? 'Answered on another device.'
+					: 'Cancelled: the run was stopped.';
 				retire(id, summary, 'prompt-answered');
 			},
 			/** @param {string} id */

@@ -29,7 +29,7 @@
 
 	// Reasoning arrives inline in the token stream, fenced by these markers (see
 	// src/persona/thinking.ts, which also stamps the duration just inside the closer).
-	const THINK_OPEN = '🤔 *Thinking…*\n\n';
+	const THINK_OPEN = '*Thinking…*\n\n';
 	const THINK_CLOSE = '\n\n---\n\n';
 	const THINK_DURATION = /\n*\[thought for (\d+)s\]\s*$/;
 
@@ -100,7 +100,7 @@
 				return m;
 			}
 			const text_ = label.trim() || href;
-			return hold(`<a href="${href}">${bang ? '🖼 ' : ''}${text_}</a>`);
+			return hold(`<a href="${href}">${bang ? 'Image: ' : ''}${text_}</a>`);
 		});
 		// Bare URLs. Trailing sentence punctuation is left outside the link — "see https://x.com."
 		// should not link the full stop.

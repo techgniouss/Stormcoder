@@ -86,7 +86,7 @@ export const CHAT_APP_HTML = `
 
 			<div class="area" data-area="auto">
 						<div class="settings-header"><h2>Auto routing</h2></div>
-			<p class="hint">When the provider is set to <strong>🤖 Auto</strong>, each phase runs on its own model: <strong>Ask</strong> and <strong>Plan</strong> use the planning model, inline edits use the implementation model, and <strong>Agent</strong> runs the full <em>plan → implement → review</em> pipeline. Leave a role on <em>Auto-select</em> to pick the best model from the keys you've configured.</p>
+			<p class="hint">When the provider is set to <strong>Auto</strong>, each phase runs on its own model: <strong>Ask</strong> and <strong>Plan</strong> use the planning model, inline edits use the implementation model, and <strong>Agent</strong> runs the full <em>plan → implement → review</em> pipeline. Leave a role on <em>Auto-select</em> to pick the best model from the keys you've configured.</p>
 			<div id="autoRoutingList"></div>
 			<label class="review-toggle"><input type="checkbox" id="enableReview" /> Run a review pass after Agent runs</label>
 			<label class="review-toggle" title="Splits the plan into steps and runs a sub-agent per step instead of one continuous Agent run.">
@@ -134,9 +134,9 @@ export const CHAT_APP_HTML = `
 						<option value="agent">Agent</option>
 					</select>
 					<select id="approvalSelect" class="approval-pill hidden" title="Agent permissions — when the agent must ask before acting">
-						<option value="always">🛡 Always Ask</option>
-						<option value="auto-edits">🛡 Default</option>
-						<option value="yolo">⚡ Full Auto</option>
+						<option value="always">Always Ask</option>
+						<option value="auto-edits">Default</option>
+						<option value="yolo">Full Auto</option>
 					</select>
 					<select id="providerSelect" title="Provider"></select>
 					<span class="model-picker">
@@ -145,10 +145,10 @@ export const CHAT_APP_HTML = `
 							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.5 2.5v4h-4l1.62-1.62A4.98 4.98 0 0 0 3 8a5 5 0 0 0 9.9 1h1.02A6 6 0 1 1 11.83 4.17L13.5 2.5z"/></svg>
 						</button>
 					</span>
-					<span id="autoSummary" class="auto-summary hidden" title="Auto routing — configure in ⚙ Providers"></span>
+					<span id="autoSummary" class="auto-summary hidden" title="Auto routing — configure under Settings, Auto routing"></span>
 					<span class="spacer"></span>
 					<span class="composer-actions">
-						<button id="attachButton" class="icon-button" title="Attach active file / selection">
+						<button id="attachButton" class="icon-button" title="Attach a file as context">
 							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M10.57 2.27a2.75 2.75 0 0 1 3.89 3.89l-6.72 6.72a4.25 4.25 0 0 1-6.01-6.01l6.01-6.01.71.71-6.01 6.01a3.25 3.25 0 1 0 4.6 4.6l6.72-6.72a1.75 1.75 0 1 0-2.48-2.48L4.92 9.34a.75.75 0 0 0 1.06 1.06l5.66-5.66.71.71-5.66 5.66a1.75 1.75 0 0 1-2.48-2.48l6.36-6.36z"/></svg>
 						</button>
 						<button id="imageButton" class="icon-button" title="Attach images (or paste a screenshot)">

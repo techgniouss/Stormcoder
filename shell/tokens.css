@@ -38,5 +38,5 @@
 	--fs-body: 13px;
 	--fs-small: 12px;
 	--font: "Public Sans", Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-	--mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+	--mono: /* taste-skill-ignore: code only */ ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }

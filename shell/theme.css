@@ -6,7 +6,7 @@
 :root {
 	--vscode-font-family: var(--font);
 	--vscode-font-size: var(--fs-body);
-	--vscode-editor-font-family: var(--mono);
+	--vscode-editor-font-family: var(--mono); /* taste-skill-ignore: code blocks */
 	--vscode-foreground: var(--text);
 	--vscode-descriptionForeground: var(--muted);
 	--vscode-icon-foreground: var(--text-2);
@@ -14,7 +14,7 @@
 	--vscode-contrastBorder: transparent;
 	--vscode-panel-border: var(--border);
 	--vscode-widget-border: var(--control);
-	--vscode-widget-shadow: rgba(0, 0, 0, .45);
+	--vscode-widget-shadow: rgba(0, 0, 0, .45); /* taste-skill-ignore: menus and popovers */
 	--vscode-panelTitle-activeBorder: var(--accent);
 	--vscode-editor-background: var(--ground);
 	--vscode-editorWidget-background: var(--raised);
@@ -115,3 +115,14 @@ body.settings-window #settingsPanel > .panel-header { display: none; }
 #settingsPanel .area > .settings-header:first-child h2 { font-size: var(--fs-section); font-weight: 400; color: var(--muted); margin: 0 0 8px; }
 #settingsPanel .area { padding-left: 40px; padding-right: 40px; }
 #settingsPanel .area > * { max-width: 760px; }
+
+/* ---- Transcript: the assistant speaks on the ground, you speak on a raised line ---- */
+.message .role { text-transform: none; letter-spacing: 0; font-size: 12px; font-weight: 500; color: var(--muted); }
+.message .body { border-radius: var(--radius-card); }
+.message.assistant .body, .message .body { background: transparent; padding-left: 0; padding-right: 0; }
+.message.user .body { background: var(--surface); padding: 8px 12px; }
+.message.steering .body, .message.agent-message .body, .tool, .quote, blockquote { border-left-width: 1px; }
+.tool { border-left-color: var(--control); background: transparent; }
+.tool.tool-error { border-left-color: var(--negative); }
+.auto-phase .phase-name, .auto-summary .summary-label { text-transform: none; letter-spacing: 0; font-weight: 600; }
+.message.error .body { background: var(--pill-negative-bg); border-color: transparent; padding: 8px 12px; }

@@ -70,8 +70,11 @@
 		try { el.contentWindow.focus(); } catch (e) { /* cross-origin focus is best effort */ }
 	}
 
+	const TITLES = { chat: 'Chat', history: 'History', skills: 'Skills', mcp: 'MCP servers', settings: 'Settings' };
+
 	function mark(viewKey) {
 		current = viewKey;
+		$('viewTitle').textContent = TITLES[viewKey] || 'Chat';
 		for (const btn of document.querySelectorAll('.rail-btn[data-view]')) {
 			if (btn.dataset.view === viewKey) { btn.setAttribute('aria-current', 'page'); }
 			else { btn.removeAttribute('aria-current'); }
@@ -175,8 +178,7 @@
 					li.setAttribute('aria-selected', String(n === selected));
 					if (opts.many) {
 						const c = document.createElement('span');
-						c.className = 'check';
-						c.textContent = picked.has(x.i) ? '✓' : '';
+						c.className = 'check' + (picked.has(x.i) ? ' on' : '');
 						li.appendChild(c);
 					}
 					const label = document.createElement('span');

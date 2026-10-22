@@ -26,9 +26,9 @@
 
 	/** Agent approval levels (mirrors `openvsChat.guardrails.approval`), most permissive first. */
 	const APPROVAL_OPTIONS = [
-		{ value: 'yolo', label: '⚡ Full Auto', desc: 'Never asks — the agent edits files and runs commands on its own. Hard guardrails (protected paths, denied commands, workspace confinement) still apply.' },
-		{ value: 'auto-edits', label: '🛡 Default', desc: 'Auto-approves file edits inside the workspace; asks before running commands.' },
-		{ value: 'always', label: '🛡 Always Ask', desc: 'Asks before every file write and command (safest). Reading, listing and searching never ask, under any level.' },
+		{ value: 'yolo', label: 'Full Auto', desc: 'Never asks — the agent edits files and runs commands on its own. Hard guardrails (protected paths, denied commands, workspace confinement) still apply.' },
+		{ value: 'auto-edits', label: 'Default', desc: 'Auto-approves file edits inside the workspace; asks before running commands.' },
+		{ value: 'always', label: 'Always Ask', desc: 'Asks before every file write and command (safest). Reading, listing and searching never ask, under any level.' },
 	];
 
 	/**
@@ -766,7 +766,7 @@
 	 */
 	function addNotice(s, text, isError) {
 		if (!s) { return; }
-		const content = (isError ? '⚠️ ' : 'ℹ️ ') + text;
+		const content = (isError ? 'Warning: ' : '') + text;
 		s.messages.push({ role: 'assistant', content, kind: isError ? 'error' : 'info' });
 		if (s.id === activeSessionId) {
 			const body = appendMessageEl('assistant', content);
@@ -1029,12 +1029,12 @@
 		clearOptions(els.providerSelect);
 		const autoOpt = document.createElement('option');
 		autoOpt.value = AUTO_PROVIDER;
-		autoOpt.textContent = '🤖 Auto';
+		autoOpt.textContent = 'Auto';
 		els.providerSelect.appendChild(autoOpt);
 		for (const p of providers) {
 			const opt = document.createElement('option');
 			opt.value = p.id;
-			opt.textContent = p.label + (p.requiresApiKey && !p.hasApiKey ? ' ⚠' : '');
+			opt.textContent = p.label + (p.requiresApiKey && !p.hasApiKey ? ' (no key)' : '');
 			els.providerSelect.appendChild(opt);
 		}
 		if (selectedProvider) { els.providerSelect.value = selectedProvider; }
@@ -1066,7 +1066,7 @@
 			const r = byRole[role];
 			if (role === 'review' && !autoConfig.reviewEnabled) { return 'Review: off'; }
 			if (!r) { return `${ROLE_LABELS[role]}: —`; }
-			const warn = r.ready ? '' : ' ⚠';
+			const warn = r.ready ? '' : ' (not ready)';
 			return `${ROLE_LABELS[role]}: ${shortModel(r.model)}${warn}`;
 		});
 		els.autoSummary.textContent = parts.join('  ·  ');
@@ -1124,10 +1124,10 @@
 		clearOptions(els.modelSelect);
 		for (const e of entries) {
 			const opt = document.createElement('option');
-			// 🔧 = tool-capable (works in Agent mode); "free" = costs nothing on this provider.
+			// "tools" = tool-capable (works in Agent mode); "free" = costs nothing on this provider.
 			opt.value = e.id;
 			opt.textContent = e.id
-				+ (modelSupportsTools(p, e.id) ? '  🔧' : '')
+				+ (modelSupportsTools(p, e.id) ? '  · tools' : '')
 				+ (e.free ? '  · free' : '');
 			els.modelSelect.appendChild(opt);
 		}
@@ -1135,8 +1135,8 @@
 		els.modelSelect.title = modelErrors[p.id]
 			? `Couldn't load ${p.label}'s models (${modelErrors[p.id]}) — showing suggested models`
 			: live.length
-				? `${live.length} models fetched from the provider · 🔧 = supports Agent mode · "free" = no cost`
-				: 'Suggested models — the live list has not loaded yet · 🔧 = supports Agent mode';
+				? `${live.length} models fetched from the provider · "tools" = supports Agent mode · "free" = no cost`
+				: 'Suggested models — the live list has not loaded yet · "tools" = supports Agent mode';
 		els.refreshModels.classList.toggle('busy', refreshingModels.has(p.id));
 	}
 
@@ -1154,7 +1154,7 @@
 		const model = els.modelSelect.value || (p && p.model) || '';
 		els.modeSelect.title = (!p || modelSupportsTools(p, model))
 			? 'Chat mode'
-			: `Model "${model}" doesn't support tool calling — selecting Agent switches to a 🔧 model automatically.`;
+			: `Model "${model}" doesn't support tool calling — selecting Agent switches to a tool-capable model automatically.`;
 	}
 
 	/**
@@ -1414,7 +1414,7 @@
 				.join('');
 			const sourceText = pinned
 				? 'pinned'
-				: `auto → ${escapeHtml(shortModel(r.model) || '—')}${r.ready ? '' : ' ⚠'}`;
+				: `auto → ${escapeHtml(shortModel(r.model) || '—')}${r.ready ? '' : ' (not ready)'}`;
 			row.innerHTML = `
 				<div class="role-head"><strong>${escapeHtml(r.roleLabel)}</strong>
 					<span class="role-source">${sourceText}</span></div>
@@ -1423,7 +1423,7 @@
 					<select class="role-model"></select>
 				</div>
 				<input class="role-model-custom hidden" type="text" placeholder="Exact model id, e.g. vendor/model-name" />
-				${r.problem ? `<div class="role-problem">⚠ ${escapeHtml(r.problem)}</div>` : ''}`;
+				${r.problem ? `<div class="role-problem">${escapeHtml(r.problem)}</div>` : ''}`;
 			const provSel = withSelectButton(/** @type {HTMLSelectElement} */ (row.querySelector('.role-provider')));
 			const modelSel = withSelectButton(/** @type {HTMLSelectElement} */ (row.querySelector('.role-model')));
 			const customInput = /** @type {HTMLInputElement} */ (row.querySelector('.role-model-custom'));
@@ -1470,7 +1470,7 @@
 				}
 				for (const id of ids) {
 					const entry = live.find(e => e.id === id);
-					add(id, id + (modelSupportsTools(p, id) ? '  🔧' : '') + (entry && entry.free ? '  · free' : ''));
+					add(id, id + (modelSupportsTools(p, id) ? '  · tools' : '') + (entry && entry.free ? '  · free' : ''));
 				}
 				add(CUSTOM_MODEL, 'Custom model id…');
 				modelSel.value = pinnedModel || '';
@@ -2456,7 +2456,7 @@
 		vscode.postMessage({ type: 'listModels', provider: selectedProvider, refresh: true });
 	});
 	els.settingsButton.addEventListener('click', () => {
-		// From the sidebar chat, ⚙ opens Settings in its own editor tab (a proper, roomy
+		// From the chat, the gear opens Settings (a proper, roomy
 		// window) rather than the cramped in-sidebar overlay.
 		vscode.postMessage({ type: 'requestOpenSettings' });
 	});
@@ -3018,7 +3018,7 @@
 			case 'error': {
 				addNotice(sessionFor(msg), msg.message, true);
 				// A missing key needs Settings, but not stuffed into the cramped sidebar
-				// overlay over top of the chat — open it the same way the ⚙ button does,
+				// overlay over top of the chat — open it the same way the settings button does,
 				// as its own roomy editor tab. (Already the case if this webview IS that tab.)
 				if (msg.needsKey) {
 					if (SETTINGS_ONLY) { els.settingsPanel.classList.remove('hidden'); renderSettings(); }

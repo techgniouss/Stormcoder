@@ -86,7 +86,7 @@ button:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visib
 }
 .model-picker:not(:has(> :not(.hidden))) { display: none; }
 /* The four panel actions wrap together, right-aligned — one at a time, a narrow sidebar
-   left ⚙ alone at the start of a row of its own. */
+   left the gear alone at the start of a row of its own. */
 .composer-actions {
 	flex: none;
 	display: flex;
@@ -209,7 +209,7 @@ button:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visib
 	0%, 100% { opacity: 0.35; transform: scale(0.85); }
 	50% { opacity: 1; transform: scale(1.15); }
 }
-/* Close shows on the active tab and on hover, as in the editor's own tab bar: a ✕ on every
+/* Close shows on the active tab and on hover, as in the editor's own tab bar: a close mark on every
    tab is noise across a strip of parallel runs, and it took width from the titles. */
 .chat-tab .tab-close {
 	flex: 0 0 auto;
@@ -261,17 +261,6 @@ button:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visib
 	gap: 12px;
 }
 
-/* Soft ambient wash behind the conversation, in theme chart colors. */
-#messages {
-	background:
-		radial-gradient(ellipse 70% 45% at 85% -10%, color-mix(in srgb, var(--vscode-charts-blue, #4ea1ff) 7%, transparent), transparent 70%),
-		radial-gradient(ellipse 60% 40% at 10% 110%, color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 6%, transparent), transparent 70%);
-}
-#messages.is-empty {
-	background:
-		radial-gradient(ellipse 75% 55% at 50% -15%, color-mix(in srgb, var(--vscode-charts-blue, #4ea1ff) 12%, transparent), transparent 72%),
-		radial-gradient(ellipse 65% 45% at 15% 115%, color-mix(in srgb, var(--vscode-charts-purple, #b180d7) 10%, transparent), transparent 72%);
-}
 
 /* ---- Empty-state hero ---- */
 /* `width: 100%` is load-bearing: centred by auto margins, a flex item sizes to fit its
@@ -846,7 +835,7 @@ body.settings-window #settingsPanel {
    sidebar. */
 .settings-header { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; justify-content: space-between; }
 /* Labeled close button in the sticky panel header — always visible, hard to miss. A ghost
-   button (icon + word, fill only on hover) rather than a boxed "✕ Close": the label keeps it
+   button (icon + word, fill only on hover) rather than a boxed close button: the label keeps it
    findable, the box was what made it look like a dialog from another decade. */
 .panel-close {
 	flex: 0 0 auto;
@@ -1048,7 +1037,7 @@ details[open] > .tool-summary { margin-bottom: 4px; }
 
 /* ---- Reasoning ----
    Collapsed by default: a run's thinking dwarfs its answer, so it shows as a single
-   muted line ("✻ Thought for 12s") until the user opens it. */
+   muted line ("Thought for 12s") until the user opens it. */
 details.thinking { margin: 4px 0; }
 /* A turn that has only produced reasoning so far is one small pill — and the pill carries
    its own chip background, so the bubble's padded grey frame around it read as a big empty

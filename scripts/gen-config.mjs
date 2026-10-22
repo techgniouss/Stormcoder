@@ -35,7 +35,7 @@ const resolve = t => typeof t === 'string' && /^%.+%$/.test(t) ? (nls[t.slice(1,
 const HIDDEN = new Set([
 	'openvsChat.focus', 'openvsChat.openSettings', 'openvsChat.explainSelection', 'openvsChat.fixSelection', 'openvsChat.docSelection',
 	'openvsChat.optimizeSelection', 'openvsChat.generateTests', 'openvsChat.editSelection', 'openvsChat.completions.toggle',
-	'openvsChat.completions.trigger', 'openvsChat.completions.showStats', 'openvsChat.generateCommitMessage', 'openvsChat.newChat',
+	'openvsChat.completions.trigger', 'openvsChat.completions.showStats', 'openvsChat.newChat', 'openvsChat.generateCommitMessage',
 	'openvsChat.selectSkill', 'openvsChat.createSkill',
 ]);
 const commandList = (manifest.contributes.commands ?? [])
@@ -43,6 +43,7 @@ const commandList = (manifest.contributes.commands ?? [])
 	.map(c => ({ id: c.command, title: String(resolve(c.title)).replace(/^OpenVS Thor:\s*/i, ''), group: 'Command' }));
 commandList.push(
 	{ id: 'openvsChat.newChat', title: 'New Chat', group: 'Chat' },
+	{ id: 'openvsChat.generateCommitMessage', title: 'Write Commit Message for Staged Changes…', group: 'Git' },
 	{ id: 'openvsChat.selectSkill', title: 'Choose Active Skills…', group: 'Skills' },
 	{ id: 'openvsChat.createSkill', title: 'New Skill…', group: 'Skills' },
 );

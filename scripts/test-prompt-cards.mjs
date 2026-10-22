@@ -180,7 +180,7 @@ const askRequest = {
 	assert.strictEqual(h.posted.length, 1, 'answered once');
 	assert.ok(!card.classList.contains('prompt-open'));
 	assert.ok(card.classList.contains('prompt-answered'));
-	assert.strictEqual(card.textContent, '✓ Allowed');
+	assert.strictEqual(card.textContent, 'Allowed');
 	assert.strictEqual(h.api.size(), 0, 'no longer pending');
 }
 
@@ -296,7 +296,7 @@ const askRequest = {
 {
 	const h = harness();
 	h.api.render({ ...askRequest, question: '<img src=x onerror=alert(1)>' });
-	assert.strictEqual(h.card().find('prompt-title').textContent, '🙋 <img src=x onerror=alert(1)>');
+	assert.strictEqual(h.card().find('prompt-title').textContent, '<img src=x onerror=alert(1)>');
 	// Belt and braces: the stand-in has no innerHTML at all, so an assignment would have
 	// thrown above — but assert on the source too, so the guarantee survives someone
 	// making the stand-in more capable later.

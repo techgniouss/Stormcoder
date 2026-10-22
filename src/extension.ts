@@ -92,14 +92,9 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand('openvsChat.remoteSetTunnel', () => remoteSetTunnel(context)),
 		vscode.commands.registerCommand('openvsChat.remoteStatus', () => remoteStatus(remoteService)),
 		vscode.commands.registerCommand('openvsChat.remoteDeployRelay', () => remoteDeployRelay(context, registry)),
-		vscode.commands.registerCommand('openvsChat.generateCommitMessage', (rootUri?: vscode.Uri, _resourceGroups?: unknown, token?: vscode.CancellationToken) => {
-			// The scm/inputBox toolbar always supplies a token; only the Command Palette (no
-			// args) needs one made up here, and that one must be disposed once done with it.
-			if (token) {
-				return generateCommitMessage(registry, rootUri, token);
-			}
+		vscode.commands.registerCommand('openvsChat.generateCommitMessage', () => {
 			const cts = new vscode.CancellationTokenSource();
-			return generateCommitMessage(registry, rootUri, cts.token).finally(() => cts.dispose());
+			return generateCommitMessage(registry, cts.token).finally(() => cts.dispose());
 		}),
 	);
 

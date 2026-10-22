@@ -30,11 +30,14 @@ const mock = http.createServer((req, res) => {
 		const send = (delta, finish) => res.write(`data: ${JSON.stringify({ id: 'x', object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason: finish ?? null }] })}\n\n`);
 		res.writeHead(200, { 'content-type': 'text/event-stream' });
 		const last = json.messages[json.messages.length - 1];
-		if (json.tools?.some(t => t.function?.name === 'write_file') && last.role !== 'tool') {
+		// Write once per conversation: after that the agent's own completion gate may nudge the
+		// model to verify, and a model that wrote again on every nudge would never finish.
+		const alreadyWrote = json.messages.some(m => m.role === 'tool');
+		if (json.tools?.some(t => t.function?.name === 'write_file') && !alreadyWrote) {
 			send({ role: 'assistant', content: 'Creating the file.' });
 			send({ tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'hello.txt', content: 'hello from mjolnir\n' }) } }] });
 			send({}, 'tool_calls');
-		} else if (last.role === 'tool') {
+		} else if (alreadyWrote) {
 			send({ role: 'assistant', content: 'Done: hello.txt written.' });
 			send({}, 'stop');
 		} else {
@@ -86,9 +89,10 @@ try {
 	await chat.locator('#modeSelect').selectOption('agent');
 	await chat.locator('#input').fill('create hello.txt');
 	await chat.locator('#input').press('Enter');
-	await chat.getByText('Done: hello.txt written.').waitFor({ timeout: 20000 });
+	await chat.getByText('Done: hello.txt written.').first().waitFor({ timeout: 20000 });
 	assert.equal(fs.readFileSync(path.join(project, 'hello.txt'), 'utf8'), 'hello from mjolnir\n');
 	assert.ok(seen.some(r => r.tools?.some(t => t.function?.name === 'write_file')), 'the agent request offered write_file');
+	if (process.env.E2E_SHOT) { await page.screenshot({ path: process.env.E2E_SHOT }); }
 
 	// 3. Settings opens as its own view, and areas switch.
 	await page.click('[data-view=settings]');
