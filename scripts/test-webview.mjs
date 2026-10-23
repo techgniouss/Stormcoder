@@ -265,7 +265,7 @@ for (const excluded of EXCLUDED_FROM_WEBVIEW) {
 // IIFE, so a wrong order is not a degraded transcript, it is a ReferenceError that leaves
 // the whole panel blank.
 {
-	const order = ['qr.js', 'pairing.js', 'prompts.js', 'highlight.js', 'markdown.js', 'main.js'];
+	const order = ['qr.js', 'pairing.js', 'prompts.js', 'highlight.js', 'glyphs.js', 'markdown.js', 'main.js'];
 	const positions = order.map(file => {
 		const at = host.search(new RegExp(`mediaUri\\('${file.replace('.', '\\.')}'\\)`));
 		assert.ok(at > 0, `${file} is served`);

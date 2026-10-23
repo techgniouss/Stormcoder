@@ -10,5 +10,5 @@
 		"strictNullChecks": true,
 		"skipLibCheck": true
 	},
-	"files": ["media/main.js", "media/prompts.js", "media/markdown.js", "media/highlight.js", "shell/menu-kit.js", "media/qr.js", "media/pairing.js", "media/webview.d.ts"]
+	"files": ["media/main.js", "media/prompts.js", "media/markdown.js", "media/highlight.js", "media/glyphs.js", "shell/menu-kit.js", "media/qr.js", "media/pairing.js", "media/webview.d.ts"]
 }

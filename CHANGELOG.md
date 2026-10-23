@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.3.2
+
+- The thinking-line drawings are redrawn: a war hammer with a lightning rune, a bearded axe with a glowing edge, a winged helm and a golden bolt, all on one grid with steel, gold and wood gradients that read on both themes. No raster artwork is used; they are inline SVG in the new `media/glyphs.js`.
+- The words and drawings are now paired. Asgard and Avengers lines ("Charging Stormbreaker", "Opening the Bifrost", "Assembling the Avengers") get the Asgard set, the storm-and-code lines get the line glyphs, and plain verbs draw from both. Every original line is kept; a pick is 35% plain, 35% Asgard, 30% storm.
+
 ## 1.3.1
 
 - The original Asgard and Avengers thinking lines and the helm, hammer and Stormbreaker artwork are back, kept alongside the new storm-and-code lines and glyphs. A pick is a coin flip between the plain verbs ("Thinking", "Pondering") and the flavour lines, so the plain verbs stay at half of what is shown, and the glyph rotates through all eight drawings.
