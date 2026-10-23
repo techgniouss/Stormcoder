@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.4
+
+- Character lines get their own drawings. Doctor Doom lines ("Consulting Doctor Doom", "Forging Doombots", "Snapping the gauntlet") show Doom's green-hooded iron mask or a gem-set gauntlet; a new Spider-Man set ("Spinning a web", "Tingling spider-sense", "Thwip!", "Swinging between skyscrapers") shows a spider, a web or the red mask. Six word lists now share the line: plain 24%, Asgard 20%, storm 16%, doomsday 16%, Doom 12%, Spider-Man 12%.
+
 ## 1.3.3
 
 - The thinking-line drawings are now rendered as lit objects instead of flat icons: brushed steel with a polished horizon reflection, gold, grained wood, glass, bone and lava, each with a specular edge and a glowing part that animates (the hammer's rune, the axe's charged edge, the skull's ember eyes, the cracks in a dying planet, falling sand). They are drawn 26px, up from 20.

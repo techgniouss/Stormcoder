@@ -998,7 +998,7 @@ body.settings-window #settingsPanel {
 	margin-right: 4px;
 	vertical-align: -3px;
 }
-.tool-glyph .thor-glyph, .tool-glyph .storm-glyph, .tool-glyph .doom-glyph { width: auto; height: 16px; }
+.tool-glyph .thor-glyph, .tool-glyph .storm-glyph, .tool-glyph .doom-glyph, .tool-glyph .hero-glyph { width: auto; height: 16px; }
 .tool.tool-error { border-left-color: var(--vscode-inputValidation-errorBorder, #f14c4c); }
 .tool-head {
 	display: flex;
@@ -1484,7 +1484,7 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 	line-height: 0;
 }
 /* The lit-object glyphs (media/glyphs.js). Each animates the glowing part of its drawing. */
-.thor-glyph, .doom-glyph { display: block; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / .45)); }
+.thor-glyph, .doom-glyph, .hero-glyph { display: block; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / .45)); }
 .thor-glyph.hammer { transform-origin: 50% 92%; animation: stormcoder-swing 1.8s ease-in-out infinite; }
 .thor-glyph.axe { transform-origin: 50% 92%; animation: stormcoder-swing 2.1s ease-in-out infinite; }
 .thor-glyph.axe .edge { animation: glow-breathe 1.2s ease-in-out infinite; }
@@ -1510,6 +1510,14 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 .doom-glyph.hourglass .stream { animation: sand-fall .5s linear infinite; }
 .doom-glyph.hourglass { animation: hourglass-turn 6s ease-in-out infinite; }
 .doom-glyph.cracked .lava { animation: glow-breathe 1.5s ease-in-out infinite; }
+.doom-glyph.doommask .eyes { animation: glow-breathe 1.8s ease-in-out infinite; }
+.doom-glyph.gauntlet .gems { animation: glow-breathe 1.2s ease-in-out infinite; }
+.hero-glyph.spider { animation: meteor-fall 1.4s ease-in-out infinite; }
+.hero-glyph.spider .legs { transform-origin: 50% 50%; animation: leg-twitch .7s ease-in-out infinite; }
+.hero-glyph.web .strands { transform-origin: 50% 50%; animation: web-sway 2.6s ease-in-out infinite; }
+.hero-glyph.mask { animation: helm-hover 2.8s ease-in-out infinite; }
+@keyframes leg-twitch { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06, .96); } }
+@keyframes web-sway { 0%, 100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
 @keyframes meteor-fall { 0%, 100% { transform: translate(-1px, 1px); } 50% { transform: translate(1.5px, -1.5px); } }
 @keyframes sand-fall { to { stroke-dashoffset: -4; } }
 @keyframes hourglass-turn { 0%, 80% { transform: rotate(0); } 95%, 100% { transform: rotate(180deg); } }
@@ -1569,7 +1577,7 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 }
 @media (prefers-reduced-motion: reduce) {
 	.working-word { animation: none; }
-	.thor-glyph, .storm-glyph, .doom-glyph, .thor-glyph *, .storm-glyph *, .doom-glyph * { animation: none !important; }
+	.thor-glyph, .storm-glyph, .doom-glyph, .hero-glyph, .thor-glyph *, .storm-glyph *, .doom-glyph *, .hero-glyph * { animation: none !important; }
 	.empty-hero { animation: none; }
 }
 

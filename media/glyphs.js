@@ -9,6 +9,8 @@
  *
  *  - `asgard`: a war hammer, a lightning axe, a winged helm and a golden bolt.
  *  - `storm`: a thundercloud, a star, a ringed planet, glowing code brackets and a plasma bolt.
+ *  - `villain` and `spiderman`: Doctor Doom's mask and an Infinity-style gauntlet; a spider, a web and a
+ *    masked face, each for its own lines.
  *  - `doom`: a skull, a falling meteor, a black hole, an hourglass and a cracking planet, for the
  *    doomsday lines ("Counting down to doomsday", "Feeding the black hole").
  *
@@ -68,11 +70,16 @@
 		+ lin('sc-tube', '0,0,0,1', stop(0, '#bff0ff') + stop(0.5, '#3fa4ff') + stop(1, '#2a56e0'))
 		+ lin('sc-ring', '0,0,1,0', stop(0, '#9c7a55') + stop(0.5, '#f1d9a8') + stop(1, '#8a6a47'))
 		+ rad('sc-gas', '.35,.3,.95', stop(0, '#ffe2b0') + stop(0.5, '#d4813a') + stop(1, '#4a2112'))
+		// Characters
+		+ lin('sc-hood', '0,0,0,1', stop(0, '#3f8a54') + stop(0.5, '#245c38') + stop(1, '#0d2415'))
+		+ rad('sc-suit', '.4,.3,.9', stop(0, '#ff5a52') + stop(0.55, '#d3141f') + stop(1, '#6e0610'))
+		+ rad('sc-ink', '.4,.3,.9', stop(0, '#4a4f60') + stop(0.5, '#1b1e29') + stop(1, '#06070b'))
+		+ lin('sc-web', '0,0,1,1', stop(0, '#ffffff') + stop(1, '#aebbd0'))
 		+ '</defs></svg>';
 
 	/**
 	 * Opens a glyph.
-	 * @param {'thor' | 'storm' | 'doom'} kind
+	 * @param {'thor' | 'storm' | 'doom' | 'hero'} kind
 	 * @param {string} cls
 	 */
 	const open = (kind, cls) => `<svg class="${kind}-glyph ${cls}" viewBox="0 0 64 64" width="${PX}" height="${PX}" aria-hidden="true">`;
@@ -256,6 +263,72 @@
 		+ `<path d="M55 49l5 2-1 5-5-1Z" fill="url(#sc-rock)" ${line}/>`
 		+ '</svg>';
 
+	// ---- Villains and heroes ------------------------------------------------------------------
+
+	const doommask = open('doom', 'doommask')
+		+ `<path d="M32 2C17 2 8 13 8 28l2 22 12 12h20l12-12 2-22C56 13 47 2 32 2Z" fill="url(#sc-hood)" ${line}/>`
+		+ '<path d="M32 2C47 2 56 13 56 28l-2 22-12 12H32Z" fill="#000" opacity=".25"/>'
+		+ spec('M14 20C16 12 22 7 29 5', 0.45)
+		+ `<path d="M32 10C22 10 17 17 17 27v13c0 7 7 14 15 16 8-2 15-9 15-16V27c0-10-5-17-15-17Z" fill="url(#sc-steel-v)" ${line}/>`
+		+ '<path d="M32 10c10 0 15 7 15 17v13c0 7-7 14-15 16Z" fill="#0f1626" opacity=".25"/>'
+		+ '<path d="M17 24c10 4 20 4 30 0v-3c-10 4-20 4-30 0Z" fill="url(#sc-gold-h)" stroke="#141a29" stroke-width="1"/>'
+		+ '<g class="eyes"><path d="M20.5 29h9l-1 4h-7Z" fill="#0a0e17"/><path d="M34.5 29h9l-1 4h-7Z" fill="#0a0e17"/>'
+		+ '<path d="M22 30.4h6M36 30.4h6" stroke="#9dff6a" stroke-width="1.6" stroke-linecap="round"/></g>'
+		+ '<path d="M32 33 29 45h6Z" fill="#0f1626" opacity=".4"/>'
+		+ cut('M25 49h14', 0.7)
+		+ '<circle cx="21" cy="39" r="1.1" fill="#fff" opacity=".7"/><circle cx="43" cy="39" r="1.1" fill="#fff" opacity=".7"/>'
+		+ spec('M20 18C22 14 26 12 30 11.4', 0.8)
+		+ '</svg>';
+
+	const gauntlet = open('doom', 'gauntlet')
+		// Cuff, then four fingers, palm and thumb in gold
+		+ `<path d="M18 52h28l2 10H16Z" fill="url(#sc-steel-v)" ${line}/>`
+		+ `<path d="M13 30l7-3v16l-5 3-7-9Z" fill="url(#sc-gold-h)" ${line}/>`
+		+ `<rect x="17" y="8" width="7.5" height="22" rx="3.6" fill="url(#sc-gold-h)" ${line}/>`
+		+ `<rect x="25" y="4" width="7.5" height="26" rx="3.6" fill="url(#sc-gold-h)" ${line}/>`
+		+ `<rect x="33" y="6" width="7.5" height="24" rx="3.6" fill="url(#sc-gold-h)" ${line}/>`
+		+ `<rect x="41" y="11" width="7" height="19" rx="3.4" fill="url(#sc-gold-h)" ${line}/>`
+		+ `<path d="M17 28h31v18c0 5-4 8-9 8H26c-5 0-9-3-9-8Z" fill="url(#sc-gold-v)" ${line}/>`
+		+ cut('M24.6 12v14M32.8 9v17M40.8 12v14', 0.5)
+		+ '<g class="gems"><circle cx="24" cy="36" r="3" fill="#3b8bff"/><circle cx="32.5" cy="34.5" r="3" fill="#35d07f"/><circle cx="41" cy="36" r="3" fill="#a24bff"/>'
+		+ '<circle cx="28" cy="45" r="3" fill="#ff8a1f"/><circle cx="37" cy="45" r="3" fill="#ff3b3b"/><circle cx="12" cy="36" r="2.6" fill="#ffe14a"/></g>'
+		+ '<g fill="#fff" opacity=".7"><circle cx="23" cy="35" r=".9"/><circle cx="31.5" cy="33.5" r=".9"/><circle cx="40" cy="35" r=".9"/><circle cx="27" cy="44" r=".9"/><circle cx="36" cy="44" r=".9"/></g>'
+		+ spec('M19 30c0-8 1-16 4-20', 0.6)
+		+ '</svg>';
+
+	const leg = ''
+		+ `<path d="M27 22C19 12 11 9 5 14M26 26C16 22 8 24 3 33M26 31C16 33 9 40 7 51M27 35C21 44 17 52 16 60" fill="none" stroke="#8a93a8" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round"/>`
+		+ '<path d="M27 22C19 12 11 9 5 14M26 26C16 22 8 24 3 33M26 31C16 33 9 40 7 51M27 35C21 44 17 52 16 60" fill="none" stroke="url(#sc-ink)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>';
+	const spider = open('hero', 'spider')
+		+ '<g class="legs">' + leg + mirror(leg) + '</g>'
+		+ `<ellipse cx="32" cy="42" rx="10" ry="13" fill="url(#sc-ink)" stroke="#8a93a8" stroke-width="1.4"/>`
+		+ `<ellipse cx="32" cy="22" rx="6.4" ry="6" fill="url(#sc-ink)" stroke="#8a93a8" stroke-width="1.4"/>`
+		+ '<path class="mark" d="M32 36 27.4 42 32 48 36.6 42Z" fill="url(#sc-suit)"/>'
+		+ '<g fill="#ff5a52"><circle cx="29.6" cy="20.4" r="1.3"/><circle cx="34.4" cy="20.4" r="1.3"/></g>'
+		+ spec('M25 36C24 41 25 46 28 50', 0.45)
+		+ '</svg>';
+
+	const web = open('hero', 'web')
+		+ '<g class="strands" fill="none" stroke="url(#sc-web)" stroke-linecap="round" stroke-linejoin="round">'
+		+ '<path d="M32 3V61M3 32H61M11.5 11.5 52.5 52.5M52.5 11.5 11.5 52.5" stroke-width="1.5"/>'
+		+ '<path d="M32 12 40.5 23.5 52 32 40.5 40.5 32 52 23.5 40.5 12 32 23.5 23.5Z" stroke-width="1.4"/>'
+		+ '<path d="M32 21 36 28 43 32 36 36 32 43 28 36 21 32 28 28Z" stroke-width="1.4"/>'
+		+ '<path d="M32 4 41 18 58 32 41 46 32 60 23 46 6 32 23 18Z" stroke-width="1.2" opacity=".75"/></g>'
+		+ '<g fill="#fff"><circle cx="40.5" cy="23.5" r="1.7"/><circle cx="23.5" cy="40.5" r="1.7"/><circle cx="52" cy="32" r="1.4"/><circle cx="12" cy="32" r="1.4"/></g>'
+		+ '</svg>';
+
+	const mask = open('hero', 'mask')
+		+ `<path d="M32 3C18 3 10 13 10 28c0 17 9 31 22 33 13-2 22-16 22-33C54 13 46 3 32 3Z" fill="url(#sc-suit)" ${line}/>`
+		+ '<path d="M32 3C46 3 54 13 54 28c0 17-9 31-22 33Z" fill="#000" opacity=".18"/>'
+		+ '<path d="M32 4V60M11.5 20Q32 27 52.5 20M10.5 33Q32 41 53.5 33M14 46Q32 53 50 46M20 9 25 56M44 9 39 56" fill="none" stroke="#2a0509" stroke-opacity=".7" stroke-width="1"/>'
+		+ spec('M16 18C18 11 24 6.5 30 5.4', 0.55)
+		+ '<g class="lens"><path d="M13.5 29Q22 20 30 33Q21 38 13.5 29Z" fill="#fff" stroke="#141018" stroke-width="2.2" stroke-linejoin="round"/>'
+		+ '<path d="M50.5 29Q42 20 34 33Q43 38 50.5 29Z" fill="#fff" stroke="#141018" stroke-width="2.2" stroke-linejoin="round"/></g>'
+		+ '</svg>';
+
+	const villain = [doommask, gauntlet];
+	const spiderman = [spider, web, mask];
+
 	const asgard = [hammer, axe, helm, goldbolt];
 	const storm = [cloud, star, planet, brackets, plasma];
 	const doom = [skull, meteor, blackhole, hourglass, cracked];
@@ -273,5 +346,5 @@
 	}
 
 	// @ts-ignore: shared global, like the other media modules
-	globalThis.StormGlyphs = { asgard, storm, doom, all: [...asgard, ...storm, ...doom], ensureDefs };
+	globalThis.StormGlyphs = { asgard, storm, doom, villain, spiderman, all: [...asgard, ...storm, ...doom, ...villain, ...spiderman], ensureDefs };
 }());

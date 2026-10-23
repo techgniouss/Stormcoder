@@ -1799,9 +1799,9 @@
 	// shows a whimsical cycling verb + elapsed time, so a queued or slow model never
 	// looks like the chat went idle. The first real token replaces it.
 
-	// Four lists on purpose. The plain verbs read as "a mind is working" and carry the message;
+	// Six lists on purpose. The plain verbs read as "a mind is working" and carry the message;
 	// the Asgard-and-Avengers, storm-and-code and doomsday lines are the character. A pick rolls the
-	// list first (30% plain, 25% Asgard, 23% storm, 22% doomsday) so no list drowns the others.
+	// list first (24% plain, 20% Asgard, 16% storm, 16% doomsday, 12% Doom and gauntlet, 12% Spider-Man) so no list drowns the others.
 	const PLAIN_WORDS = [
 		'Thinking',
 		'Pondering',
@@ -1840,9 +1840,19 @@
 		'Following the static', 'Rewiring the stack', 'Tuning the flux',
 	];
 
+	const VILLAIN_WORDS = [
+		'Consulting Doctor Doom', 'Doom has foreseen this', 'Reciting Latverian decrees', 'Forging Doombots',
+		'Gazing from behind the iron mask', 'Bowing before Doom', 'Snapping the gauntlet', 'Gathering the Infinity Stones',
+		'Doom is never wrong',
+	];
+	const SPIDER_WORDS = [
+		'Spinning a web', 'Tingling spider-sense', 'Swinging between skyscrapers', 'Thwip!',
+		'Crawling the walls', 'Catching bugs in the web', 'Great power, great responsibility', 'Your friendly neighborhood agent',
+		'Slinging web fluid', 'Dodging with spider-sense',
+	];
 	const DOOM_WORDS = [
 		'Counting down to doomsday', 'Reading the Doomsday Clock', 'Awaiting the apocalypse', 'Ragnarok incoming',
-		'Summoning Surtur', 'Binding Fenrir', 'Descending into Hel', 'Consulting Doctor Doom',
+		'Summoning Surtur', 'Binding Fenrir', 'Descending into Hel',
 		'Staring into the abyss', 'Feeding the black hole', 'Dodging asteroids', 'Cracking the planet',
 		'Brewing Armageddon', 'Awakening Galactus', 'Eclipsing the sun', 'Forging the end times',
 		'Outrunning the singularity', 'Crossing the event horizon', 'Sifting the ashes', 'Bracing for impact',
@@ -1853,7 +1863,8 @@
 	// hammer, axe, helm and golden bolt; the storm-and-code lines get Stormcoder's own line glyphs;
 	// a plain verb draws from the Asgard and storm sets (never doom, which would make "Marinating" look ominous). Pairing them is what makes "Charging Stormbreaker" arrive with
 	// an axe rather than a cloud.
-	const GLYPH_SETS = { asgard: StormGlyphs.asgard, storm: StormGlyphs.storm, doom: StormGlyphs.doom, plain: [...StormGlyphs.asgard, ...StormGlyphs.storm] };
+	const GLYPH_SETS = { asgard: StormGlyphs.asgard, storm: StormGlyphs.storm, doom: StormGlyphs.doom, villain: StormGlyphs.villain, spider: StormGlyphs.spiderman, plain: [...StormGlyphs.asgard, ...StormGlyphs.storm] };
+	const WORD_POOLS = { plain: PLAIN_WORDS, asgard: ASGARD_WORDS, storm: STORM_WORDS, doom: DOOM_WORDS, villain: VILLAIN_WORDS, spider: SPIDER_WORDS };
 	let workingTimer = 0;
 	let lastWorkingWord = '';
 	let lastWordKind = 'plain';
@@ -1866,8 +1877,8 @@
 		let word = lastWorkingWord;
 		while (word === lastWorkingWord) {
 			const roll = Math.random();
-			const kind = roll < 0.3 ? 'plain' : roll < 0.55 ? 'asgard' : roll < 0.78 ? 'storm' : 'doom';
-			const pool = kind === 'plain' ? PLAIN_WORDS : kind === 'asgard' ? ASGARD_WORDS : kind === 'storm' ? STORM_WORDS : DOOM_WORDS;
+			const kind = roll < 0.24 ? 'plain' : roll < 0.44 ? 'asgard' : roll < 0.6 ? 'storm' : roll < 0.76 ? 'doom' : roll < 0.88 ? 'villain' : 'spider';
+			const pool = WORD_POOLS[kind];
 			word = pool[Math.floor(Math.random() * pool.length)];
 			lastWordKind = kind;
 		}

@@ -132,6 +132,8 @@ declare const StormGlyphs: {
 	asgard: string[];
 	storm: string[];
 	doom: string[];
+	villain: string[];
+	spiderman: string[];
 	all: string[];
 	ensureDefs(): void;
 };
