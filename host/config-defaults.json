@@ -123,7 +123,7 @@
 		"openvsChat.persona.thinking": true,
 		"openvsChat.persona.environment": true,
 		"openvsChat.persona.compactPrompt": "auto",
-		"openvsChat.systemPrompt": "You are a helpful AI coding assistant integrated into the editor. Answer concisely and use Markdown for code.",
+		"openvsChat.systemPrompt": "You are a helpful AI coding assistant in the Stormcoder desktop app. Answer concisely and use Markdown for code.",
 		"openvsChat.maxTokens": 8192
 	},
 	"schema": {
@@ -393,11 +393,15 @@
 		},
 		"openvsChat.agent.maxSteps": {
 			"type": "number",
-			"description": "%config.agent.maxSteps%"
+			"description": "%config.agent.maxSteps%",
+			"minimum": 1,
+			"maximum": 1000
 		},
 		"openvsChat.agent.maxContextTokens": {
 			"type": "number",
-			"description": "%config.agent.maxContextTokens%"
+			"description": "%config.agent.maxContextTokens%",
+			"minimum": 0,
+			"maximum": 10000000
 		},
 		"openvsChat.ask.autoContext": {
 			"type": "string",
@@ -410,11 +414,15 @@
 		},
 		"openvsChat.stream.idleTimeoutMs": {
 			"type": "number",
-			"description": "%config.stream.idleTimeoutMs%"
+			"description": "%config.stream.idleTimeoutMs%",
+			"minimum": 0,
+			"maximum": 3600000
 		},
 		"openvsChat.agent.commandTimeoutMs": {
 			"type": "number",
-			"description": "%config.agent.commandTimeoutMs%"
+			"description": "%config.agent.commandTimeoutMs%",
+			"minimum": 1000,
+			"maximum": 3600000
 		},
 		"openvsChat.agent.shell": {
 			"type": "string",
@@ -430,7 +438,9 @@
 		},
 		"openvsChat.agent.maxAgentMessages": {
 			"type": "number",
-			"description": "%config.agent.maxAgentMessages%"
+			"description": "%config.agent.maxAgentMessages%",
+			"minimum": 0,
+			"maximum": 50
 		},
 		"openvsChat.agent.parallelResearch": {
 			"type": "boolean",
@@ -442,7 +452,9 @@
 		},
 		"openvsChat.agent.maxRunMinutes": {
 			"type": "number",
-			"description": "%config.agent.maxRunMinutes%"
+			"description": "%config.agent.maxRunMinutes%",
+			"minimum": 1,
+			"maximum": 1440
 		},
 		"openvsChat.agent.traceTiming": {
 			"type": "boolean",
@@ -458,7 +470,9 @@
 		},
 		"openvsChat.remote.promptEscalationSeconds": {
 			"type": "number",
-			"description": "%config.remote.promptEscalationSeconds%"
+			"description": "%config.remote.promptEscalationSeconds%",
+			"minimum": 0,
+			"maximum": 3600
 		},
 		"openvsChat.remote.enabled": {
 			"type": "boolean",
@@ -498,11 +512,15 @@
 		},
 		"openvsChat.remote.deviceTokenDays": {
 			"type": "number",
-			"description": "%config.remote.deviceTokenDays%"
+			"description": "%config.remote.deviceTokenDays%",
+			"minimum": 1,
+			"maximum": 3650
 		},
 		"openvsChat.remote.idleDisableHours": {
 			"type": "number",
-			"description": "%config.remote.idleDisableHours%"
+			"description": "%config.remote.idleDisableHours%",
+			"minimum": 1,
+			"maximum": 8760
 		},
 		"openvsChat.remote.approvalFloor": {
 			"type": "string",
@@ -608,7 +626,9 @@
 		},
 		"openvsChat.maxTokens": {
 			"type": "number",
-			"description": "%config.maxTokens%"
+			"description": "%config.maxTokens%",
+			"minimum": 1,
+			"maximum": 1000000
 		}
 	}
 }

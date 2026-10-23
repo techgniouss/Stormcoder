@@ -536,6 +536,34 @@ function remoteStatus(remoteService: RemoteService): void {
 }
 
 /**
+ * Where the relay package can actually be run from. In a packaged build the bundled copy sits
+ * inside `app.asar`, which a child process cannot use as a working directory, so it is mapped to
+ * the `app.asar.unpacked` mirror (see `asarUnpack`). If that location is not writable (a
+ * read-only AppImage or a system-wide install), `npm install` could not create `node_modules`
+ * there, so the package is copied into the user's storage directory and run from the copy.
+ * Returns `undefined` when the package cannot be found or copied.
+ */
+function writableRelayDir(bundled: string, storageDir: string): string | undefined {
+	const unpacked = bundled.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
+	if (!fs.existsSync(unpacked)) {
+		return undefined;
+	}
+	try {
+		fs.accessSync(unpacked, fs.constants.W_OK);
+		return unpacked;
+	} catch {
+		// read-only install: fall through to the copy
+	}
+	const copy = path.join(storageDir, 'openvs-relay');
+	try {
+		fs.cpSync(unpacked, copy, { recursive: true, force: true });
+		return copy;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
  * `openvsChat.remoteDeployRelay`: turns the manual "deploy your own relay" steps this
  * extension has always required (see `remoteEnable`'s warning) into one click — installs
  * `openvs-relay/`'s dependencies if needed, mints and uploads a `RELAY_PEPPER` secret, runs
@@ -556,8 +584,8 @@ function remoteStatus(remoteService: RemoteService): void {
  * non-interactive spawn.
  */
 async function remoteDeployRelay(context: vscode.ExtensionContext, registry: ProviderRegistry): Promise<void> {
-	const relayDir = vscode.Uri.joinPath(context.extensionUri, 'openvs-relay').fsPath;
-	if (!fs.existsSync(relayDir)) {
+	const relayDir = writableRelayDir(vscode.Uri.joinPath(context.extensionUri, 'openvs-relay').fsPath, context.globalStorageUri.fsPath);
+	if (!relayDir || !fs.existsSync(relayDir)) {
 		vscode.window.showErrorMessage(
 			'Could not find the bundled openvs-relay/ — the relay package is missing from this installation. '
 			+ 'From a checkout: cd openvs-relay && npm install && npx wrangler deploy, then paste the printed URL into "openvsChat.remote.relayUrl".');

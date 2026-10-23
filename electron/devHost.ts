@@ -53,10 +53,30 @@ function rewrite(text: string, origin: string): string {
 	return text.split(ASSET_ORIGIN).join(origin);
 }
 
+/** Whether a Host / Origin header names this machine's loopback (blocks other websites and DNS rebinding). */
+function isLoopbackHost(hostHeader: string | undefined): boolean {
+	return typeof hostHeader === 'string' && /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(hostHeader);
+}
+
+function isLoopbackOrigin(origin: string | undefined): boolean {
+	return origin === undefined || (/^https?:\/\//i.test(origin) && isLoopbackHost(origin.replace(/^https?:\/\//i, '')));
+}
+
 const server = http.createServer((req, res) => {
-	const url = new URL(req.url ?? '/', 'http://localhost');
+	if (!isLoopbackHost(req.headers.host)) {
+		res.writeHead(403).end('Forbidden');
+		return;
+	}
+	let rel: string;
+	let url: URL;
+	try {
+		url = new URL(req.url ?? '/', 'http://localhost');
+		rel = decodeURIComponent(url.pathname).replace(/^\/+/, '');
+	} catch {
+		res.writeHead(400).end('Bad request');
+		return;
+	}
 	const origin = `http://${req.headers.host}`;
-	const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '');
 	const parts = rel.split('/');
 	if (parts[0] === 'view') {
 		const html = controller.getViewHtml(parts[1]) ?? '<!doctype html><title>Starting</title>';
@@ -76,13 +96,23 @@ const server = http.createServer((req, res) => {
 	});
 });
 
-const wss = new WebSocketServer({ server });
+// A page on another website could otherwise open this socket and drive the engine (including
+// file edits) as the user; browsers always send Origin, so anything not from loopback is refused.
+const wss = new WebSocketServer({ server, verifyClient: (info: { origin: string; req: http.IncomingMessage }) => isLoopbackHost(info.req.headers.host) && isLoopbackOrigin(info.origin) });
 wss.on('connection', ws => {
 	socket = ws;
 	controller.rendererGone();
 	ws.on('close', () => { if (socket === ws) { socket = undefined; controller.rendererGone(); } });
 	ws.on('message', async raw => {
-		const m = JSON.parse(String(raw)) as { call: string; id?: number; args: unknown[] };
+		let m: { call: string; id?: number; args: unknown[] };
+		try {
+			m = JSON.parse(String(raw)) as { call: string; id?: number; args: unknown[] };
+			if (typeof m?.call !== 'string' || !Array.isArray(m.args)) {
+				throw new Error('malformed call');
+			}
+		} catch {
+			return;
+		}
 		try {
 			const value = await controller.handleCall(m.call, m.args);
 			if (m.id !== undefined) { ws.send(JSON.stringify({ reply: m.id, value })); }
@@ -103,4 +133,6 @@ server.listen(port, '127.0.0.1', async () => {
 	console.log(`STORMCODER_DEV http://127.0.0.1:${actual}/shell/index.html?port=${actual}`);
 });
 
+process.on('uncaughtException', err => { console.error('uncaught', err); });
+process.on('unhandledRejection', err => { console.error('unhandled rejection', err); });
 process.on('SIGTERM', () => { void controller.shutdown().finally(() => process.exit(0)); });

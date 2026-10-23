@@ -27,7 +27,7 @@ export type UiRequest =
 
 /** A fire-and-forget notification to the shell. */
 export type UiEvent =
-	| { kind: 'progress'; id: number; title?: string; message?: string; done: boolean }
+	| { kind: 'progress'; id: number; title?: string; message?: string; done: boolean; cancellable?: boolean }
 	| { kind: 'status'; id: string; text: string; tooltip?: string; visible: boolean }
 	| { kind: 'log'; channel: string; line: string }
 	| { kind: 'focus'; view: ViewId }
@@ -60,6 +60,8 @@ export interface HostEnvironment {
 	openExternal(url: string): Promise<boolean>;
 	readClipboard(): Promise<string>;
 	writeClipboard(text: string): Promise<void>;
+	/** Moves a file or folder to the OS trash. Optional: without it, `useTrash` deletes are permanent. */
+	trash?(file: string): Promise<void>;
 	/** Encrypts/decrypts secrets at rest. */
 	encrypt(plain: string): Buffer;
 	decrypt(data: Buffer): string;
@@ -80,19 +82,63 @@ export function host(): HostEnvironment {
 	return current;
 }
 
-/** Atomically-ish writes JSON: temp file then rename, so a crash never leaves half a file. */
+/** Atomically-ish writes JSON: temp file, fsync, then rename, so a crash never leaves half a file. */
 export function writeJsonFile(file: string, value: unknown): void {
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	const tmp = `${file}.${process.pid}.tmp`;
-	fs.writeFileSync(tmp, JSON.stringify(value, null, '\t'), { mode: 0o600 });
-	fs.renameSync(tmp, file);
+	try {
+		const fd = fs.openSync(tmp, 'w', 0o600);
+		try {
+			fs.writeFileSync(fd, JSON.stringify(value, null, '\t'));
+			fs.fsyncSync(fd);
+		} finally {
+			fs.closeSync(fd);
+		}
+		fs.renameSync(tmp, file);
+	} catch (err) {
+		try {
+			fs.rmSync(tmp, { force: true });
+		} catch {
+			// best effort; the original error is the one that matters
+		}
+		throw err;
+	}
+}
+
+/** The outcome of reading a JSON file: the value, plus why it could not be used (if so). */
+export interface JsonReadResult<T> {
+	value: T;
+	/** Set when the file exists but is unreadable or not valid JSON; `value` is then the fallback. */
+	error?: string;
+}
+
+/** Reads JSON, telling a missing file (fine, `fallback`) apart from a corrupt one (`error` set). */
+export function readJsonFileChecked<T>(file: string, fallback: T): JsonReadResult<T> {
+	let text: string;
+	try {
+		text = fs.readFileSync(file, 'utf8');
+	} catch (err) {
+		return (err as NodeJS.ErrnoException)?.code === 'ENOENT' ? { value: fallback } : { value: fallback, error: String(err) };
+	}
+	try {
+		return { value: JSON.parse(text) as T };
+	} catch (err) {
+		return { value: fallback, error: err instanceof Error ? err.message : String(err) };
+	}
+}
+
+/** Renames an unparseable file to `<file>.corrupt-<timestamp>` so it is kept for recovery; returns the new path. */
+export function quarantineFile(file: string): string | undefined {
+	const target = `${file}.corrupt-${Date.now()}`;
+	try {
+		fs.renameSync(file, target);
+		return target;
+	} catch {
+		return undefined;
+	}
 }
 
 /** Reads JSON, returning `fallback` for a missing or corrupt file. */
 export function readJsonFile<T>(file: string, fallback: T): T {
-	try {
-		return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
-	} catch {
-		return fallback;
-	}
+	return readJsonFileChecked(file, fallback).value;
 }
