@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { McpToolDef, flattenContent } from './client';
+import { McpToolDef, flattenContent, listAllTools } from './client';
 
 /**
  * Handshake and `tools/list` budget — the same reasoning as the stdio client's: a server
@@ -24,6 +24,15 @@ export interface McpHttpConfig {
 	readonly url: string;
 	/** Extra request headers — an `Authorization: Bearer …` for a hosted server, usually. */
 	readonly headers?: Record<string, string>;
+	/** Overrides the handshake / `tools/call` budgets (milliseconds); for tests. */
+	readonly requestTimeoutMs?: number;
+}
+
+/** A non-2xx reply, carrying its status so the caller can react to a 404 specifically. */
+class HttpStatusError extends Error {
+	constructor(readonly status: number, statusText: string) {
+		super(`MCP server returned HTTP ${status} ${statusText}.`.trim());
+	}
 }
 
 /**
@@ -71,6 +80,12 @@ export class McpHttpClient {
 	private readonly streamAbort = new AbortController();
 	/** Resolves once the legacy transport has learned its POST endpoint. */
 	private endpointReady?: Promise<void>;
+	/** The version the server agreed to in `initialize`; echoed in `mcp-protocol-version`. */
+	private protocolVersion = PROTOCOL_VERSION;
+	/** The initialize params, kept to re-handshake when the server forgets our session. */
+	private initParams?: Record<string, unknown>;
+	/** A re-initialize in progress, shared by concurrent requests that hit the same 404. */
+	private reinitializing?: Promise<void>;
 
 	constructor(private readonly config: McpHttpConfig) {
 		this.postUrl = config.url;
@@ -83,8 +98,9 @@ export class McpHttpClient {
 			capabilities: {},
 			clientInfo: { name: 'openvs-chat', version: '1.0.0' },
 		};
+		this.initParams = init;
 		try {
-			await this.request('initialize', init);
+			await this.initialize(init);
 		} catch (err) {
 			// A server that only speaks the legacy transport answers a POST with 405 (or
 			// 404 when the POST path is a different one entirely). That is not a failure to
@@ -94,24 +110,44 @@ export class McpHttpClient {
 			}
 			this.transport = 'legacy-sse';
 			await this.openLegacyStream();
-			await this.request('initialize', { ...init, protocolVersion: LEGACY_PROTOCOL_VERSION });
+			this.initParams = { ...init, protocolVersion: LEGACY_PROTOCOL_VERSION };
+			await this.initialize(this.initParams);
 		}
 		this.notify('notifications/initialized', {});
 	}
 
+	/** Sends `initialize` and records the protocol version the server settled on. */
+	private async initialize(params: Record<string, unknown>): Promise<void> {
+		const result = await this.request('initialize', params);
+		if (typeof result?.protocolVersion === 'string' && result.protocolVersion) {
+			this.protocolVersion = result.protocolVersion;
+		}
+	}
+
 	async listTools(): Promise<McpToolDef[]> {
-		const result = await this.request('tools/list', {});
-		return Array.isArray(result?.tools) ? result.tools : [];
+		return listAllTools(params => this.request('tools/list', params));
 	}
 
 	/** Calls a tool and returns its content flattened to text, with an error flag. */
 	async callTool(name: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
-		const result = await this.request('tools/call', { name, arguments: args }, CALL_TIMEOUT_MS);
+		const result = await this.request('tools/call', { name, arguments: args }, this.config.requestTimeoutMs ?? CALL_TIMEOUT_MS);
 		return { text: flattenContent(result?.content), isError: result?.isError === true };
 	}
 
 	dispose(): void {
+		const wasClosed = this.closed;
 		this.closed = true;
+		// Best effort: tell a streamable server the session is over so it can free it. Sent
+		// before the abort, never awaited, and never allowed to throw.
+		if (!wasClosed && this.sessionId && this.transport === 'streamable') {
+			try {
+				const headers = this.headers('application/json');
+				delete headers['content-type'];
+				fetch(this.postUrl, { method: 'DELETE', headers, signal: AbortSignal.timeout(3_000) }).catch(() => { /* best effort */ });
+			} catch {
+				// ignore
+			}
+		}
 		this.streamAbort.abort();
 		this.failAll('MCP client disposed.');
 	}
@@ -128,12 +164,12 @@ export class McpHttpClient {
 			headers['mcp-session-id'] = this.sessionId;
 		}
 		if (this.transport === 'streamable') {
-			headers['mcp-protocol-version'] = PROTOCOL_VERSION;
+			headers['mcp-protocol-version'] = this.protocolVersion;
 		}
 		return headers;
 	}
 
-	private async request(method: string, params: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<any> {
+	private async request(method: string, params: unknown, timeoutMs = this.config.requestTimeoutMs ?? REQUEST_TIMEOUT_MS): Promise<any> {
 		if (this.closed) {
 			return Promise.reject(new Error('MCP client is not connected.'));
 		}
@@ -153,7 +189,10 @@ export class McpHttpClient {
 
 		// The POST is fired without awaiting its body here in the legacy case: there the
 		// reply arrives on the GET stream, and the POST itself only answers 202.
-		const post = this.post(body, timeoutMs).catch((err: unknown) => {
+		// Not awaited: a failure rejects this request's own pending entry, and `settled` is
+		// returned straight away so its rejection (error or timeout) always has a handler. A
+		// reply delivered on an SSE response must not wait for that response to close either.
+		void this.postWithRecovery(body, timeoutMs, method).catch((err: unknown) => {
 			const entry = this.pending.get(id);
 			if (entry) {
 				this.pending.delete(id);
@@ -161,10 +200,30 @@ export class McpHttpClient {
 				entry.reject(err instanceof Error ? err : new Error(String(err)));
 			}
 		});
-		if (this.transport === 'streamable') {
-			await post;
-		}
 		return settled;
+	}
+
+	/**
+	 * Posts a request; if the server answers 404 on a session we hold (it restarted or expired
+	 * the session), starts a fresh session once and retries. Initialize and the legacy
+	 * transport have no session to recover, so their 404s are reported as they are.
+	 */
+	private async postWithRecovery(body: string, timeoutMs: number, method: string): Promise<void> {
+		try {
+			await this.post(body, timeoutMs);
+		} catch (err) {
+			if (!(err instanceof HttpStatusError) || err.status !== 404 || !this.sessionId
+				|| method === 'initialize' || this.transport !== 'streamable' || !this.initParams || this.closed) {
+				throw err;
+			}
+			this.reinitializing ??= (async () => {
+				this.sessionId = undefined;
+				await this.initialize(this.initParams!);
+				this.notify('notifications/initialized', {});
+			})().finally(() => { this.reinitializing = undefined; });
+			await this.reinitializing;
+			await this.post(body, timeoutMs);
+		}
 	}
 
 	/**
@@ -174,28 +233,40 @@ export class McpHttpClient {
 	 */
 	private async post(body: string, timeoutMs: number): Promise<void> {
 		const abort = new AbortController();
-		const timer = setTimeout(() => abort.abort(), timeoutMs);
+		let timedOut = false;
+		// The timer covers the whole exchange, body included: an SSE response whose stream
+		// never completes would otherwise hang forever once its headers had arrived.
+		const timer = setTimeout(() => { timedOut = true; abort.abort(); }, timeoutMs);
 		// A dispose must cut a request short rather than leave it running to its timeout.
 		const onDispose = () => abort.abort();
 		this.streamAbort.signal.addEventListener('abort', onDispose);
-		let response: Response;
 		try {
-			response = await fetch(this.postUrl, {
-				method: 'POST',
-				headers: this.headers('application/json, text/event-stream'),
-				body,
-				signal: abort.signal,
-			});
+			await this.exchange(body, abort.signal);
+		} catch (err) {
+			if (timedOut) {
+				throw new Error(`MCP request timed out after ${Math.round(timeoutMs / 1000)}s.`);
+			}
+			throw err;
 		} finally {
 			clearTimeout(timer);
 			this.streamAbort.signal.removeEventListener('abort', onDispose);
 		}
+	}
+
+	/** One POST and the reading of its response, under `signal`. */
+	private async exchange(body: string, signal: AbortSignal): Promise<void> {
+		const response = await fetch(this.postUrl, {
+			method: 'POST',
+			headers: this.headers('application/json, text/event-stream'),
+			body,
+			signal,
+		});
 		const session = response.headers.get('mcp-session-id');
 		if (session) {
 			this.sessionId = session;
 		}
 		if (!response.ok) {
-			throw new Error(`MCP server returned HTTP ${response.status} ${response.statusText}.`.trim());
+			throw new HttpStatusError(response.status, response.statusText);
 		}
 		if (response.status === 202 || !response.body) {
 			return; // Accepted; the reply (if any) arrives on the GET stream.
@@ -204,7 +275,7 @@ export class McpHttpClient {
 		if (type.includes('text/event-stream')) {
 			// One response stream per request: it ends once the reply this POST was waiting
 			// for has arrived, so it is read to completion rather than left open.
-			await this.readEvents(response, abort.signal);
+			await this.readEvents(response, signal);
 			return;
 		}
 		const text = await response.text();
@@ -240,7 +311,14 @@ export class McpHttpClient {
 				return false;
 			}
 			try {
-				this.postUrl = new URL(data.trim(), this.config.url).toString();
+				const endpoint = new URL(data.trim(), this.config.url);
+				// Requests (carrying the configured headers, Authorization included) go to this
+				// URL, so a server must not be able to redirect them to another origin.
+				if (endpoint.origin !== new URL(this.config.url).origin) {
+					rejectEndpoint(new Error(`MCP server named an endpoint on a different origin (${endpoint.origin}); refusing to send requests there.`));
+					return true;
+				}
+				this.postUrl = endpoint.toString();
 				resolveEndpoint();
 			} catch {
 				rejectEndpoint(new Error(`MCP server named an unusable endpoint: ${data.trim()}`));
@@ -259,7 +337,7 @@ export class McpHttpClient {
 		// Clear the gate before awaiting it: `request` awaits `endpointReady` on the way in,
 		// and the initialize below is itself a request.
 		this.endpointReady = undefined;
-		await withTimeout(ready, REQUEST_TIMEOUT_MS, 'The MCP server never named its POST endpoint.');
+		await withTimeout(ready, this.config.requestTimeoutMs ?? REQUEST_TIMEOUT_MS, 'The MCP server never named its POST endpoint.');
 	}
 
 	/**

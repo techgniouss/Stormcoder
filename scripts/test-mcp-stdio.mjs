@@ -63,4 +63,53 @@ try {
 	client.dispose();
 }
 
+// --- robustness: split multibyte, pagination, replies buffered before exit, SIGTERM ignored ---
+{
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-stdio2-'));
+	const pidFile = path.join(dir, 'pid');
+	const script = path.join(dir, 'server2.cjs');
+	fs.writeFileSync(script, `
+require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+process.on('SIGTERM', () => { /* ignored on purpose */ });
+const send = m => process.stdout.write(JSON.stringify(m) + '\\n');
+require('readline').createInterface({ input: process.stdin }).on('line', line => {
+	const m = JSON.parse(line);
+	if (m.method === 'initialize') {
+		send({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2024-11-05', capabilities: {} } });
+	} else if (m.method === 'tools/list') {
+		if (!m.params.cursor) {
+			// Split the reply in the middle of a 4-byte character.
+			const bytes = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'a', description: '\\u{1F600}smile' }], nextCursor: 'c2' } }) + '\\n');
+			const cut = bytes.indexOf(Buffer.from('\\u{1F600}')) + 2;
+			process.stdout.write(bytes.subarray(0, cut));
+			setTimeout(() => process.stdout.write(bytes.subarray(cut)), 50);
+		} else {
+			send({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'b' }] } });
+		}
+	} else if (m.method === 'tools/call') {
+		send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: 'last words' }] } });
+		if (m.params.name === 'quit') { process.exit(0); }
+	}
+});
+`);
+	const c = new McpStdioClient({ command: process.execPath, args: [script] });
+	await c.start();
+	const tools = await c.listTools();
+	assert.deepEqual(tools.map(t => t.name), ['a', 'b'], 'nextCursor pages are followed');
+	assert.equal(tools[0].description, '\u{1F600}smile', 'a multibyte character split across reads survives');
+	const res = await c.callTool('quit', {});
+	assert.equal(res.text, 'last words', 'a reply written just before the server exits is delivered');
+	c.dispose();
+
+	// A server that ignores SIGTERM is killed anyway.
+	const c2 = new McpStdioClient({ command: process.execPath, args: [script] });
+	await c2.start();
+	const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+	c2.dispose();
+	await new Promise(r => setTimeout(r, 2600));
+	let alive = true;
+	try { process.kill(pid, 0); } catch { alive = false; }
+	assert.equal(alive, false, 'dispose escalates to SIGKILL');
+}
+
 console.log('test-mcp-stdio.mjs: all assertions passed');

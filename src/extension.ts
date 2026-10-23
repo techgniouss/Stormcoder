@@ -10,7 +10,7 @@ import { WebAuthManager } from './auth';
 import { RoleRouter } from './auto/router';
 import { ChatViewProvider, InlineKind } from './chatViewProvider';
 import { generateCommitMessage } from './git/commitMessage';
-import { McpManager, promptingConsent, rememberProjectConsent } from './mcp/manager';
+import { McpManager, isMissingFile, promptingConsent, rememberProjectConsent } from './mcp/manager';
 import { loadEnvFile } from './oauth';
 import { ProviderRegistry } from './providers/registry';
 import { setStreamIdleTimeout } from './providers/types';
@@ -394,12 +394,35 @@ async function mcpAdd(mcp: McpManager, workspaceState: vscode.Memento): Promise<
 	if (target.id === 'project' && root) {
 		const file = vscode.Uri.joinPath(root, '.openvs', 'mcp.json');
 		let config: { servers: Record<string, unknown> } = { servers: {} };
+		let raw: string | undefined;
 		try {
-			const existing = JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(file)));
-			// Accept both wrapped and bare formats; keep whatever map we find.
-			config = existing.servers ? existing : (existing.mcpServers ? { servers: existing.mcpServers } : { servers: existing });
-		} catch {
+			raw = new TextDecoder().decode(await vscode.workspace.fs.readFile(file));
+		} catch (err) {
+			if (!isMissingFile(err)) {
+				vscode.window.showErrorMessage(`MCP: could not read ${file.fsPath} (${err instanceof Error ? err.message : String(err)}); nothing was changed.`);
+				return;
+			}
 			// New file.
+		}
+		if (raw !== undefined) {
+			// An existing file that does not parse is the user's work in progress: refuse to
+			// overwrite it (which would silently drop every server already in it).
+			let existing: any;
+			try {
+				existing = JSON.parse(raw);
+			} catch (err) {
+				vscode.window.showErrorMessage(`MCP: ${file.fsPath} is not valid JSON (${err instanceof Error ? err.message : String(err)}); fix it first. Nothing was changed.`);
+				return;
+			}
+			// Accept both wrapped and bare formats; keep whatever map we find.
+			const servers = existing && typeof existing === 'object' && !Array.isArray(existing)
+				? (existing.servers ?? existing.mcpServers ?? existing)
+				: undefined;
+			if (!servers || typeof servers !== 'object' || Array.isArray(servers)) {
+				vscode.window.showErrorMessage(`MCP: ${file.fsPath} does not hold a map of servers; fix it first. Nothing was changed.`);
+				return;
+			}
+			config = existing.servers ? existing : { servers };
 		}
 		config.servers[id] = entry;
 		await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(JSON.stringify(config, null, '\t') + '\n'));

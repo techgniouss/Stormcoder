@@ -21,17 +21,22 @@ const files = {
 	'/repo/.openvs/skills/plain.md': '# Plain Skill\n> Says what it does.\n\nBody.',
 	'/repo/.openvs/skills/quoted.md': '---\r\nname: "Quoted Name"\r\ndescription: \'single line\'\r\n---\r\n# A Heading\r\n> not this\r\n',
 	'/repo/.openvs/skills/compress/SKILL.md': caveman,
+	'/repo/.openvs/skills/UPPER.MD': '---\nname: Upper\ndescription: first part\n  second part\n---\nbody',
+	'/repo/.openvs/skills/README.md': '# Readme\n> not a skill',
+	'/repo/.openvs/skills/linked.md': '# Linked\n> via symlink',
+	'/repo/.openvs/skills/bad.md': '---\nname: Bad\ndescription: "unclosed\n---\nbody',
 };
 const dirs = {
-	'/repo/.openvs/skills': [['plain.md', FILE], ['quoted.md', FILE], ['compress', DIRECTORY], ['empty', DIRECTORY], ['notes.txt', FILE]],
+	'/repo/.openvs/skills': [['plain.md', FILE], ['quoted.md', FILE], ['compress', DIRECTORY], ['empty', DIRECTORY], ['notes.txt', FILE], ['UPPER.MD', FILE], ['README.md', FILE], ['linked.md', 0], ['bad.md', FILE]],
 };
 const vscodeStub = {
-	FileType: { File: FILE, Directory: DIRECTORY },
+	FileType: { Unknown: 0, File: FILE, Directory: DIRECTORY, SymbolicLink: 64 },
 	Uri: { joinPath: (base, ...parts) => ({ path: [base.path, ...parts].join('/') }) },
 	workspace: {
 		workspaceFolders: [{ uri: { path: '/repo' } }],
 		getConfiguration: () => ({ get: () => [] }),
 		fs: {
+			async stat() { return { type: FILE | 64 }; },
 			async readFile(uri) {
 				if (!(uri.path in files)) { throw new Error(`ENOENT ${uri.path}`); }
 				return new TextEncoder().encode(files[uri.path]);
@@ -56,6 +61,9 @@ assert.deepStrictEqual(found, [
 	{ id: 'plain', name: 'Plain Skill', description: 'Says what it does.' },
 	{ id: 'quoted', name: 'Quoted Name', description: 'single line' },
 	{ id: 'compress', name: 'caveman-compress', description: 'Compress natural language memory files (CLAUDE.md, todos, pr' },
+	{ id: 'UPPER', name: 'Upper', description: 'first part second part' },
+	{ id: 'linked', name: 'Linked', description: 'via symlink' },
+	{ id: 'bad', name: 'Bad', description: '"unclosed' },
 ]);
 
 console.log('test-skills: all assertions passed');

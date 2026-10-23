@@ -24,6 +24,42 @@ const CALL_TIMEOUT_MS = 120_000;
 /** How much of a server's stderr is retained to explain a failure. */
 const MAX_STDERR_CHARS = 4_000;
 
+/**
+ * The longest single stdout line kept while waiting for its newline. A server that never
+ * sends one (or a runaway log line) would otherwise grow the buffer without bound; an
+ * oversized line is dropped whole, through to its newline.
+ */
+const MAX_LINE_CHARS = 16 * 1024 * 1024;
+
+/** How long a server gets to exit after SIGTERM before it is killed outright. */
+const KILL_GRACE_MS = 2_000;
+
+/** Most `tools/list` pages followed; a server cycling its cursor must not loop forever. */
+const MAX_TOOL_PAGES = 50;
+
+/**
+ * Follows `nextCursor` pagination on `tools/list` so a server with more tools than one page
+ * holds does not silently lose the rest. Shared so both transports page identically.
+ */
+export async function listAllTools(page: (params: Record<string, unknown>) => Promise<any>): Promise<McpToolDef[]> {
+	const tools: McpToolDef[] = [];
+	const seen = new Set<string>();
+	let cursor: string | undefined;
+	for (let i = 0; i < MAX_TOOL_PAGES; i++) {
+		const result = await page(cursor === undefined ? {} : { cursor });
+		if (Array.isArray(result?.tools)) {
+			tools.push(...result.tools);
+		}
+		const next = result?.nextCursor;
+		if (typeof next !== 'string' || !next || seen.has(next)) {
+			break;
+		}
+		seen.add(next);
+		cursor = next;
+	}
+	return tools;
+}
+
 /** A tool advertised by an MCP server (`tools/list`). */
 export interface McpToolDef {
 	readonly name: string;
@@ -115,7 +151,10 @@ export class McpStdioClient {
 	private nextId = 1;
 	private readonly pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
 	private buffer = '';
+	/** True while discarding the rest of an oversized line, up to its newline. */
+	private skippingLine = false;
 	private closed = false;
+	private killTimer?: ReturnType<typeof setTimeout>;
 	/** Rolling tail of the server's stderr, used to explain a failure. */
 	private stderr = '';
 
@@ -131,6 +170,10 @@ export class McpStdioClient {
 			shell: plan.shell,
 			windowsHide: true,
 		});
+		// Decode as a stream: a multibyte character split across two reads would otherwise
+		// become two replacement characters under a per-chunk toString().
+		this.proc.stdout?.setEncoding('utf8');
+		this.proc.stderr?.setEncoding('utf8');
 		this.proc.stdout?.on('data', (chunk: any) => this.onData(chunk));
 		// stderr MUST be drained. It is piped, and a pipe nobody reads fills its OS buffer
 		// (~64KB) and then blocks the child's next write forever — so a chatty server did
@@ -142,9 +185,20 @@ export class McpStdioClient {
 		// A dead process must be recognized as dead. Without this the client stayed "open"
 		// over a corpse: each call wrote to a closed pipe and then waited out the full
 		// timeout, turning one crash into minutes of stalled agent steps.
+		// Pending calls are failed on 'close', not 'exit': 'exit' can fire while the last
+		// stdout chunks (a reply written just before exiting) are still unread. A grandchild
+		// holding the pipes open can delay 'close' indefinitely, so 'exit' arms a short fallback.
+		let exitCode: number | null = null;
+		const fail = () => this.failAll(`MCP server process exited${exitCode === null ? '' : ` (code ${exitCode})`}.${this.stderrTail()}`);
 		this.proc.on('exit', (code: number | null) => {
 			this.closed = true;
-			this.failAll(`MCP server process exited${code === null ? '' : ` (code ${code})`}.${this.stderrTail()}`);
+			exitCode = code;
+			setTimeout(fail, 1_000).unref();
+		});
+		this.proc.on('close', (code: number | null) => {
+			this.closed = true;
+			exitCode = code ?? exitCode;
+			fail();
 		});
 		this.proc.on('error', (err: any) => {
 			this.closed = true;
@@ -163,8 +217,7 @@ export class McpStdioClient {
 	}
 
 	async listTools(): Promise<McpToolDef[]> {
-		const result = await this.request('tools/list', {});
-		return Array.isArray(result?.tools) ? result.tools : [];
+		return listAllTools(params => this.request('tools/list', params));
 	}
 
 	/** Calls a tool and returns its content flattened to text, with an error flag. */
@@ -180,8 +233,17 @@ export class McpStdioClient {
 			// shell alone would orphan it, and every restart would leak another.
 			if (process.platform === 'win32' && this.proc?.pid !== undefined) {
 				spawn('taskkill', ['/pid', String(this.proc.pid), '/T', '/F'], { windowsHide: true }).on('error', () => this.proc?.kill());
-			} else {
-				this.proc?.kill();
+			} else if (this.proc && this.proc.exitCode === null && this.proc.signalCode === null) {
+				const proc = this.proc;
+				proc.kill();
+				// A server that ignores SIGTERM must not be left running across restarts.
+				this.killTimer = setTimeout(() => {
+					if (proc.exitCode === null && proc.signalCode === null) {
+						try { proc.kill('SIGKILL'); } catch { /* already gone */ }
+					}
+				}, KILL_GRACE_MS);
+				this.killTimer.unref();
+				proc.once('exit', () => clearTimeout(this.killTimer));
 			}
 		} catch {
 			// ignore
@@ -192,7 +254,16 @@ export class McpStdioClient {
 	// --- internals --------------------------------------------------------------
 
 	private onData(chunk: any): void {
-		this.buffer += chunk.toString();
+		let text: string = typeof chunk === 'string' ? chunk : chunk.toString();
+		if (this.skippingLine) {
+			const nl = text.indexOf('\n');
+			if (nl < 0) {
+				return;
+			}
+			this.skippingLine = false;
+			text = text.slice(nl + 1);
+		}
+		this.buffer += text;
 		let newline: number;
 		while ((newline = this.buffer.indexOf('\n')) >= 0) {
 			const line = this.buffer.slice(0, newline).trim();
@@ -200,6 +271,10 @@ export class McpStdioClient {
 			if (line) {
 				this.handleMessage(line);
 			}
+		}
+		if (this.buffer.length > MAX_LINE_CHARS) {
+			this.buffer = '';
+			this.skippingLine = true;
 		}
 	}
 
