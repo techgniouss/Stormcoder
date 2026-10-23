@@ -7,6 +7,11 @@
 	const ORIGIN = location.origin;
 	const $ = id => document.getElementById(id);
 
+	/** 'dark' or 'light'; the choice is remembered, and the first run follows the system. */
+	let theme = 'dark';
+	try { theme = localStorage.getItem('sc-theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'); } catch (e) { /* storage unavailable */ }
+	document.documentElement.dataset.theme = theme;
+
 	const frames = { chat: $('view-chat'), settings: $('view-settings') };
 	const frameReady = { chat: false, settings: false };
 	/** Which rail destination is showing; `skills`/`mcp` are areas of the settings frame. */
@@ -19,7 +24,7 @@
 
 	// ------------------------------------------------------------------ frames
 
-	function frameUrl(view) { return ORIGIN + '/view/' + view + '?t=' + Date.now(); }
+	function frameUrl(view) { return ORIGIN + '/view/' + view + '?t=' + Date.now() + '&theme=' + theme; }
 
 	function postToFrame(view, message) {
 		const w = frames[view].contentWindow;
@@ -35,6 +40,7 @@
 		frames[view].addEventListener('load', () => {
 			if (!frames[view].src || frames[view].src === 'about:blank') { return; }
 			frameReady[view] = true;
+			navFrame(view, { theme: theme });
 			if (view === 'settings' && pendingArea) {
 				navFrame('settings', { area: pendingArea });
 				pendingArea = null;
@@ -53,7 +59,16 @@
 		}
 	});
 
+	/** True while any chat tab has a run in flight; drives the run line and the rail dot. */
+	function setBusy(busy) {
+		$('runLine').classList.toggle('on', busy);
+		document.querySelector('.rail-btn[data-view="chat"]').classList.toggle('busy', busy);
+	}
+
 	api.onViewMessage(({ view, message }) => {
+		if (message && message.type === 'sessions' && Array.isArray(message.sessions)) {
+			setBusy(message.sessions.some(x => x && x.streaming));
+		}
 		if (frames[view]) { postToFrame(view, message); }
 	});
 	api.onViewReload(({ view }) => {
@@ -61,6 +76,15 @@
 		frameReady[view] = false;
 		frames[view].src = frameUrl(view);
 	});
+
+	function setTheme(next) {
+		theme = next === 'light' ? 'light' : 'dark';
+		document.documentElement.dataset.theme = theme;
+		try { localStorage.setItem('sc-theme', theme); } catch (e) { /* storage unavailable */ }
+		for (const view of Object.keys(frames)) { navFrame(view, { theme: theme }); }
+	}
+	window.__setTheme = setTheme;
+	$('themeBtn').addEventListener('click', () => setTheme(theme === 'light' ? 'dark' : 'light'));
 
 	// ------------------------------------------------------------------ navigation
 
@@ -72,13 +96,33 @@
 
 	const TITLES = { chat: 'Chat', history: 'History', skills: 'Skills', mcp: 'MCP servers', settings: 'Settings' };
 
+	/** Slides the single accent indicator to the active rail button. */
+	function placeIndicator() {
+		const btn = document.querySelector('.rail-btn[aria-current="page"]');
+		const ind = document.querySelector('.rail-ind');
+		if (!btn || !ind) { return; }
+		const rail = document.getElementById('rail').getBoundingClientRect();
+		const box = btn.getBoundingClientRect();
+		ind.style.transform = 'translateY(' + Math.round(box.top - rail.top + (box.height - 20) / 2) + 'px)';
+		ind.classList.add('on');
+	}
+	window.addEventListener('resize', placeIndicator);
+
 	function mark(viewKey) {
+		const changed = current !== viewKey;
 		current = viewKey;
-		$('viewTitle').textContent = TITLES[viewKey] || 'Chat';
+		const title = $('viewTitle');
+		if (changed || !title.textContent) {
+			title.textContent = TITLES[viewKey] || 'Chat';
+			title.classList.remove('swap');
+			void title.offsetWidth;
+			title.classList.add('swap');
+		}
 		for (const btn of document.querySelectorAll('.rail-btn[data-view]')) {
 			if (btn.dataset.view === viewKey) { btn.setAttribute('aria-current', 'page'); }
 			else { btn.removeAttribute('aria-current'); }
 		}
+		placeIndicator();
 	}
 
 	function navigate(viewKey) {
@@ -106,6 +150,7 @@
 	}
 	$('paletteBtn').addEventListener('click', () => openCommands());
 	$('projectBtn').addEventListener('click', () => openProjects());
+	$('kbdHint').addEventListener('click', () => openCommands());
 
 	function shortcut(key) {
 		if (key === 'k') { openCommands(); }
@@ -125,6 +170,18 @@
 	// ------------------------------------------------------------------ palette
 
 	let paletteBusy = Promise.resolve();
+
+	/** Fills the palette footer with key hints: [[key, what it does], ...]. */
+	function setFoot(foot, hints) {
+		foot.textContent = '';
+		for (const [key, what] of hints) {
+			const item = document.createElement('span');
+			const k = document.createElement('kbd');
+			k.textContent = key;
+			item.append(k, ' ' + what);
+			foot.appendChild(item);
+		}
+	}
 
 	/**
 	 * One list-and-filter surface serves the command palette and every host prompt (text
@@ -151,8 +208,8 @@
 			input.placeholder = opts.placeholder || '';
 			input.value = opts.value || '';
 			list.classList.toggle('hidden', opts.mode === 'input');
-			foot.textContent = opts.mode === 'input' ? 'Enter to confirm · Esc to cancel'
-				: opts.many ? 'Space to toggle · Enter to confirm · Esc to cancel' : 'Enter to choose · Esc to cancel';
+			setFoot(foot, opts.mode === 'input' ? [['Enter', 'confirm'], ['Esc', 'cancel']]
+				: opts.many ? [['Space', 'toggle'], ['Enter', 'confirm'], ['Esc', 'cancel']] : [['\u2191\u2193', 'move'], ['Enter', 'choose'], ['Esc', 'close']]);
 
 			function matches(it, q) {
 				if (!q) { return true; }
@@ -183,7 +240,7 @@
 					}
 					const label = document.createElement('span');
 					label.className = 'label';
-					label.textContent = x.it.label.replace(/\$\([a-z-]+\)\s*/g, '');
+					highlight(label, x.it.label.replace(/\$\([a-z-]+\)\s*/g, ''), q);
 					li.appendChild(label);
 					if (x.it.description) {
 						const d = document.createElement('span');
@@ -201,6 +258,22 @@
 					li.addEventListener('click', () => choose(n));
 					list.appendChild(li);
 				});
+			}
+
+			/** Writes `text` into `el`, wrapping each query word it contains in <mark> (no innerHTML). */
+			function highlight(el, text, query) {
+				const words = query.split(/\s+/).filter(Boolean).map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+				if (!words.length) { el.textContent = text; return; }
+				const re = new RegExp('(' + words.join('|') + ')', 'ig');
+				let last = 0;
+				for (const m of text.matchAll(re)) {
+					if (m.index > last) { el.appendChild(document.createTextNode(text.slice(last, m.index))); }
+					const mark = document.createElement('mark');
+					mark.textContent = m[0];
+					el.appendChild(mark);
+					last = m.index + m[0].length;
+				}
+				if (last < text.length) { el.appendChild(document.createTextNode(text.slice(last))); }
 			}
 
 			function markSelected() {
@@ -345,7 +418,7 @@
 			p.textContent = req.text;
 			el.append(head, p);
 			let timer;
-			const done = value => { clearTimeout(timer); el.remove(); resolve(value); };
+			const done = value => { clearTimeout(timer); el.classList.add('leaving'); setTimeout(() => el.remove(), 180); resolve(value); };
 			if (req.actions.length) {
 				const row = document.createElement('div');
 				row.className = 'toast-actions';
@@ -468,6 +541,7 @@
 
 	api.onState(state => {
 		appState = state;
+		$('kbdMod').textContent = state.platform === 'darwin' ? '\u2318' : 'Ctrl';
 		$('projectName').textContent = state.folder ? baseName(state.folder) : 'No folder open';
 		$('projectBtn').title = state.folder || 'Open a project folder so the agent can work on it';
 		$('trustPill').classList.toggle('hidden', !state.folder || state.trusted);

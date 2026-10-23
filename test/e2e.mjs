@@ -85,7 +85,7 @@ try {
 	await chat.getByText('Hello from the mock model.').waitFor({ timeout: 15000 });
 
 	// 2. An Agent turn runs the tool loop and writes into the project folder.
-	await chat.locator('#modeSelect').selectOption('agent');
+	await chat.locator('.seg-btn[data-value=agent]').click();
 	await chat.locator('#input').fill('create hello.txt');
 	await chat.locator('#input').press('Enter');
 	await chat.getByText('Done: hello.txt written.').first().waitFor({ timeout: 20000 });
@@ -105,6 +105,38 @@ try {
 	await page.fill('#paletteInput', 'mcp');
 	assert.ok(await page.locator('#paletteList li', { hasText: 'MCP' }).count() > 0);
 	await page.keyboard.press('Escape');
+
+	// The mode switch drives the real select, and its thumb sits under the chosen segment.
+	assert.equal(await chat.locator('#modeSelect').inputValue(), 'agent');
+	const thumbX = await chat.locator('.seg-thumb').evaluate(el => parseFloat(el.style.getPropertyValue('--x')));
+	const segX = await chat.locator('.seg-btn.on').evaluate(el => el.offsetLeft);
+	assert.equal(thumbX, segX, 'the switch thumb follows the selected mode');
+
+	// The rail indicator follows the active destination; the title swaps with it.
+	const indY = async () => page.locator('.rail-ind').evaluate(el => el.style.transform);
+	const before = await indY();
+	await page.click('[data-view=history]');
+	assert.notEqual(await indY(), before, 'the rail indicator moved');
+	assert.equal(await page.textContent('#viewTitle'), 'History');
+	await page.click('[data-view=chat]');
+
+	// Theme: switching changes the shell and both frames, and the choice is remembered.
+	await page.click('#themeBtn');
+	const themeOf = async sel => page.frameLocator(sel).locator('html').evaluate(el => el.dataset.theme);
+	const shellTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+	// The frame is told by message, so it follows a moment later.
+	await page.waitForFunction(t => document.getElementById('view-chat').contentDocument.documentElement.dataset.theme === t, shellTheme);
+	assert.equal(await themeOf('#view-chat'), shellTheme);
+	assert.equal(await page.evaluate(() => localStorage.getItem('sc-theme')), shellTheme);
+	await page.click('#themeBtn');
+	assert.notEqual(await page.evaluate(() => document.documentElement.dataset.theme), shellTheme);
+
+	// Reduced motion removes the entrance animations rather than just shortening them.
+	await page.emulateMedia({ reducedMotion: 'reduce' });
+	await page.click('[data-view=settings]');
+	const anim = await settings.locator('.area.active').evaluate(el => getComputedStyle(el).animationName);
+	assert.equal(anim, 'none', 'no entrance animation under reduced motion');
+	await page.emulateMedia({ reducedMotion: 'no-preference' });
 
 	// 5. Creating a skill walks three prompts, writes the file, opens it in the built-in editor,
 	//    and the skill then shows up in Settings.

@@ -382,12 +382,26 @@
 		}
 	}
 
+	/** A stable hue (0-359) for a provider id, so each card keeps its own tint across renders. */
+	function hueOf(id) {
+		let h = 0;
+		for (const ch of String(id)) { h = (h * 31 + ch.charCodeAt(0)) % 360; }
+		// Steer clear of violet and indigo, which the visual identity keeps out of the interface.
+		return h >= 240 && h < 300 ? (h + 70) % 360 : h;
+	}
+
+	/** One or two capital letters standing in for a provider's logo. */
+	function monogram(label) {
+		const words = String(label).replace(/\(.*?\)/g, '').trim().split(/\s+/).filter(Boolean);
+		return ((words[0] || '?')[0] + (words.length > 1 ? words[1][0] : '')).toUpperCase();
+	}
+
 	/** Quick-start suggestions shown on the empty chat; clicking one primes the composer. */
-	const EMPTY_SUGGESTIONS = /** @type {{ icon: keyof typeof ICONS, label: string, mode: string, prompt: string }[]} */ ([
-		{ icon: 'bulb', label: 'Explain this project', mode: 'ask', prompt: 'Give me a tour of this project: what it does, how it is laid out, and where to start reading.' },
-		{ icon: 'checklist', label: 'Plan a feature', mode: 'plan', prompt: 'Plan how to add ' },
-		{ icon: 'sparkle', label: 'Let the agent fix something', mode: 'agent', prompt: 'Find and fix ' },
-		{ icon: 'slash', label: 'See all commands', mode: '', prompt: '/help' },
+	const EMPTY_SUGGESTIONS = /** @type {{ icon: keyof typeof ICONS, label: string, hint: string, mode: string, prompt: string }[]} */ ([
+		{ icon: 'bulb', label: 'Explain this project', hint: 'A guided tour of the code', mode: 'ask', prompt: 'Give me a tour of this project: what it does, how it is laid out, and where to start reading.' },
+		{ icon: 'checklist', label: 'Plan a feature', hint: 'Think it through first', mode: 'plan', prompt: 'Plan how to add ' },
+		{ icon: 'sparkle', label: 'Fix something', hint: 'The agent edits and runs code', mode: 'agent', prompt: 'Find and fix ' },
+		{ icon: 'slash', label: 'See all commands', hint: 'Slash commands and tips', mode: '', prompt: '/help' },
 	]);
 
 	function renderAll() {
@@ -420,12 +434,13 @@
 				<div class="empty-title">Stormcoder</div>
 				<div class="empty-sub">Ask about your code, plan a change, or hand the whole task to the agent — powered by the provider and model you choose.</div>
 				<div class="empty-chips"></div>
+				<div class="empty-keys"><span><kbd>Enter</kbd> send</span><span><kbd>Shift</kbd><kbd>Enter</kbd> new line</span><span><kbd>/</kbd> commands</span></div>
 				<div class="empty-footnote${hasCredential() ? ' hidden' : ''}">Add a provider key or sign in under Settings.</div>`;
 			const chips = /** @type {HTMLElement} */ (empty.querySelector('.empty-chips'));
 			for (const s of EMPTY_SUGGESTIONS) {
 				const chip = document.createElement('button');
 				chip.className = 'empty-chip';
-				chip.innerHTML = `<span class="chip-icon">${icon(s.icon)}</span>${escapeHtml(s.label)}`;
+				chip.innerHTML = `<span class="chip-icon">${icon(s.icon)}</span><span class="chip-text"><span class="chip-title">${escapeHtml(s.label)}</span><span class="chip-hint">${escapeHtml(s.hint)}</span></span>`;
 				chip.addEventListener('click', () => {
 					if (s.mode) { setMode(s.mode); }
 					els.input.value = s.prompt;
@@ -1230,7 +1245,7 @@
 				// fields had not been saved yet, wiping out whatever was still typed there.
 				// One button that saves both together closes that window.
 				card.innerHTML = `
-				<div class="provider-title"><strong>${escapeHtml(p.label)}</strong> ${status}
+				<div class="provider-title"><span class="provider-avatar" style="--h:${hueOf(p.id)}" aria-hidden="true">${escapeHtml(monogram(p.label))}</span><strong>${escapeHtml(p.label)}</strong> ${status}
 					${p.supportsTools ? '<span class="tag">agent</span>' : ''}</div>
 				<div class="provider-row">
 					<input type="password" class="key-input" placeholder="${p.requiresApiKey ? 'Paste API key…' : 'Paste API key… (optional)'}" />

@@ -343,7 +343,10 @@
 				// The language is kept on the element (rather than dropped as it was) so the
 				// Copy/Insert bar and any later highlighting have something to key off.
 				const attr = language ? ` class="language-${escapeHtml(language)}" data-language="${escapeHtml(language)}"` : '';
-				html += `<pre><code${attr}>${escapeHtml(code.replace(/\n$/, ''))}</code></pre>`;
+				const body = code.replace(/\n$/, '');
+				// Highlighting is optional: without the module (or for an unknown language) the code is just escaped.
+				const hl = /** @type {any} */ (globalThis).StormHighlight;
+				html += `<pre><code${attr}>${hl && language ? hl.highlight(body, language) : escapeHtml(body)}</code></pre>`;
 			} else if (parts[i]) {
 				// An empty prose segment is not a blank line: it is the gap before a message
 				// that opens with a fence, or after one that ends with it, and renderBlocks

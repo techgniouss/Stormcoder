@@ -4,7 +4,7 @@ A standalone desktop AI coding workspace. Chat with any model, plan a change, or
 
 Stormcoder is the desktop home of the OpenVS Thor chat engine (previously an extension for a VS Code fork), rebuilt as an Electron app with its own interface.
 
-![An agent run in Stormcoder](docs/screenshots/agent-run.png)
+![Stormcoder, dark theme](docs/screenshots/chat-dark.png)
 
 ## What you get
 
@@ -16,9 +16,13 @@ Stormcoder is the desktop home of the OpenVS Thor chat engine (previously an ext
 - **Remote control.** Pair a phone through a relay (hosted on Cloudflare, or served from your machine through a tunnel) to send messages and answer approvals away from the desk.
 - **Hard guardrails.** Protected paths, denied commands, workspace confinement and untrusted-folder write blocking are enforced in code, whatever the model says.
 
-| Settings | Command palette |
+| Light theme | Settings |
 | --- | --- |
-| ![Settings](docs/screenshots/settings.png) | ![Command palette](docs/screenshots/palette.png) |
+| ![Light theme](docs/screenshots/chat-light.png) | ![Settings](docs/screenshots/settings-dark.png) |
+
+| Welcome | Command palette |
+| --- | --- |
+| ![Welcome screen](docs/screenshots/hero-dark.png) | ![Command palette](docs/screenshots/palette-dark.png) |
 
 ## Using it
 
@@ -53,7 +57,7 @@ The engine under `src/` was written against the VS Code extension API. Instead o
 
 ## Design
 
-The interface follows the "data terminal" app style from [taste-skill](https://github.com/Leonxlnx/taste-skill): flat surfaces, no gradients or glows, colour only on data, and one 1px accent line for every selection. Tokens are in `shell/tokens.css`. The typeface is Public Sans (SIL OFL), bundled for offline use.
+The interface follows the app style from [taste-skill](https://github.com/Leonxlnx/taste-skill), pushed toward something warmer than its flat default: layered surfaces, an electric blue accent used for selection and the one primary action, soft depth where things float, and motion that confirms what you did (a sliding rail indicator, crossfading views, staggered entrances, a travelling run line). Dark and light themes share one token set in `shell/tokens.css`. The typeface is Public Sans (SIL OFL), bundled for offline use.
 
 ## Layout
 

@@ -17,6 +17,8 @@ Stormcoder is a standalone Electron desktop app. Its chat engine (`src/`) was wr
 - Editor-only features are out of scope (inline completions, code actions, active text editor). Code that reads `activeTextEditor` must handle `undefined`.
 - Hard guardrails (`src/agent/guardrails.ts`) and the trust model are enforced in code. Do not weaken them for convenience.
 - The chat UI (`media/`) is one IIFE with a static contract test (`scripts/test-webview.mjs`): ids and message types must match in both directions.
-- UI follows the taste-skill "data terminal" style: tokens in `shell/tokens.css`, flat surfaces, no gradients, glows, emoji or icons in tinted squares, one 1px accent line per selection. Check with `node <taste-skill>/scripts/lint.mjs` and `inspect.mjs --app`.
+- UI is the "Stormcoder" look built on the taste-skill app style: every colour, border and duration comes from `shell/tokens.css` (dark and light themes share names), so never hard-code colours. No emoji and no icons in tinted squares on cards. Gradients, glows and shadows are used on purpose (accent fill, ambient light, floating surfaces) and carry a `taste-skill-ignore` comment; a new gradient without one is a lint failure. Check with `node <taste-skill>/scripts/lint.mjs shell/*.css` and `inspect.mjs --app`.
+- Motion must respect `prefers-reduced-motion` (tokens collapse the durations; entrance animations are switched off in `shell/theme.css`). `test/e2e.mjs` checks this.
+- The mode dropdown is replaced by a segmented control in `shell/frame.js`; tests click `.seg-btn`, not the hidden `#modeSelect`.
 - Native modules load with `await import(...)`, never a bare `require`, in bundled code.
 - Code style: tabs, single quotes, braces always, JSDoc on functions and classes, no `any` unless unavoidable.

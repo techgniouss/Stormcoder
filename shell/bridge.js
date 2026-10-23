@@ -2,6 +2,8 @@
 // object an editor webview gets, carried over postMessage to the shell, which relays it to
 // the host process. The UI's own scripts are untouched.
 (function () {
+	// Apply the shell's theme before first paint so the frame never flashes the wrong one.
+	try { document.documentElement.dataset.theme = new URLSearchParams(location.search).get('theme') || 'dark'; } catch (e) { /* default theme */ }
 	const view = location.pathname.split('/').filter(Boolean).pop() || 'chat';
 	const stateKey = 'stormcoder-state-' + view;
 	window.acquireVsCodeApi = function () {
