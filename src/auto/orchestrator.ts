@@ -59,9 +59,11 @@ export interface AutoRunParams {
 }
 
 /** Collects what the implementer did, so the reviewer can critique the real changes. */
-interface ChangeSink {
+export interface ChangeSink {
 	readonly narration: string[];
 	readonly changes: string[];
+	/** write_file/edit_file renderings awaiting their result, by tool call id; only a successful call is committed. */
+	readonly pending?: Map<string, string>;
 	/**
 	 * How the implementation phase ended, when it ended for any reason other than
 	 * finishing. The reviewer is told: reviewing a half-applied change as though it were
@@ -228,7 +230,7 @@ export class AutoOrchestrator {
 		}
 
 		// --- 2. IMPLEMENT (agent tool-loop) -------------------------------------
-		const sink: ChangeSink = { narration: [], changes: [] };
+		const sink: ChangeSink = { narration: [], changes: [], pending: new Map() };
 		const steps = this.router.isDecompose() ? extractSteps(planText) : [];
 		if (steps.length >= 2) {
 			await this.runCodeDecomposed(codeCandidates, steps, planText, ctxMessages, params, maxTokens, cb, sink);
@@ -471,6 +473,7 @@ export class AutoOrchestrator {
 			const stepSeed: ChatMessage[] = [
 				{ role: 'system', content: codeSystem(params.baseSystemPrompt, false, params.thinking) },
 				...ctxMessages,
+				...params.history,
 				{ role: 'assistant', content: `Overall plan:\n\n${planText}` },
 				{ role: 'user', content: `Complete ONLY this step of the plan, using the tools:\n\n${steps[i]}` },
 			];
@@ -511,7 +514,9 @@ export class AutoOrchestrator {
 						throw a.source === 'configured' && isModelError(failure) ? describePinnedModelError(a, failure) : failure;
 					}
 					noteOutcome(cb, sink, outcome, `Step ${i + 1}/${steps.length}`);
-					continue;
+					// The provider is dead and nothing can take over: the later steps would
+					// fail the same way. noteOutcome recorded the step as unfinished.
+					break;
 				}
 				// The rest of the steps move to the next candidate too: the one that failed
 				// would most likely fail them the same way.
@@ -525,6 +530,10 @@ export class AutoOrchestrator {
 				continue;
 			}
 			noteOutcome(cb, sink, outcome!, `Step ${i + 1}/${steps.length}`);
+			if (outcome!.reason !== 'done') {
+				// A step that hit its limit or stalled leaves later steps building on half a change.
+				break;
+			}
 		}
 	}
 
@@ -581,16 +590,29 @@ function noteOutcome(cb: AutoCallbacks, sink: ChangeSink, outcome: RunResult, la
 }
 
 /** Extracts numbered steps ("1. …", "2) …") from a plan for decomposition. */
-function extractSteps(plan: string): string[] {
+export function extractSteps(plan: string): string[] {
 	const steps: string[] = [];
+	let inRisks = false;
 	for (const raw of plan.split('\n')) {
-		const match = /^\s*\d+[.)]\s+(.*)$/.exec(raw);
-		if (match && match[1].trim()) {
+		// A heading or bold label such as "Risks:" opens a list that is not work to do.
+		const heading = /^\s{0,3}(?:#{1,6}\s+|\*\*)?\s*([A-Za-z][A-Za-z ]*?)\s*(?:\*\*)?:?\s*$/.exec(raw);
+		if (heading) {
+			inRisks = /^(risks?|unknowns?|open questions?|assumptions?|notes?)\b/i.test(heading[1]);
+			continue;
+		}
+		const match = /^\d+[.)]\s+(.*)$/.exec(raw);
+		if (!inRisks && match && match[1].trim()) {
 			steps.push(match[1].trim());
+			if (steps.length >= MAX_DECOMPOSED_STEPS) {
+				break;
+			}
 		}
 	}
 	return steps;
 }
+
+/** The most steps a plan is split into; a longer list is more likely prose than a work breakdown. */
+const MAX_DECOMPOSED_STEPS = 12;
 
 function requireReady(a: RoleAssignment): void {
 	if (!a.ready) {
@@ -690,11 +712,11 @@ function truncate(text: string, max: number): string {
  * two empty strings and, having no changes to fault, reported the work correct and
  * complete. A reviewer that cannot see the change is worse than no reviewer at all.
  */
-function recordChangeStart(sink: ChangeSink, raw: ToolCall): void {
+export function recordChangeStart(sink: ChangeSink, raw: ToolCall): void {
 	const call = normalizeToolCall(raw);
 	if (call.name === 'write_file') {
 		const path = asString(call.args.path);
-		sink.changes.push(`Wrote \`${path}\`:\n\`\`\`\n${truncate(asString(call.args.content), 2000)}\n\`\`\``);
+		sink.pending?.set(raw.id, `Wrote \`${path}\`:\n\`\`\`\n${truncate(asString(call.args.content), 2000)}\n\`\`\``);
 	}
 	if (call.name === 'edit_file') {
 		const path = asString(call.args.path);
@@ -705,11 +727,19 @@ function recordChangeStart(sink: ChangeSink, raw: ToolCall): void {
 			return `Replaced:\n\`\`\`\n${truncate(asString(fields.oldText), 1000)}\n\`\`\`\nWith:\n\`\`\`\n${truncate(asString(fields.newText), 1000)}\n\`\`\``;
 		}).join('\n');
 		const count = entries.length > 1 ? ` (${entries.length} edits)` : '';
-		sink.changes.push(`Edited \`${path}\`${count}:\n${rendered}`);
+		sink.pending?.set(raw.id, `Edited \`${path}\`${count}:\n${rendered}`);
 	}
 }
 
-function recordChangeEnd(sink: ChangeSink, raw: ToolCall, result: string, _isError: boolean): void {
+export function recordChangeEnd(sink: ChangeSink, raw: ToolCall, result: string, isError: boolean): void {
+	// A write the tool refused or failed never happened; only a successful one reaches the reviewer.
+	const staged = sink.pending?.get(raw.id);
+	if (staged !== undefined) {
+		sink.pending?.delete(raw.id);
+		if (!isError) {
+			sink.changes.push(staged);
+		}
+	}
 	const call = normalizeToolCall(raw);
 	if (call.name === 'run_command') {
 		// `commandTextOf` joins the list form the same way the executor does; `String(...)`

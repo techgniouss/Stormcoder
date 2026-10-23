@@ -153,7 +153,7 @@ const ROLE_AFFINITY: Record<RoutedRole, RegExp[]> = {
 };
 
 /** Small/fast checkpoints — usable, but ranked under a larger sibling from the same key. */
-const LIGHTWEIGHT = /mini|lite|small|tiny|instant|haiku|flash|\b[1-9]b\b|-[1-9]b\b|1[0-9]b\b/i;
+const LIGHTWEIGHT = /(?<![a-z])mini(?![a-z])|ministral|lite|small|tiny|instant|haiku|flash|\b[1-9]b\b|-[1-9]b\b|1[0-9]b\b/i;
 
 /**
  * Magnitude of the lightweight-checkpoint adjustment to a candidate's score. Auto roles

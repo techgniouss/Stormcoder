@@ -314,4 +314,13 @@ function beforeEach() {
 	);
 }
 
+// 'mini' inside 'gemini' is not a lightweight marker; real mini checkpoints still are.
+{
+	const { scoreForRole } = await import(new URL('../out/auto/router.js', import.meta.url));
+	const plan = m => scoreForRole('plan', m, false, 0);
+	assert.ok(plan('gemini-2.5-pro') >= plan('some-big-model') - 0, 'gemini is not penalized as lightweight');
+	assert.ok(plan('gpt-5-mini') < plan('gpt-5'));
+	assert.ok(plan('o4-mini') < plan('o4'));
+}
+
 console.log('test-auto-router: all assertions passed');

@@ -422,11 +422,15 @@
 		},
 		"openvsChat.agent.maxSubagents": {
 			"type": "number",
-			"description": "%config.agent.maxSubagents%"
+			"description": "%config.agent.maxSubagents%",
+			"minimum": 0,
+			"maximum": 16
 		},
 		"openvsChat.agent.maxSubagentDepth": {
 			"type": "number",
-			"description": "%config.agent.maxSubagentDepth%"
+			"description": "%config.agent.maxSubagentDepth%",
+			"minimum": 0,
+			"maximum": 4
 		},
 		"openvsChat.agent.maxAgentMessages": {
 			"type": "number",

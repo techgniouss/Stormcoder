@@ -1195,6 +1195,9 @@ async function runAuto(agentSteps, { maxSteps = 20, history = [{ role: 'user', c
 // models reach for, and reading `args.oldText` off that call yielded an edit of one empty
 // string into another — a diff with nothing in it, which no reviewer can fault.
 {
+	// Only edits that actually applied are shown to the reviewer, so the text must exist.
+	const savedA = workspaceFiles['a.ts'];
+	workspaceFiles['a.ts'] = 'const a = 1\nconst b = 3\n';
 	const prompt = await runAuto([
 		{
 			content: '', toolCalls: [{
@@ -1215,12 +1218,14 @@ async function runAuto(agentSteps, { maxSteps = 20, history = [{ role: 'user', c
 		[true, true, true, true, true],
 		'every edit in the batch is shown to the reviewer',
 	);
+	workspaceFiles['a.ts'] = savedA;
 }
 
 // 26b. Another product's argument vocabulary reaches it too. The executor normalizes
 // `old_string`/`file_path`; the change record did not, so a model using Anthropic's
 // text-editor names had its work recorded as blank.
 {
+	workspaceFiles['b.ts'] = 'before text';
 	const prompt = await runAuto([
 		{
 			content: '', toolCalls: [{
@@ -1236,6 +1241,7 @@ async function runAuto(agentSteps, { maxSteps = 20, history = [{ role: 'user', c
 		[true, true, true],
 		'aliased edit arguments are normalized before being recorded',
 	);
+	delete workspaceFiles['b.ts'];
 }
 
 // 26c. An implementation that stopped short is declared to the reviewer. Reviewing a
