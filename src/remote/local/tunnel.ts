@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ChildProcess, execFile, spawn } from 'child_process';
+import { createHash } from 'crypto';
 import * as dns from 'dns';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -80,11 +81,39 @@ export function releaseAsset(platform: NodeJS.Platform = process.platform, arch:
 }
 
 /** Cloudflare's own release channel — the only place a binary is ever fetched from. */
-const RELEASE_BASE = 'https://github.com/cloudflare/cloudflared/releases/latest/download/';
+const RELEASE_API = 'https://api.github.com/repos/cloudflare/cloudflared/releases/latest';
+const RELEASE_DOWNLOAD_PREFIX = 'https://github.com/cloudflare/cloudflared/releases/download/';
+
+/**
+ * Reads the latest release's metadata and returns the download URL and SHA-256 it publishes for
+ * `asset`. Throws when the release lists no checksum for it (fail closed).
+ */
+async function publishedDigest(asset: string, fetchImpl: typeof fetch, signal?: AbortSignal): Promise<{ url: string; sha256: string }> {
+	const response = await fetchImpl(RELEASE_API, { signal, headers: { Accept: 'application/vnd.github+json' } });
+	if (!response.ok) {
+		throw new Error(`Couldn't read the cloudflared release: HTTP ${response.status}.`);
+	}
+	let release: { assets?: { name?: unknown; digest?: unknown; browser_download_url?: unknown }[] };
+	try {
+		release = await response.json() as typeof release;
+	} catch {
+		throw new Error('Couldn\'t read the cloudflared release: the reply was not JSON.');
+	}
+	const entry = release.assets?.find(a => a.name === asset);
+	const url = entry?.browser_download_url;
+	const digest = entry?.digest;
+	const match = typeof digest === 'string' ? /^sha256:([0-9a-f]{64})$/i.exec(digest) : null;
+	if (typeof url !== 'string' || !url.startsWith(RELEASE_DOWNLOAD_PREFIX) || !match) {
+		throw new Error(`The cloudflared release publishes no SHA-256 for ${asset}, so it was not downloaded. Install cloudflared yourself and set "openvsChat.remote.cloudflaredPath".`);
+	}
+	return { url, sha256: match[1].toLowerCase() };
+}
 
 /**
  * Downloads the official `cloudflared` release for this machine into `installDir` and returns
- * its path. Written to a temp name and renamed into place, so an interrupted download never
+ * its path. The release's published SHA-256 for the asset (GitHub lists a `digest` on every
+ * release asset) is read first and the download must match it; a release that publishes none,
+ * or bytes that differ, fail closed rather than installing something unchecked. Written to a temp name and renamed into place, so an interrupted download never
  * leaves a truncated binary that {@link findCloudflared} would then pick up.
  */
 export async function installCloudflared(
@@ -98,11 +127,15 @@ export async function installCloudflared(
 	if (!asset) {
 		throw new Error(`Cloudflare doesn't publish cloudflared for ${platform}/${arch}. Install it yourself and set "openvsChat.remote.cloudflaredPath".`);
 	}
-	const response = await fetchImpl(RELEASE_BASE + asset, { signal, redirect: 'follow' });
+	const expected = await publishedDigest(asset, fetchImpl, signal);
+	const response = await fetchImpl(expected.url, { signal, redirect: 'follow' });
 	if (!response.ok) {
 		throw new Error(`Downloading cloudflared failed: HTTP ${response.status}.`);
 	}
 	const bytes = Buffer.from(await response.arrayBuffer());
+	if (createHash('sha256').update(bytes).digest('hex') !== expected.sha256) {
+		throw new Error('Downloading cloudflared failed: the file does not match the checksum Cloudflare published, so it was not installed.');
+	}
 	// A real cloudflared is tens of MB; anything tiny is an error page, not a binary.
 	if (bytes.length < 1024 * 1024) {
 		throw new Error('Downloading cloudflared failed: the file received is not a cloudflared binary.');
@@ -131,9 +164,9 @@ export async function installCloudflared(
 }
 
 /** Spawns a child process — injected so tests can stand in a fake `cloudflared`. */
-export type Spawner = (command: string, args: string[]) => ChildProcess;
+export type Spawner = (command: string, args: string[], env?: NodeJS.ProcessEnv) => ChildProcess;
 
-const defaultSpawner: Spawner = (command, args) => spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+const defaultSpawner: Spawner = (command, args, env) => spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: env ? { ...process.env, ...env } : process.env });
 
 /** How long a tunnel may take to report its address before starting it counts as failed. */
 const TUNNEL_READY_TIMEOUT_MS = 45_000;
@@ -177,11 +210,13 @@ export class Tunnel {
 	private run(onExit: (code: number | null, log: string) => void): Promise<string> {
 		const { binary, localUrl, token, hostname } = this.options;
 		const args = token
-			? ['tunnel', '--no-autoupdate', 'run', '--token', token]
+			// The connector token goes in the environment, not argv: a command line is readable by
+			// every user on the machine (`ps`), an environment block is not.
+			? ['tunnel', '--no-autoupdate', 'run']
 			// `--config` pointed at an empty file: a quick tunnel refuses to start while
 			// ~/.cloudflared/config.yml exists, which any machine that ever ran a named tunnel has.
 			: ['tunnel', '--no-autoupdate', ...(this.options.configFile ? ['--config', this.options.configFile] : []), '--url', localUrl];
-		const child = (this.options.spawner ?? defaultSpawner)(binary, args);
+		const child = (this.options.spawner ?? defaultSpawner)(binary, args, token ? { TUNNEL_TOKEN: token } : undefined);
 		this.child = child;
 		return new Promise<string>((resolve, reject) => {
 			let settled = false;

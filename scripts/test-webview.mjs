@@ -382,7 +382,7 @@ for (const excluded of EXCLUDED_FROM_WEBVIEW) {
 {
 	assert.match(main, /type: 'undoRun', sessionId: s\.id, runId: undo\.runId/);
 	assert.match(host, /type: 'checkpoint', checkpointRunId: runId, files/);
-	assert.match(host, /type: 'checkpoint', sessionId, checkpointRunId: entry\.runId, files: \[\]/);
+	assert.match(host, /type: 'checkpoint', sessionId, checkpointRunId: entry\.runId, files: remaining/);
 	assert.match(host, /case 'undoRun':[\s\S]{0,120}undoLastRun\(message\.sessionId, origin, message\.runId\)/);
 }
 

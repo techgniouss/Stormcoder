@@ -23,7 +23,7 @@ export const HISTORY_LIMIT = 50;
  * Image attachments are stripped from the archived copy: archived conversations are never
  * re-sent to a model, so the base64 payloads would only bloat persisted state — `persistence.ts`
  * additionally gives archived history a zero image budget for the same reason, but this
- * function does the actual stripping (into a `🖼 (image attachment not kept in history)`
+ * function does the actual stripping (into a `[image not kept in history]`
  * marker) so the shape is right even before persistence ever sees it.
  *
  * A session already present in `history` (re-archiving the same id) is replaced, not
@@ -43,7 +43,7 @@ export function archiveSession(
 		id: session.id,
 		title,
 		messages: session.messages.map(m => m.images?.length
-			? { ...withoutImages(m), content: `🖼 (image attachment not kept in history)\n${m.content}` }
+			? { ...withoutImages(m), content: `[image not kept in history]\n${m.content}` }
 			: m),
 		savedAt: deps.now(),
 	};

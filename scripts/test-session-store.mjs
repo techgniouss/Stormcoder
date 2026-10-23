@@ -253,7 +253,7 @@ function fakeImage(bytes) {
 	]);
 	assert.deepStrictEqual(
 		archiveSession([], { id: 'a', title: 't', messages: [{ role: 'user', content: 'x', images: [fakeImage(4)], fromEditor: true }] }, makeDeps())[0].messages,
-		[{ role: 'user', content: '🖼 (image attachment not kept in history)\nx', fromEditor: true }]);
+		[{ role: 'user', content: '[image not kept in history]\nx', fromEditor: true }]);
 
 	const store = new SessionStore(makeDeps());
 	const background = store.getActive(); // id0 — stays inactive
