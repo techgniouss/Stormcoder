@@ -1345,6 +1345,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				}
 				const result = this.sessionStore.closeSession(message.sessionId);
 				this.checkpoints.delete(message.sessionId);
+				this.queueDrains.sessionClosed(message.sessionId);
 				if (result.abortSessionId) {
 					this.activeRequests.get(result.abortSessionId)?.abort();
 				}
@@ -2247,7 +2248,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	private sessionPost(sessionId: string, runId = ''): SessionPost {
 		return m => {
 			if (m.type === 'done') {
-				this.queueDrains.runFinished(sessionId);
+				this.queueDrains.runFinished(sessionId, runId);
 			}
 			this.post({ ...m, sessionId, runId });
 		};
@@ -2271,6 +2272,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		// The webview mints the id when it starts the run so it can fence messages from
 		// the moment it sends; the fallback covers programmatic sends (inline actions).
 		const runId = message.runId || newRunId();
+		this.queueDrains.runStarted(sessionId, runId);
 		const post = this.sessionPost(sessionId, runId);
 		// Tells a client that didn't send `runId` (a remote client, once one exists) what run
 		// this is, right after the id is settled — see the plan's "New message types".
@@ -2723,6 +2725,17 @@ ${context.content}` }
 					vscode.workspace.getConfiguration('openvsChat').get<boolean>('agent.traceTiming') ?? false,
 					guardrails);
 				let stepThinking: ThinkingStreamParser | undefined;
+				// The plan and review phases stream plain tokens (only agent steps end in
+				// `agentStepEnd`), so their text is recorded here when the phase ends.
+				let phaseStreaming = false;
+				let phaseText = '';
+				const flushPhaseText = () => {
+					const text = stripThinking(phaseText).trim();
+					phaseText = '';
+					if (phaseStreaming && text) {
+						this.recordAssistantTurn(sessionId, text);
+					}
+				};
 				post({ type: 'todos', items: [] });
 				// An Auto run is still an agent run to the user, and the webview offers the
 				// same mid-run steering box. Stragglers from a previous run in this tab go;
@@ -2742,12 +2755,20 @@ ${context.content}` }
 					},
 					{
 						phase: (role, a, streaming) => {
+							flushPhaseText();
+							phaseStreaming = streaming;
 							stepThinking?.flush();
 							stepThinking = streaming ? new ThinkingStreamParser(text => post({ type: 'token', delta: text })) : undefined;
 							announce(role, a, streaming);
 						},
-						token: delta => stepThinking ? stepThinking.push(delta) : post({ type: 'token', delta }),
+						token: delta => {
+							if (phaseStreaming) {
+								phaseText += delta;
+							}
+							return stepThinking ? stepThinking.push(delta) : post({ type: 'token', delta });
+						},
 						agentStepStart: () => {
+							flushPhaseText();
 							stepThinking?.flush();
 							stepThinking = new ThinkingStreamParser(text => post({ type: 'token', delta: text }));
 							post({ type: 'agentStepStart' });
@@ -2767,6 +2788,7 @@ ${context.content}` }
 					},
 				);
 				stepThinking?.flush();
+				flushPhaseText();
 			} else {
 				// Ask/Plan → planning/reasoning model; inline Edit → implementation model.
 				const role: AutoRole = mode === 'edit' ? 'code' : 'plan';
