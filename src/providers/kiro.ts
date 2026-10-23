@@ -180,8 +180,16 @@ export class KiroProvider extends OAuthProxyChatProvider {
 		if (!response.ok) {
 			throw new Error(await describeHttpError('AWS Kiro', response));
 		}
-		const json = await response.json().catch(async () => response.text());
-		const text = extractCodeWhispererText(json);
+		// The body can be plain JSON or a binary-framed event stream; it can only be read once,
+		// so take the text and try to parse it rather than calling .json() and then .text().
+		const raw = await response.text();
+		let parsed: unknown = raw;
+		try {
+			parsed = JSON.parse(raw);
+		} catch {
+			// Not JSON: the event-stream scraper in extractCodeWhispererText handles the raw text.
+		}
+		const text = extractCodeWhispererText(parsed);
 		request.onToken(text);
 		return { truncated: false };
 	}

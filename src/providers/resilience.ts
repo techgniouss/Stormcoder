@@ -57,7 +57,7 @@ export async function withProviderResilience<T>(
 			throw err;
 		}
 		registry.cooldowns.markCooldown(providerId, model, message);
-		const rotated = await registry.rotateApiKey(providerId);
+		const rotated = await registry.rotateApiKey(providerId, apiKey);
 		if (!rotated) {
 			throw err;
 		}

@@ -97,7 +97,7 @@ export function normalizeToolCallId(id: string, model: string): string {
  * object as a JSON string. Every one of those used to become an un-actionable tool error
  * and a wasted step, which is the bulk of why a run with a weak model goes nowhere.
  */
-export function parseToolArgs(raw: string | undefined): Record<string, unknown> {
+export function parseToolArgs(raw: string | undefined, truncated = false): Record<string, unknown> {
 	const text = (raw ?? '').trim();
 	if (!text) {
 		return {};
@@ -106,7 +106,7 @@ export function parseToolArgs(raw: string | undefined): Record<string, unknown> 
 	if (direct) {
 		return direct;
 	}
-	for (const candidate of repairs(text)) {
+	for (const candidate of repairs(text, truncated)) {
 		const parsed = tryParse(candidate);
 		if (parsed) {
 			return parsed;
@@ -136,7 +136,7 @@ function tryParse(text: string): Record<string, unknown> | undefined {
 }
 
 /** Successively more aggressive rewrites of `text`, each a candidate for re-parsing. */
-function* repairs(text: string): Generator<string> {
+function* repairs(text: string, truncated: boolean): Generator<string> {
 	const unfenced = stripFence(text);
 	if (unfenced !== text) {
 		yield unfenced;
@@ -175,7 +175,10 @@ function* repairs(text: string): Generator<string> {
 	if (commas !== body) {
 		yield commas;
 	}
-	const closed = closeOpenBrackets(commas);
+	// Never complete arguments of a step the backend cut off at the token limit: the missing
+	// tail is lost, and a call that parses is a call that runs on partial data (a `write_file`
+	// with half its content). It is reported as malformed instead.
+	const closed = truncated ? commas : closeOpenBrackets(commas);
 	if (closed !== commas) {
 		yield closed;
 	}
