@@ -831,7 +831,13 @@
             "\\bRemove-Item\\b[^|;]*-Recurse[^|;]*-Force|\\bRemove-Item\\b[^|;]*-Force[^|;]*-Recurse",
             "\\bformat\\s+[a-z]:",
             "\\bdel\\s+(/[a-z]\\s+)*/s\\b",
-            "rm\\s+-[a-z]*r[a-z]*\\s+(\\S+\\s+)*-[a-z]*f|rm\\s+-[a-z]*f[a-z]*\\s+(\\S+\\s+)*-[a-z]*r|rm\\s+.*--(recursive|force)\\b.*--(force|recursive)\\b"
+            "rm\\s+-[a-z]*r[a-z]*\\s+(\\S+\\s+)*-[a-z]*f|rm\\s+-[a-z]*f[a-z]*\\s+(\\S+\\s+)*-[a-z]*r|rm\\s+.*--(recursive|force)\\b.*--(force|recursive)\\b",
+            "rm\\s+(\\S+\\s+)*(-[a-z]*r[a-z]*|--recursive)\\s+(\\S+\\s+)*(-[a-z]*f[a-z]*|--force)\\b|rm\\s+(\\S+\\s+)*(-[a-z]*f[a-z]*|--force)\\s+(\\S+\\s+)*(-[a-z]*r[a-z]*|--recursive)\\b",
+            "\\bgit\\b[^;&|\\n]*\\bpush\\b[^;&|\\n]*(\\s--(force|delete|mirror)\\b|\\s-[a-z]*[fd][a-z]*\\b|\\s\\+\\S|\\s:[^\\s:])",
+            "(^|[\\s;&|(])(su|doas|pkexec)\\s+(\\S+\\s+)*?-c\\b|\\b(doas|pkexec)\\b",
+            "\\bfind\\b[^;&|\\n]*(\\s-delete\\b|-exec(dir)?\\s+rm\\b)",
+            "<\\(\\s*(curl|wget)\\b|\\b(eval|source|(ba|z|da)?sh\\s+-c)\\s+[\"\\']?\\$\\(\\s*(curl|wget)\\b"
+
           ],
           "description": "%config.guardrails.deniedCommands%"
         },

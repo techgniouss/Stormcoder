@@ -370,4 +370,17 @@ assert.strictEqual(m.parseTokenLimit('Rate limit reached, retry limit 3 exceeded
 	assert.ok(out.length < 1_100);
 }
 
+// A 429 rate-limit body mentions tokens and "exceed" but must stay a wait-and-retry.
+{
+	for (const msg of [
+		'Rate limit reached for gpt-4o: you exceed the rate limit of 30000 tokens per minute',
+		'429 Too Many Requests: you have exceeded your token quota',
+		'Rate limit exceeded: tokens per minute (TPM) limit',
+	]) {
+		assert.ok(!m.isContextLengthError(msg), `rate limit is not an overflow: ${msg}`);
+	}
+	assert.ok(m.isContextLengthError('This model\'s maximum context length is 8192 tokens, however you requested 9000 tokens'));
+	assert.ok(m.isContextLengthError('prompt tokens exceed the limit of the model'));
+}
+
 console.log('test-context: all assertions passed');

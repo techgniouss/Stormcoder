@@ -34,7 +34,7 @@ Module._load = function (request, ...rest) {
 	return request === 'vscode' ? vscodeStub : load.call(this, request, ...rest);
 };
 
-const { executeTool } = await import(new URL('../out/agent/tools.js', import.meta.url));
+const { executeTool, isPrivateHost } = await import(new URL('../out/agent/tools.js', import.meta.url));
 const { loadGuardrails } = await import(new URL('../out/agent/guardrails.js', import.meta.url));
 
 /** Records every approval it is asked for, and answers as configured. */
@@ -130,13 +130,14 @@ function fetch_(args, approver, approval = 'yolo') {
 {
 	const auto = approverThat({ approved: true });
 	await fetch_({ url: `${base}/page` }, auto, 'yolo');
-	assert.deepStrictEqual(auto.seen, [], 'Full Auto asks nothing');
+	// The test server is loopback, which is always asked about (see 7); a public host is not.
+	assert.deepStrictEqual(auto.seen.map(r => r.signature), [`fetch_url_private:127.0.0.1:${server.address().port}`], 'Full Auto asks only about private addresses');
 
 	const asked = approverThat({ approved: true });
 	await fetch_({ url: `${base}/page` }, asked, 'auto-edits');
 	assert.deepStrictEqual(
 		asked.seen.map(r => ({ kind: r.kind, signature: r.signature })),
-		[{ kind: 'command', signature: `fetch_url:127.0.0.1:${server.address().port}` }]);
+		[{ kind: 'command', signature: `fetch_url_private:127.0.0.1:${server.address().port}` }]);
 
 	const denied = approverThat({ approved: false, feedback: 'not that site' });
 	const got = await fetch_({ url: `${base}/page` }, denied, 'always');
@@ -169,7 +170,7 @@ function fetch_(args, approver, approval = 'yolo') {
 	const followed = await fetch_({ url: `${hereBase}/cross` }, cross, 'always');
 	assert.match(followed.result, /Release 2\.4/, 'an approved cross-host redirect is followed');
 	assert.deepStrictEqual(cross.seen.map(r => r.signature),
-		[`fetch_url:127.0.0.1:${redirector.address().port}`, `fetch_url:127.0.0.1:${server.address().port}`],
+		[`fetch_url_private:127.0.0.1:${redirector.address().port}`, `fetch_url_private:127.0.0.1:${server.address().port}`],
 		'the new host is asked about by name');
 
 	let answers = [{ approved: true }, { approved: false, feedback: 'not that host' }];
@@ -184,6 +185,34 @@ function fetch_(args, approver, approval = 'yolo') {
 	assert.equal(looped.isError, true);
 	assert.match(looped.result, /redirected more than/);
 	redirector.close();
+}
+
+// 7. SSRF guard: loopback, link-local (cloud metadata), RFC 1918 and ULA hosts are classified
+// as private by spelling (including the numeric forms the URL parser normalizes), public ones
+// are not, and a redirect INTO a private address asks again even under Full Auto.
+{
+	for (const h of ['localhost', 'app.localhost', 'printer.local', 'db.internal', '127.0.0.1', '127.1.2.3', '0.0.0.0', '10.0.0.5', '172.16.0.1', '172.31.255.1',
+		'192.168.1.1', '169.254.169.254', '100.64.0.1', '[::1]', '[::]', '[fe80::1]', '[fd00::1]', '[fc00::1]', '[::ffff:127.0.0.1]', '[::ffff:a9fe:a9fe]']) {
+		const host = new URL(`http://${h}/`).hostname;
+		assert.equal(isPrivateHost(host), true, `private: ${h} (${host})`);
+	}
+	assert.equal(isPrivateHost(new URL('http://2130706433/').hostname), true, 'decimal loopback');
+	for (const h of ['example.com', '8.8.8.8', '172.32.0.1', '172.15.0.1', '192.169.0.1', '100.128.0.1', '[2606:4700::1111]', 'localhost.example.com', 'notlocal.dev']) {
+		assert.equal(isPrivateHost(new URL(`http://${h}/`).hostname), false, `public: ${h}`);
+	}
+
+	const meta = http.createServer((req, res) => {
+		res.writeHead(302, { location: 'http://169.254.169.254/latest/meta-data/' });
+		res.end();
+	});
+	await new Promise(resolve => meta.listen(0, '127.0.0.1', resolve));
+	let calls = 0;
+	const picky = { async confirm(r) { calls++; return r.signature.startsWith('fetch_url_private:169.254') ? { approved: false, feedback: 'no metadata' } : { approved: true }; }, async ask() { return ''; } };
+	const got = await fetch_({ url: `http://127.0.0.1:${meta.address().port}/` }, picky, 'yolo');
+	assert.equal(got.isError, true);
+	assert.match(got.result, /no metadata/, 'a redirect to the metadata address is refused even under Full Auto');
+	assert.equal(calls, 2, 'asked about the loopback start and about the metadata target');
+	meta.close();
 }
 
 server.close();

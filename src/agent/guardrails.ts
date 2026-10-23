@@ -131,6 +131,11 @@ export const DEFAULT_DENIED_COMMANDS: readonly string[] = [
 	'\\bformat\\s+[a-z]:',
 	'\\bdel\\s+(/[a-z]\\s+)*/s\\b',
 	'rm\\s+-[a-z]*r[a-z]*\\s+(\\S+\\s+)*-[a-z]*f|rm\\s+-[a-z]*f[a-z]*\\s+(\\S+\\s+)*-[a-z]*r|rm\\s+.*--(recursive|force)\\b.*--(force|recursive)\\b',
+	'rm\\s+(\\S+\\s+)*(-[a-z]*r[a-z]*|--recursive)\\s+(\\S+\\s+)*(-[a-z]*f[a-z]*|--force)\\b|rm\\s+(\\S+\\s+)*(-[a-z]*f[a-z]*|--force)\\s+(\\S+\\s+)*(-[a-z]*r[a-z]*|--recursive)\\b',
+	'\\bgit\\b[^;&|\\n]*\\bpush\\b[^;&|\\n]*(\\s--(force|delete|mirror)\\b|\\s-[a-z]*[fd][a-z]*\\b|\\s\\+\\S|\\s:[^\\s:])',
+	'(^|[\\s;&|(])(su|doas|pkexec)\\s+(\\S+\\s+)*?-c\\b|\\b(doas|pkexec)\\b',
+	'\\bfind\\b[^;&|\\n]*(\\s-delete\\b|-exec(dir)?\\s+rm\\b)',
+	'<\\(\\s*(curl|wget)\\b|\\b(eval|source|(ba|z|da)?sh\\s+-c)\\s+["\\\']?\\$\\(\\s*(curl|wget)\\b',
 ];
 
 export const DEFAULT_PROTECTED_PATHS: readonly string[] = [
@@ -155,6 +160,11 @@ function compile(patterns: string[]): RegExp[] {
 	return out;
 }
 
+/** A command timeout that is usable: 0, negative or non-numeric would kill every command instantly, so they fall back to the default. */
+function sanitizeTimeout(value: unknown): number {
+	return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.max(1_000, value) : 300_000;
+}
+
 /** Reads the guardrail configuration from settings. */
 export function loadGuardrails(): Guardrails {
 	const cfg = vscode.workspace.getConfiguration('openvsChat');
@@ -167,7 +177,7 @@ export function loadGuardrails(): Guardrails {
 		// reading the setting without the contribution registered — a test, a host that
 		// hasn't activated the extension — silently got a timeout five times shorter than
 		// documented, and killed builds it should have waited for.
-		commandTimeoutMs: cfg.get<number>('agent.commandTimeoutMs') ?? 300_000,
+		commandTimeoutMs: sanitizeTimeout(cfg.get<number>('agent.commandTimeoutMs')),
 		maxSubagents: cfg.get<number>('agent.maxSubagents') ?? 4,
 		maxSubagentDepth: cfg.get<number>('agent.maxSubagentDepth') ?? 2,
 		maxAgentMessages: cfg.get<number>('agent.maxAgentMessages') ?? 3,
@@ -185,8 +195,11 @@ export interface GuardrailCheck {
 /** Validates a shell command against the deny-list and (if set) the allow-list. */
 export function checkCommand(command: string, g: Guardrails): GuardrailCheck {
 	const cmd = command.trim();
+	// Quotes and backslashes inside a word are shell no-ops (`"rm" -rf`, `r\m -rf`, `\rm`), so
+	// the deny-list is also matched against the command with them removed.
+	const bare = cmd.replace(/["'\\]/g, '');
 	for (const re of g.deniedCommands) {
-		if (re.test(cmd)) {
+		if (re.test(cmd) || re.test(bare)) {
 			return { ok: false, reason: `Command blocked by a guardrail (matches /${re.source}/). Adjust openvsChat.guardrails.deniedCommands to allow it.` };
 		}
 	}
