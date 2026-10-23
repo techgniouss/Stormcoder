@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.1
+
+- The original Asgard and Avengers thinking lines and the helm, hammer and Stormbreaker artwork are back, kept alongside the new storm-and-code lines and glyphs. A pick is a coin flip between the plain verbs ("Thinking", "Pondering") and the flavour lines, so the plain verbs stay at half of what is shown, and the glyph rotates through all eight drawings.
+
 ## 1.3.0
 
 - A new app icon: a glowing lightning bolt between code brackets, legible from 1024px down to 16px. The same mark is used in the rail, the welcome screen, the browser tab and the reasoning blocks.

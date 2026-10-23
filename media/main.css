@@ -998,7 +998,7 @@ body.settings-window #settingsPanel {
 	margin-right: 4px;
 	vertical-align: -3px;
 }
-.tool-glyph .storm-glyph { width: auto; height: 15px; }
+.tool-glyph .thor-glyph, .tool-glyph .storm-glyph { width: auto; height: 15px; }
 .tool.tool-error { border-left-color: var(--vscode-inputValidation-errorBorder, #f14c4c); }
 .tool-head {
 	display: flex;
@@ -1483,6 +1483,40 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 	height: 22px;
 	line-height: 0;
 }
+/* The original Asgard set: Stormcoder swings, the bolt strikes, the helm hovers. */
+.thor-glyph { display: block; }
+.thor-glyph.hammer {
+	/* Percentages, not px: transform-origin resolves against the rendered element box,
+	   not the glyph's viewBox units, so px values silently drift if the size changes.
+	   50% 96% is the pommel — Stormcoder swings from the butt of the handle.
+	   No colour override: it inherits the surrounding text colour so the outline stays
+	   theme-correct, leaving the handle's red as the only accent. */
+	transform-origin: 50% 96%;
+	animation: stormcoder-swing 1.8s ease-in-out infinite;
+}
+.thor-glyph.stormbreaker {
+	transform-origin: 50% 92%;
+	animation: stormcoder-swing 2.1s ease-in-out infinite;
+}
+.thor-glyph.bolt {
+	color: var(--vscode-charts-yellow, #e2c08d);
+	filter: drop-shadow(0 0 4px color-mix(in srgb, var(--vscode-charts-yellow, #e2c08d) 55%, transparent));
+	animation: bolt-strike 1.5s steps(1, end) infinite;
+}
+/* No colour rule: the helm carries its own fills. The bolt keeps one because the same
+   class also renders the flat currentColor mark on collapsed reasoning blocks. */
+.thor-glyph.helm {
+	animation: helm-hover 2.4s ease-in-out infinite;
+}
+@keyframes stormcoder-swing {
+	0%, 100% { transform: rotate(-16deg); }
+	42% { transform: rotate(14deg); }
+	52% { transform: rotate(9deg) translateY(1px); }
+}
+@keyframes helm-hover {
+	0%, 100% { transform: translateY(1px); opacity: 0.7; }
+	50% { transform: translateY(-2px); opacity: 1; }
+}
 /* One animation per glyph: the bolt strikes, the brackets breathe, the charge orbits, the cloud flashes. */
 .storm-glyph { display: block; color: var(--vscode-charts-blue, #4ea1ff); }
 .storm-glyph.bolt {
@@ -1537,7 +1571,7 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 }
 @media (prefers-reduced-motion: reduce) {
 	.working-word { animation: none; }
-	.storm-glyph, .storm-glyph * { animation: none !important; opacity: 1; }
+	.thor-glyph, .storm-glyph, .storm-glyph * { animation: none !important; opacity: 1; }
 	.empty-hero { animation: none; }
 }
 

@@ -8,7 +8,7 @@ import { startHost, startMock } from '../test/harness.mjs';
 const out = path.resolve(process.argv[2] ?? '/tmp/glyphs');
 const theme = process.argv[3] ?? 'dark';
 fs.mkdirSync(out, { recursive: true });
-const mock = await startMock(() => 'x'.repeat(2400), { chunkDelay: 250 });
+const mock = await startMock(() => 'x'.repeat(4800), { chunkDelay: 250 });
 const host = await startHost({ mockPort: mock.port });
 const browser = await launchChromium();
 try {
@@ -22,12 +22,12 @@ try {
 	await chat.locator('#input').fill('think about it');
 	await chat.locator('#input').press('Enter');
 	const seen = new Set();
-	for (let i = 0; i < 14; i++) {
+	for (let i = 0; i < 30; i++) {
 		await page.waitForTimeout(1500);
 		const w = chat.locator('.working');
 		if (await w.count()) {
 			const label = (await w.first().textContent() || '').trim();
-			const kind = await chat.locator('.working .storm-glyph').first().getAttribute('class').catch(() => '');
+			const kind = await chat.locator('.working svg').first().getAttribute('class').catch(() => '');
 			const key = `${kind}|${label.split(/\d/)[0]}`;
 			if (!seen.has(key) || i < 3) { await w.first().screenshot({ path: `${out}/work-${String(i).padStart(2, '0')}.png` }); seen.add(key); }
 			console.log(i, kind, '|', label);
