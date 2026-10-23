@@ -72,4 +72,16 @@ const m = await import(new URL('../out/providers/keyRotation.js', import.meta.ur
 	assert.equal(r.activeIndex('p', ['only-one-left']), 0);
 }
 
+// Concurrent failures of the same key rotate only once: the second report is stale.
+{
+	const r = new m.KeyRotator();
+	const keys = ['a', 'b', 'c'];
+	assert.equal(r.rotate('p', keys, 'a'), true);
+	assert.equal(r.activeIndex('p', keys), 1);
+	assert.equal(r.rotate('p', keys, 'a'), true, 'stale failure still reports a different key is active');
+	assert.equal(r.activeIndex('p', keys), 1, 'stale failure must not double-rotate');
+	assert.equal(r.rotate('p', keys, 'b'), true);
+	assert.equal(r.activeIndex('p', keys), 2);
+}
+
 console.log('All keyRotation assertions passed.');

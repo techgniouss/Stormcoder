@@ -176,6 +176,18 @@ interface LoadCodeAssistResponse {
 /** Resolved Code Assist project ids, cached per access token for that token's lifetime. */
 const projectIdCache = new Map<string, string>();
 
+/** Access tokens rotate roughly hourly; older entries are dead weight, so only a few are kept. */
+const MAX_PROJECT_ID_CACHE = 8;
+
+/** Remembers a resolved project id, evicting the oldest entries so the cache stays bounded. */
+function cacheProjectId(accessToken: string, projectId: string): void {
+	projectIdCache.delete(accessToken);
+	projectIdCache.set(accessToken, projectId);
+	while (projectIdCache.size > MAX_PROJECT_ID_CACHE) {
+		projectIdCache.delete(projectIdCache.keys().next().value as string);
+	}
+}
+
 function projectIdFromField(pid: LoadCodeAssistResponse['cloudaicompanionProject']): string {
 	if (typeof pid === 'string') {
 		return pid;
@@ -222,7 +234,7 @@ async function resolveProjectId(accessToken: string, signal: AbortSignal): Promi
 
 	const provisioned = projectIdFromField(load.cloudaicompanionProject);
 	if (provisioned) {
-		projectIdCache.set(accessToken, provisioned);
+		cacheProjectId(accessToken, provisioned);
 		return provisioned;
 	}
 
@@ -235,7 +247,7 @@ async function resolveProjectId(accessToken: string, signal: AbortSignal): Promi
 	if (freeTier?.id) {
 		const onboarded = await onboardUser(accessToken, metadata, freeTier.id, signal);
 		if (onboarded) {
-			projectIdCache.set(accessToken, onboarded);
+			cacheProjectId(accessToken, onboarded);
 			return onboarded;
 		}
 	}
@@ -353,16 +365,13 @@ interface AntigravityContent {
  * including tool-call / tool-result turns for Agent mode (see the class doc's caveat
  * on this part being an unverified port of the public Gemini API's shape).
  */
-function toContents(messages: ChatMessage[]): AntigravityContent[] {
+export function toContents(messages: ChatMessage[]): AntigravityContent[] {
 	const systemLines = messages.filter(m => m.role === 'system' && m.content).map(m => m.content);
 	// Tool messages only carry a toolCallId, not the tool's name — recovered from the
-	// preceding assistant turn's toolCalls, same as every other provider's history walk.
-	const toolNameById = new Map<string, string>();
-	for (const m of messages) {
-		for (const tc of m.toolCalls ?? []) {
-			toolNameById.set(tc.id, tc.name);
-		}
-	}
+	// NEAREST preceding assistant turn's toolCalls. This endpoint's calls get synthesized ids
+	// (`call_0`, `call_1`, … restart every step), so a history-wide map would resolve every
+	// step's results against the last step's tool names.
+	let toolNameById = new Map<string, string>();
 
 	const out: AntigravityContent[] = [];
 	const append = (role: AntigravityContent['role'], parts: AntigravityPart[]) => {
@@ -380,6 +389,9 @@ function toContents(messages: ChatMessage[]): AntigravityContent[] {
 	for (const m of messages) {
 		if (m.role === 'system') {
 			continue;
+		}
+		if (m.role === 'assistant') {
+			toolNameById = new Map((m.toolCalls ?? []).map(tc => [tc.id, tc.name] as const));
 		}
 		if (m.role === 'tool') {
 			// Sent as a 'user' turn — see the role type's doc for why. Multiple consecutive

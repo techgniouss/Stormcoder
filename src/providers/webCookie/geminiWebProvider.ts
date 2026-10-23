@@ -40,6 +40,12 @@ import { ChatProvider, ChatRequest, ModelEntry, ProviderInfo, StreamChatResult, 
  * not a `messages` array — there is no server-side conversation state to resume, so only the
  * latest user turn is sent. A real multi-turn conversation is not preserved between calls.
  *
+ * **No model selection.** `request.model` is deliberately NOT sent: the `StreamGenerate`
+ * request shape used here carries only the prompt, and the web app picks the model from the
+ * signed-in account's own UI choice. Selecting one would need undocumented request fields that
+ * are not verified here, so the `suggestedModels` below are labels, not a switch — the model
+ * that answers is whatever the Gemini web app is set to for that account.
+ *
  * **Multi-account** reuses this extension's ordinary key-rotation machinery
  * (`providers/keyRotation.ts`, wired through `withProviderResilience`) rather than
  * reimplementing the source project's own account pool: each "key" here is a Chrome **user

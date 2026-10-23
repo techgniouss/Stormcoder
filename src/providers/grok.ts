@@ -111,7 +111,7 @@ export class GrokProvider extends OAuthProxyChatProvider {
 	/** Fetches xAI's OIDC discovery document. xAI publishes these endpoints rather than
 	 * fixing them, so this discovers instead of hardcoding and going stale. */
 	private static async discoverOidcDocument(signal: AbortSignal): Promise<{ device_authorization_endpoint: string; token_endpoint: string }> {
-		const response = await fetch(`${GrokProvider.ISSUER}/.well-known/openid-configuration`, { signal });
+		const response = await fetch(`${GrokProvider.ISSUER}/.well-known/openid-configuration`, { signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) });
 		if (!response.ok) {
 			throw new Error(`xAI Grok: OIDC discovery HTTP ${response.status}`);
 		}
@@ -147,7 +147,7 @@ export class GrokProvider extends OAuthProxyChatProvider {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 			body: new URLSearchParams({ client_id: GrokProvider.CLIENT_ID, grant_type: 'refresh_token', refresh_token: cred.refreshToken }).toString(),
-			signal,
+			signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
 		});
 		if (!response.ok) {
 			throw new Error(`xAI Grok: token refresh HTTP ${response.status}`);

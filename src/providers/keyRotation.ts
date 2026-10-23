@@ -49,12 +49,19 @@ export class KeyRotator {
 	 *
 	 * Returns false (no-op) for a single-key list — there is nothing to rotate to, and the
 	 * caller should treat the failure as final rather than retrying with the same key.
+	 *
+	 * When `failedKey` is given and the active key is no longer that key, a concurrent failure
+	 * already rotated away from it: nothing is advanced (so two simultaneous 429s don't skip
+	 * past a healthy key) and true is returned, since a different key is already active.
 	 */
-	rotate(id: string, keys: readonly string[]): boolean {
+	rotate(id: string, keys: readonly string[], failedKey?: string): boolean {
 		if (keys.length <= 1) {
 			return false;
 		}
 		const current = this.activeIndex(id, keys);
+		if (failedKey !== undefined && keys[current] !== failedKey) {
+			return true;
+		}
 		const errored = this.errored(id);
 		errored.add(current);
 

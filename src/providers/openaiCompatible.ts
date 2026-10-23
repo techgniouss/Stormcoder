@@ -410,6 +410,7 @@ export abstract class OpenAICompatibleProvider implements ChatProvider {
 		// (OpenAI streams tool_calls piece-by-piece, keyed by index).
 		let content = '';
 		let reasoning = '';
+		let thinkingOpen = false;
 		let truncated = false;
 		let finishReason: FinishReason | undefined;
 		const acc = new Map<number, { id?: string; name?: string; args: string }>();
@@ -435,13 +436,15 @@ export abstract class OpenAICompatibleProvider implements ChatProvider {
 			if (thought) {
 				if (!reasoning) {
 					request.onToken?.(OPEN_MARK);
+					thinkingOpen = true;
 				}
 				reasoning += thought;
 				request.onToken?.(thought);
 			}
 			if (typeof delta.content === 'string' && delta.content) {
-				if (reasoning && !content) {
+				if (thinkingOpen) {
 					request.onToken?.(CLOSE_MARK);
+					thinkingOpen = false;
 				}
 				content += delta.content;
 				request.onToken?.(delta.content);
@@ -465,11 +468,16 @@ export abstract class OpenAICompatibleProvider implements ChatProvider {
 				acc.set(index, cur);
 			}
 		}, request.signal, { label: this.info.label, sawTerminal: () => finishReason !== undefined });
+		// Reasoning followed by tool calls (or nothing) never sees content to close the block,
+		// which would leave the thinking parser holding everything after it open.
+		if (thinkingOpen) {
+			request.onToken?.(CLOSE_MARK);
+		}
 
 		const toolCalls: ToolCall[] = [...acc.entries()]
 			.sort((a, b) => a[0] - b[0])
 			.map(([index, tc]) => {
-				return { id: tc.id ?? `call_${index}`, name: tc.name ?? 'unknown', args: parseToolArgs(tc.args) };
+				return { id: tc.id ?? `call_${index}`, name: tc.name ?? 'unknown', args: parseToolArgs(tc.args, truncated) };
 			});
 		// A reasoning model that produced no answer and no tool calls would otherwise
 		// yield an empty step; fall back to its reasoning so the agent loop can react.
