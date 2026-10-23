@@ -32,6 +32,9 @@ const MINT_MARGIN_MS = 5 * 60_000;
  */
 const MINT_TIMEOUT_MS = 30_000;
 
+/** How many superseded credentials are remembered for requests still carrying them. */
+const MAX_SUCCESSORS = 16;
+
 /**
  * Base for a provider whose STORED credential is not the token sent on the wire — e.g.
  * Copilot, where the stored value is a long-lived GitHub OAuth token and the wire value is a
@@ -157,6 +160,14 @@ export abstract class OAuthProxyChatProvider extends OpenAICompatibleProvider {
 			return;
 		}
 		this.successor.set(stored, next);
+		// The superseded credential's cached token is unreachable now (lookups go through
+		// `current`), and the maps must not grow by one entry per refresh forever.
+		this.cache.delete(stored);
+		while (this.successor.size > MAX_SUCCESSORS) {
+			const oldest = this.successor.keys().next().value as string;
+			this.successor.delete(oldest);
+			this.cache.delete(oldest);
+		}
 		// Best-effort: failing to save must not fail the request the fresh token is for.
 		await this.persist?.(stored, next).catch(() => { /* kept in memory for this session */ });
 	}

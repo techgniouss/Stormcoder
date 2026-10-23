@@ -850,14 +850,41 @@
 		vscode.postMessage({ type: 'closeSession', sessionId: id });
 	}
 
+	// Links in rendered markdown: the frame's CSP blocks navigation, so an unhandled click
+	// blanks the chat. Delegated on the transcript (bubbles are rebuilt constantly) and handed
+	// to the host, which opens http(s)/mailto in the system browser. Ctrl/Cmd and middle click
+	// take the same path.
+	/** @param {MouseEvent} e */
+	function onTranscriptLink(e) {
+		const a = e.target instanceof Element ? e.target.closest('a[href]') : null;
+		if (!a || !els.messages.contains(a)) { return; }
+		if (e.type === 'auxclick' && e.button !== 1) { return; }
+		e.preventDefault();
+		const url = a.getAttribute('href') || '';
+		if (/^(https?:\/\/|mailto:)/i.test(url)) {
+			vscode.postMessage({ type: 'openExternal', url });
+		}
+	}
+	els.messages.addEventListener('click', onTranscriptLink);
+	els.messages.addEventListener('auxclick', onTranscriptLink);
+
 	/**
 	 * The tabs scroll inside their own list, with + outside it: tabs keep a readable minimum
 	 * width, so a narrow sidebar with many chats overflows, and + inside the scroller could then
 	 * sit off-screen behind a hidden scrollbar — the one way to start a chat, unreachable.
 	 */
+	/** Session id an arrow key just selected; focus follows once its tab renders as active. */
+	let pendingTabFocus = '';
 	function renderTabs() {
 		if (!tabsEl) { return; }
 		const previousScroll = tabsEl.querySelector('.tab-list')?.scrollLeft || 0;
+		// The strip is rebuilt on every push, which would drop keyboard focus: remember which
+		// tab (or its close button) held it and give it back afterwards.
+		const focusedEl = document.activeElement instanceof HTMLElement && tabsEl.contains(document.activeElement)
+			? document.activeElement : null;
+		const focusedTab = focusedEl?.closest('.chat-tab');
+		const focusedId = focusedTab instanceof HTMLElement ? focusedTab.dataset.sid : undefined;
+		const focusedClose = !!focusedEl?.classList.contains('tab-close');
 		tabsEl.innerHTML = '';
 		const list = document.createElement('div');
 		list.className = 'tab-list';
@@ -870,17 +897,36 @@
 			const tab = document.createElement('div');
 			tab.className = 'chat-tab' + (active ? ' active' : '') + (s.streaming ? ' busy' : '');
 			tab.title = s.title || 'New chat';
-			// A div, so it is only reachable by keyboard because it says so.
-			tab.tabIndex = 0;
+			tab.dataset.sid = s.id;
+			// Roving tabindex: the selected tab is the one Tab stop; arrows move within the strip.
+			tab.tabIndex = active ? 0 : -1;
 			tab.setAttribute('role', 'tab');
 			tab.setAttribute('aria-selected', String(active));
+			// The close control is a real button outside the tab's tab order (Delete on the tab
+			// closes it from the keyboard), not a focusable link nested in role=tab.
 			tab.innerHTML = `<span class="tab-dot"></span><span class="tab-title">${escapeHtml(s.title || 'New chat')}</span>`
-				+ `<a class="tab-close" href="#" title="Close chat (saved to History)" aria-label="Close chat">${icon('close', 12)}</a>`;
+				+ `<button type="button" class="tab-close" tabindex="-1" title="Close chat (saved to History)" aria-label="Close chat: ${escapeHtml(s.title || 'New chat')}">${icon('close', 12)}</button>`;
 			tab.addEventListener('click', () => switchSession(s.id));
 			tab.addEventListener('keydown', (e) => {
-				if (e.target === tab && (e.key === 'Enter' || e.key === ' ')) {
+				if (e.target !== tab) { return; }
+				const tabs = /** @type {HTMLElement[]} */ (Array.from(list.querySelectorAll('.chat-tab')));
+				const at = tabs.indexOf(tab);
+				let to = -1;
+				if (e.key === 'ArrowRight') { to = (at + 1) % tabs.length; }
+				else if (e.key === 'ArrowLeft') { to = (at - 1 + tabs.length) % tabs.length; }
+				else if (e.key === 'Home') { to = 0; }
+				else if (e.key === 'End') { to = tabs.length - 1; }
+				if (to >= 0) {
+					e.preventDefault();
+					const target = tabs[to];
+					const id = target.dataset.sid;
+					if (id) { pendingTabFocus = id; switchSession(id); }
+				} else if (e.key === 'Enter' || e.key === ' ') {
 					e.preventDefault();
 					switchSession(s.id);
+				} else if (e.key === 'Delete') {
+					e.preventDefault();
+					closeSession(s.id);
 				}
 			});
 			tab.querySelector('.tab-close')?.addEventListener('click', (e) => {
@@ -899,6 +945,17 @@
 		add.textContent = '+';
 		add.addEventListener('click', () => createSession());
 		tabsEl.appendChild(add);
+		// Hand keyboard focus back to what had it before the rebuild (or to the tab an arrow key
+		// just selected, whose render may arrive in a later push).
+		const wantId = pendingTabFocus || focusedId;
+		if (wantId) {
+			const el = /** @type {HTMLElement | null} */ (Array.from(list.querySelectorAll('.chat-tab')).find(t => t instanceof HTMLElement && t.dataset.sid === wantId) || null);
+			if (el && (pendingTabFocus === wantId ? el.classList.contains('active') : true)) {
+				const toClose = focusedClose && pendingTabFocus !== wantId;
+				pendingTabFocus = '';
+				(toClose ? /** @type {HTMLElement | null} */ (el.querySelector('.tab-close')) : el)?.focus({ preventScroll: true });
+			}
+		}
 		// A re-render (every `sessions` push) must not jump the strip back to the start; then the
 		// tab being read is brought into view if it is not — by scrollLeft on the list alone,
 		// since scrollIntoView would also scroll every ancestor.
@@ -3006,7 +3063,10 @@
 				// locally anymore — closing/clearing a tab archives on the host now — so this
 				// is a plain replace rather than the old client/host merge.
 				const emptyBefore = !cur()?.messages.length;
-				history = Array.isArray(msg.history) ? msg.history : [];
+				history = Array.isArray(msg.history)
+					? msg.history.filter(h => h && typeof h === 'object' && typeof h.id === 'string')
+						.map(h => ({ ...h, messages: Array.isArray(h.messages) ? h.messages.filter(m => m && typeof m === 'object') : [] }))
+					: [];
 				if (!els.historyPanel.classList.contains('hidden')) { renderHistoryPanel(); }
 				if (emptyBefore) { renderAll(); }
 				break;
@@ -3092,7 +3152,9 @@
 				// a session this cache has never seen yet starts with an empty one until its
 				// own `transcript` push arrives.
 				const prevById = new Map(sessions.map(s => [s.id, s]));
-				sessions = (msg.sessions || []).map(s => ({ ...s, messages: prevById.get(s.id)?.messages || [] }));
+				sessions = (Array.isArray(msg.sessions) ? msg.sessions : [])
+					.filter(s => s && typeof s === 'object' && typeof s.id === 'string')
+					.map(s => ({ ...s, messages: prevById.get(s.id)?.messages || [] }));
 				activeSessionId = msg.activeSessionId;
 				syncModeUI();
 				renderTabs();
@@ -3105,7 +3167,7 @@
 				// windowing is a later phase's work.
 				const s = sessions.find(x => x.id === msg.sessionId);
 				if (!s) { break; }
-				s.messages = Array.isArray(msg.messages) ? msg.messages : [];
+				s.messages = Array.isArray(msg.messages) ? msg.messages.filter(m => m && typeof m === 'object') : [];
 				if (s.id === activeSessionId) { renderAll(); }
 				break;
 			}

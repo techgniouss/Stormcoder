@@ -55,4 +55,16 @@ import { QueueDrainGate } from '../out/session/queueDrain.js';
 	assert.deepStrictEqual([edits.length > 0, unsynced.map(i => `main.js:${i + 1}`)], [true, []]);
 }
 
+// A superseded run's trailing `done` must not re-arm the drain while its replacement runs.
+{
+	const gate = new QueueDrainGate();
+	gate.runStarted('s', 'run1');
+	gate.runStarted('s', 'run2');        // run1 was superseded
+	gate.runFinished('s', 'run1');       // its straggler `done`
+	assert.equal(gate.admit('s', true), false);
+	gate.runFinished('s', 'run2');
+	gate.sessionClosed('s');
+	assert.equal(gate.admit('s', true), false, 'closing the tab drops its drain');
+}
+
 console.log('test-queue-drain: all assertions passed');

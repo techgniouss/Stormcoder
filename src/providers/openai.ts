@@ -8,6 +8,25 @@ import { OpenAICompatibleProvider } from './openaiCompatible';
 import { AgentRequest, AgentStep, ChatRequest, ModelEntry, ProviderInfo, StreamChatResult } from './types';
 
 /**
+ * Whether a request should go to the ChatGPT backend: the credential looks like a ChatGPT
+ * sign-in token AND the base URL is OpenAI's own. A JWT-shaped key sent to a custom
+ * endpoint (a gateway, a proxy) is that endpoint's key and must not be rerouted away.
+ */
+export function usesChatGptBackend(apiKey: string, baseUrl: string): boolean {
+	if (!isChatGptToken(apiKey)) {
+		return false;
+	}
+	if (!baseUrl.trim()) {
+		return true;
+	}
+	try {
+		return new URL(baseUrl).hostname === 'api.openai.com';
+	} catch {
+		return false;
+	}
+}
+
+/**
  * Provider for the OpenAI Chat Completions API (and any OpenAI-compatible endpoint,
  * configurable through the base URL setting). Used for ChatGPT models. When the
  * stored credential is a ChatGPT web sign-in token instead of an API key, requests
@@ -32,21 +51,21 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
 	};
 
 	override async streamChat(request: ChatRequest): Promise<StreamChatResult> {
-		if (isChatGptToken(request.apiKey)) {
+		if (usesChatGptBackend(request.apiKey, request.baseUrl)) {
 			return chatgptStreamChat(this.info.label, request);
 		}
 		return super.streamChat(request);
 	}
 
 	override async runAgentStep(request: AgentRequest): Promise<AgentStep> {
-		if (isChatGptToken(request.apiKey)) {
+		if (usesChatGptBackend(request.apiKey, request.baseUrl)) {
 			return chatgptAgentStep(this.info.label, request);
 		}
 		return super.runAgentStep(request);
 	}
 
 	override async listModels(apiKey: string, baseUrl: string, signal: AbortSignal): Promise<ModelEntry[]> {
-		if (isChatGptToken(apiKey)) {
+		if (usesChatGptBackend(apiKey, baseUrl)) {
 			// The ChatGPT backend has no models endpoint; it serves a fixed set.
 			return CHATGPT_MODELS.map(id => ({ id }));
 		}

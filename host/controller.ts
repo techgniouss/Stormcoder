@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { configureHost, HostEnvironment, readJsonFile, UiEvent, ViewId, writeJsonFile } from './env';
-import { createContext, deliverToView, deliverUri, ExtensionContext, registeredCommands, reloadSettings, resetHost, runCommand, settingDefaults } from './vscode';
+import { cancelProgress, createContext, deliverToView, deliverUri, ExtensionContext, registeredCommands, reloadSettings, resetHost, runCommand, settingDefaults } from './vscode';
 import COMMAND_LIST from './command-list.json';
 
 /** What the embedding process (Electron main, or the browser dev host) supplies. */
@@ -23,6 +23,8 @@ export interface ControllerOptions {
 	openExternal(url: string): Promise<boolean>;
 	readClipboard(): Promise<string>;
 	writeClipboard(text: string): Promise<void>;
+	/** Moves a path to the OS trash (used for `useTrash` deletes). */
+	trashItem?(file: string): Promise<void>;
 	pickFolder(): Promise<string | undefined>;
 	pickFiles(opts: { title?: string; folders: boolean; files: boolean; many: boolean; defaultPath?: string }): Promise<string[] | undefined>;
 	confirmTrust(folder: string): Promise<'trust' | 'readonly' | 'cancel'>;
@@ -60,6 +62,8 @@ export class Controller {
 	private chain: Promise<void> = Promise.resolve();
 	private rendererReady = false;
 	private readonly outbox: Array<{ channel: string; payload: unknown }> = [];
+	/** Messages held for a shell that has not connected are capped so a missing page cannot grow memory without bound. */
+	private static readonly OUTBOX_LIMIT = 500;
 
 	constructor(private readonly opts: ControllerOptions, private readonly engine: EngineModule, private readonly prepareHtml: (html: string) => string) {
 		this.stateFile = path.join(opts.userDataDir, 'app-state.json');
@@ -77,6 +81,9 @@ export class Controller {
 			this.opts.send(channel, payload);
 		} else {
 			this.outbox.push({ channel, payload });
+			if (this.outbox.length > Controller.OUTBOX_LIMIT) {
+				this.outbox.splice(0, this.outbox.length - Controller.OUTBOX_LIMIT);
+			}
 		}
 	}
 
@@ -98,10 +105,16 @@ export class Controller {
 	/** The shell page went away (window closed or reloaded); hold messages until it returns. */
 	rendererGone(): void {
 		this.rendererReady = false;
-		for (const resolve of this.pending.values()) {
+		this.resolvePending();
+	}
+
+	/** Answers every outstanding UI request with "dismissed" so no engine call waits on a prompt nobody can see. */
+	private resolvePending(): void {
+		const waiting = [...this.pending.values()];
+		this.pending.clear();
+		for (const resolve of waiting) {
 			resolve(undefined);
 		}
-		this.pending.clear();
 	}
 
 	private environment(): HostEnvironment {
@@ -127,6 +140,7 @@ export class Controller {
 			openExternal: url => /^(https?:\/\/|mailto:)/i.test(url) ? this.opts.openExternal(url) : Promise.resolve(false),
 			readClipboard: this.opts.readClipboard,
 			writeClipboard: this.opts.writeClipboard,
+			trash: this.opts.trashItem,
 			...this.opts.codec,
 		};
 	}
@@ -159,33 +173,41 @@ export class Controller {
 
 	/** (Re)starts the engine against the current folder. Calls are serialized. */
 	start(): Promise<void> {
-		this.chain = this.chain.then(() => {
-			if (this.context) {
-				try {
-					this.engine.deactivate();
-				} catch (err) {
-					console.error('deactivate failed', err);
-				}
-				for (const d of this.context.subscriptions) {
-					try {
-						d.dispose();
-					} catch (err) {
-						console.error('dispose failed', err);
-					}
-				}
-			}
-			resetHost();
-			this.viewHtml.clear();
-			this.context = createContext();
-			try {
-				this.engine.activate(this.context);
-			} catch (err) {
-				console.error('activation failed', err);
-				this.opts.showFatal('Stormcoder could not start', err instanceof Error ? (err.stack ?? err.message) : String(err));
-			}
-			this.toRenderer('app:state', this.publicState());
+		// A failed start must not reject the chain, or every later folder switch would be skipped too.
+		this.chain = this.chain.then(() => this.startNow()).catch(err => {
+			console.error('engine start failed', err);
+			this.opts.showFatal('Stormcoder could not start', err instanceof Error ? (err.stack ?? err.message) : String(err));
 		});
 		return this.chain;
+	}
+
+	private startNow(): void {
+		if (this.context) {
+			try {
+				this.engine.deactivate();
+			} catch (err) {
+				console.error('deactivate failed', err);
+			}
+			for (const d of this.context.subscriptions) {
+				try {
+					d.dispose();
+				} catch (err) {
+					console.error('dispose failed', err);
+				}
+			}
+		}
+		// Prompts the old engine was waiting on can never be answered meaningfully now.
+		this.resolvePending();
+		resetHost();
+		this.viewHtml.clear();
+		this.context = createContext();
+		try {
+			this.engine.activate(this.context);
+		} catch (err) {
+			console.error('activation failed', err);
+			this.opts.showFatal('Stormcoder could not start', err instanceof Error ? (err.stack ?? err.message) : String(err));
+		}
+		this.toRenderer('app:state', this.publicState());
 	}
 
 	async shutdown(): Promise<void> {
@@ -237,11 +259,53 @@ export class Controller {
 
 	// ------------------------------------------------------------------ calls from the shell
 
-	/** The built-in editor may only touch the app's data and the open project's config folders. */
-	private isEditable(file: string): boolean {
+	/** Resolves symlinks in the longest existing prefix of `file`, so a path that does not exist yet is still judged by where it would land. */
+	private realPathLoose(file: string): string {
+		let head = path.resolve(file);
+		const tail: string[] = [];
+		for (;;) {
+			try {
+				return path.join(fs.realpathSync(head), ...tail.reverse());
+			} catch {
+				const parent = path.dirname(head);
+				if (parent === head) {
+					return path.resolve(file);
+				}
+				tail.push(path.basename(head));
+				head = parent;
+			}
+		}
+	}
+
+	/**
+	 * The built-in editor may only touch the settings file, the MCP config files and skills of a trusted
+	 * project, and (read-only) the logs. Never secrets, the encryption key or app state. Each
+	 * allowed path must also resolve to itself after following symlinks, so a `.vscode` that links
+	 * to `~/.ssh` cannot be used to escape.
+	 */
+	private isEditable(file: string, forWrite: boolean): boolean {
 		const resolved = path.resolve(file);
-		const roots = [this.opts.userDataDir, ...(this.state.folder ? [path.join(this.state.folder, '.openvs'), path.join(this.state.folder, '.vscode')] : [])];
-		return roots.some(r => resolved === r || resolved.startsWith(r + path.sep));
+		const allowed: Array<{ base: string; rel: string; prefix?: boolean }> = [{ base: this.opts.userDataDir, rel: 'settings.json' }];
+		if (!forWrite) {
+			allowed.push({ base: this.opts.userDataDir, rel: 'logs', prefix: true });
+		}
+		const folder = this.state.folder;
+		if (folder && this.state.trusted.includes(folder)) {
+			allowed.push(
+				{ base: folder, rel: path.join('.openvs', 'mcp.json') },
+				{ base: folder, rel: path.join('.vscode', 'mcp.json') },
+				{ base: folder, rel: path.join('.openvs', 'skills'), prefix: true },
+			);
+		}
+		return allowed.some(a => {
+			const lexical = path.join(path.resolve(a.base), a.rel);
+			const matches = resolved === lexical || (a.prefix === true && resolved.startsWith(lexical + path.sep));
+			if (!matches) {
+				return false;
+			}
+			const expected = path.join(this.realPathLoose(a.base), path.relative(path.resolve(a.base), resolved));
+			return this.realPathLoose(resolved) === expected;
+		});
 	}
 
 	/** Dispatches one named call from the shell page. Unknown names are rejected. */
@@ -261,21 +325,36 @@ export class Controller {
 				if (id === 'app.openFolder') { return this.openFolder(rest[0] as string | undefined); }
 				if (id === 'app.closeFolder') { return this.closeFolder(); }
 				if (id === 'app.state') { return this.publicState(); }
+				if (id === 'app.cancelProgress') { cancelProgress(Number(rest[0])); return undefined; }
 				if (id === 'app.settingsDefaults') { return settingDefaults(); }
 				if (id.startsWith('app.')) { return this.opts.appCommand?.(id, rest); }
 				return runCommand(id, ...rest);
 			}
 			case 'readFile': {
 				const file = String(args[0]);
-				if (!this.isEditable(file)) { throw new Error('That file cannot be edited here.'); }
+				if (!this.isEditable(file, false)) { throw new Error('That file cannot be edited here.'); }
 				return fs.promises.readFile(file, 'utf8').catch(() => '');
 			}
 			case 'writeFile': {
 				const file = String(args[0]);
-				if (!this.isEditable(file)) { throw new Error('That file cannot be edited here.'); }
+				if (!this.isEditable(file, true)) { throw new Error('That file cannot be edited here.'); }
+				const text = String(args[1]);
+				const isSettings = path.resolve(file) === path.join(this.opts.userDataDir, 'settings.json');
+				// Settings are validated before they replace the file: a typo must not wipe every setting on reload.
+				if (isSettings || path.basename(file) === 'mcp.json') {
+					let parsed: unknown;
+					try {
+						parsed = JSON.parse(text);
+					} catch (err) {
+						throw new Error(`${path.basename(file)} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+					}
+					if (isSettings && (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))) {
+						throw new Error('settings.json must contain a JSON object.');
+					}
+				}
 				await fs.promises.mkdir(path.dirname(file), { recursive: true });
-				await fs.promises.writeFile(file, String(args[1]), 'utf8');
-				if (path.resolve(file) === path.join(this.opts.userDataDir, 'settings.json')) {
+				await fs.promises.writeFile(file, text, 'utf8');
+				if (isSettings) {
 					reloadSettings();
 				}
 				return undefined;

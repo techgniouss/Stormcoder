@@ -22,6 +22,9 @@ const MCP_PREFIX = 'mcp__';
  * Why a run ended. Every terminal path maps onto one of these so the UI can always
  * tell the user *why* it stopped — a run that just goes quiet is a bug, not an outcome.
  */
+/** Tool result for a call the model's output limit cut off; the call is not executed. */
+const TRUNCATED_CALL_RESULT = 'Output limit hit: your reply was cut off in the middle of this tool call, so it was NOT run. Retry with a smaller call (for example, write a large file in several smaller edits).';
+
 export type StopReason = 'done' | 'limit' | 'truncated' | 'filtered' | 'refused' | 'stalled' | 'error';
 
 /** The outcome of {@link AgentRunner.run}. */
@@ -428,7 +431,7 @@ export interface AgentOptions {
 	 * agent loop stays decoupled from key storage — the host wires this to
 	 * `withProviderResilience`'s rotation logic.
 	 */
-	onKeyFailure?: (message: string) => Promise<string | undefined>;
+	onKeyFailure?: (message: string, failedKey?: string) => Promise<string | undefined>;
 	/**
 	 * Called after any step succeeds. The host uses this to clear a quota cooldown recorded
 	 * by an earlier failed step in the same run — the (provider, model) pair isn't actually
@@ -558,7 +561,7 @@ export class AgentRunner {
 	/** Set once the MCP tool schemas were found not to fit the budget; they are then omitted. */
 	private mcpSchemasDropped = false;
 	/** See {@link AgentOptions.onKeyFailure}. */
-	private readonly onKeyFailure?: (message: string) => Promise<string | undefined>;
+	private readonly onKeyFailure?: (message: string, failedKey?: string) => Promise<string | undefined>;
 	/** See {@link AgentOptions.onStepSuccess}. */
 	private readonly onStepSuccess?: () => void;
 	/** See {@link AgentOptions.a2a}. Only ever set when {@link depth} is 0 — see that doc. */
@@ -849,7 +852,7 @@ export class AgentRunner {
 				// generic transient-retry check, and outside stepRetries' budget: rotating to a
 				// working key is progress, not a flaky-provider retry.
 				if (isKeyFailure(message) && this.onKeyFailure && keyRotationAttempts < MAX_KEY_ROTATION_ATTEMPTS) {
-					const nextKey = await this.onKeyFailure(message);
+					const nextKey = await this.onKeyFailure(message, params.apiKey);
 					if (nextKey !== undefined) {
 						params.apiKey = nextKey;
 						keyRotationAttempts++;
@@ -1007,6 +1010,18 @@ export class AgentRunner {
 			this.nudgeCounts.clear();
 			this.didToolWork = true;
 			step++;
+
+			// Cut off by the output limit mid tool call: the arguments were repaired from partial
+			// JSON, so running them would write half a file or run half a command. Refuse every
+			// call instead and tell the model to retry smaller.
+			if (result.truncated) {
+				for (const call of result.toolCalls) {
+					callbacks.onToolStart(call);
+					callbacks.onToolEnd(call, TRUNCATED_CALL_RESULT, true);
+					messages.push({ role: 'tool', content: TRUNCATED_CALL_RESULT, toolCallId: call.id });
+				}
+				continue;
+			}
 
 			const outcomes = await this.runTools(result.toolCalls, params, callbacks);
 			for (const { call, result: toolResult } of outcomes) {
@@ -1686,7 +1701,7 @@ export class AgentRunner {
 				// without the step-loop's retry-count bookkeeping (this runs at most once
 				// per compaction, not once per step).
 				const message = err instanceof Error ? err.message : String(err);
-				const nextKey = isKeyFailure(message) ? await this.onKeyFailure?.(message) : undefined;
+				const nextKey = isKeyFailure(message) ? await this.onKeyFailure?.(message, params.apiKey) : undefined;
 				if (nextKey === undefined) {
 					throw err;
 				}
@@ -1719,6 +1734,37 @@ export class AgentRunner {
 	): Promise<Array<{ call: ToolCall; result: string; isError: boolean }>> {
 		const outcomes: Array<{ call: ToolCall; result: string; isError: boolean }> = [];
 		const spawnCalls: ToolCall[] = [];
+		/**
+		 * Runs the sub-agent calls collected so far. Read-only delegates go first (in
+		 * parallel when allowed), then write-capable ones one at a time.
+		 */
+		const flushSpawns = async (): Promise<void> => {
+			if (!spawnCalls.length) {
+				return;
+			}
+			const pending = spawnCalls.splice(0, spawnCalls.length);
+			// A delegate reads and writes on its own; nothing the parent cached still holds.
+			this.answeredReads.clear();
+			const runOne = async (call: ToolCall) => {
+				callbacks.onToolStart(call);
+				const { result, isError } = await this.runSubagent(call, params, callbacks);
+				callbacks.onToolEnd(call, result, isError);
+				return { call, result, isError };
+			};
+			const readOnly = pending.filter(c => asBoolean(c.args.readOnly));
+			const writal = pending.filter(c => !asBoolean(c.args.readOnly));
+			if (writal.length) {
+				// A write-capable delegate may have changed anything; the parent must not
+				// then declare the task verified on the strength of an earlier build.
+				this.unverifiedWrites = true;
+			}
+			if (this.guardrails.parallelResearch && readOnly.length > 1) {
+				outcomes.push(...await Promise.all(readOnly.map(runOne)));
+			} else {
+				for (const call of readOnly) { outcomes.push(await runOne(call)); }
+			}
+			for (const call of writal) { outcomes.push(await runOne(call)); }
+		};
 
 		for (let i = 0; i < calls.length; i++) {
 			const call = calls[i];
@@ -1728,6 +1774,13 @@ export class AgentRunner {
 			if (call.name === SPAWN_SUBAGENT_TOOL.name) {
 				spawnCalls.push(call);
 				continue;
+			}
+			// Model order matters once a delegate may write: [spawn(write X), run_command(test X)]
+			// must not test X before the delegate has built it. Read-only delegates only need
+			// to run before a later call that could change what they read. Parallel research
+			// still batches, since adjacent read-only spawns stay pending together.
+			if (spawnCalls.length && (!READ_ONLY_TOOL_NAMES.includes(call.name) || spawnCalls.some(c => !asBoolean(c.args.readOnly)))) {
+				await flushSpawns();
 			}
 			// Handled here rather than falling through to the read-only batch path below:
 			// `list_agent_sessions` IS in READ_ONLY_TOOL_NAMES (for classification — see that
@@ -1791,29 +1844,7 @@ export class AgentRunner {
 			outcomes.push(await this.runOneTool(call, callbacks));
 		}
 
-		if (spawnCalls.length) {
-			// A delegate reads and writes on its own; nothing the parent cached still holds.
-			this.answeredReads.clear();
-			const runOne = async (call: ToolCall) => {
-				callbacks.onToolStart(call);
-				const { result, isError } = await this.runSubagent(call, params, callbacks);
-				callbacks.onToolEnd(call, result, isError);
-				return { call, result, isError };
-			};
-			const readOnly = spawnCalls.filter(c => asBoolean(c.args.readOnly));
-			const writal = spawnCalls.filter(c => !asBoolean(c.args.readOnly));
-			if (writal.length) {
-				// A write-capable delegate may have changed anything; the parent must not
-				// then declare the task verified on the strength of an earlier build.
-				this.unverifiedWrites = true;
-			}
-			if (this.guardrails.parallelResearch && readOnly.length > 1) {
-				outcomes.push(...await Promise.all(readOnly.map(runOne)));
-			} else {
-				for (const call of readOnly) { outcomes.push(await runOne(call)); }
-			}
-			for (const call of writal) { outcomes.push(await runOne(call)); }
-		}
+		await flushSpawns();
 
 		return outcomes;
 	}
@@ -1886,11 +1917,24 @@ export class AgentRunner {
 		this.recordVerificationState(call, isError);
 	}
 
+	/**
+	 * The refusal for a call whose tool this run never offered, or undefined when it was.
+	 * {@link toolSet} only controls what the model is shown; a model can still emit any name,
+	 * so dispatch re-checks it here. This is what keeps Ask/Plan and research sub-agents
+	 * read-only: a `run_command` or MCP call from one is refused with no side effect.
+	 */
+	private notOffered(call: ToolCall): string | undefined {
+		if (this.toolSet().some(t => t.name === call.name)) {
+			return undefined;
+		}
+		return `The tool "${call.name}" is not available in this run${this.readOnly ? ' (read-only mode)' : ''}. Use one of the tools you were given.`;
+	}
+
 	/** Runs one ordinary tool call (anything the loop doesn't handle itself), guards included. */
 	private async runOneTool(call: ToolCall, callbacks: AgentCallbacks): Promise<{ call: ToolCall; result: string; isError: boolean }> {
 		const key = repeatKey(call);
 		const isRead = READ_ONLY_TOOL_NAMES.includes(call.name);
-		const refusal = this.toolRefusal(key, isRead);
+		const refusal = this.notOffered(call) ?? this.toolRefusal(key, isRead);
 		callbacks.onToolStart(call);
 		if (refusal !== undefined) {
 			callbacks.onToolEnd(call, refusal, true);
@@ -1921,7 +1965,7 @@ export class AgentRunner {
 	private async runReadBatch(batch: ToolCall[], callbacks: AgentCallbacks): Promise<Array<{ call: ToolCall; result: string; isError: boolean }>> {
 		const planned = batch.map(call => {
 			const key = repeatKey(call);
-			return { call, key, refusal: this.toolRefusal(key, true) };
+			return { call, key, refusal: this.notOffered(call) ?? this.toolRefusal(key, true) };
 		});
 		for (const p of planned) {
 			callbacks.onToolStart(p.call);
@@ -2089,7 +2133,7 @@ export class AgentRunner {
 		} catch (err) {
 			// An abort belongs to the whole run, not to this delegation — let it propagate
 			// instead of being reported to the model as a failed tool call.
-			if (err instanceof DOMException && err.name === 'AbortError') {
+			if (isAbortError(err) || params.signal.aborted) {
 				throw err;
 			}
 			return { result: `Sub-agent failed: ${err instanceof Error ? err.message : String(err)}`, isError: true };

@@ -90,9 +90,6 @@ export function parseTodoUpdate(args: Record<string, unknown>): TodoUpdate {
 	if (!raw) {
 		return { error: `update_todos requires an "items" array (send the complete checklist). Received: ${Object.keys(args).join(', ') || 'no arguments'}.` };
 	}
-	if (raw.length > MAX_ITEMS) {
-		return { error: `Too many todo items (${raw.length}); keep the checklist under ${MAX_ITEMS}.` };
-	}
 	const items: TodoItem[] = [];
 	for (const entry of raw) {
 		// A bare string is a complete, unambiguous item — models send them constantly, and
@@ -117,7 +114,11 @@ export function parseTodoUpdate(args: Record<string, unknown>): TodoUpdate {
 		// "pending" is the safe reading, because the completion gate then keeps chasing the
 		// item instead of letting the run end with it silently marked done.
 		const rawStatus = typeof fields.status === 'string' ? fields.status.trim().toLowerCase() : '';
-		items.push({ content, status: STATUS_ALIASES[rawStatus] ?? 'pending' });
+		items.push({ content, status: (Object.hasOwn(STATUS_ALIASES, rawStatus) ? STATUS_ALIASES[rawStatus] : undefined) ?? 'pending' });
+	}
+	// Counted after blank strings are dropped: they are not items.
+	if (items.length > MAX_ITEMS) {
+		return { error: `Too many todo items (${items.length}); keep the checklist under ${MAX_ITEMS}.` };
 	}
 	return { items };
 }

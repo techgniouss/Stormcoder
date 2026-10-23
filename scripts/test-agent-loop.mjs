@@ -1195,6 +1195,9 @@ async function runAuto(agentSteps, { maxSteps = 20, history = [{ role: 'user', c
 // models reach for, and reading `args.oldText` off that call yielded an edit of one empty
 // string into another — a diff with nothing in it, which no reviewer can fault.
 {
+	// Only edits that actually applied are shown to the reviewer, so the text must exist.
+	const savedA = workspaceFiles['a.ts'];
+	workspaceFiles['a.ts'] = 'const a = 1\nconst b = 3\n';
 	const prompt = await runAuto([
 		{
 			content: '', toolCalls: [{
@@ -1215,12 +1218,14 @@ async function runAuto(agentSteps, { maxSteps = 20, history = [{ role: 'user', c
 		[true, true, true, true, true],
 		'every edit in the batch is shown to the reviewer',
 	);
+	workspaceFiles['a.ts'] = savedA;
 }
 
 // 26b. Another product's argument vocabulary reaches it too. The executor normalizes
 // `old_string`/`file_path`; the change record did not, so a model using Anthropic's
 // text-editor names had its work recorded as blank.
 {
+	workspaceFiles['b.ts'] = 'before text';
 	const prompt = await runAuto([
 		{
 			content: '', toolCalls: [{
@@ -1236,6 +1241,7 @@ async function runAuto(agentSteps, { maxSteps = 20, history = [{ role: 'user', c
 		[true, true, true],
 		'aliased edit arguments are normalized before being recorded',
 	);
+	delete workspaceFiles['b.ts'];
 }
 
 // 26c. An implementation that stopped short is declared to the reviewer. Reviewing a
@@ -2486,6 +2492,97 @@ for (const readOnly of [false, true]) {
 	await new AgentRunner(provider, approver, 10, { readOnly: true }).run([{ role: 'user', content: 'go' }], params, cb);
 	assert.strictEqual(delegated, false, 'a read-only run never starts a delegate');
 	assert.strictEqual(ends.s1?.isError, true, 'and the model is told the call was refused');
+}
+
+// 39. Dispatch refuses any tool the run did not offer: a read-only run cannot write, run
+// commands or call MCP tools even if the model names them.
+{
+	let mcpCalled = false;
+	let confirms = 0;
+	const mcp = {
+		tools: () => [{ name: 'mcp__fs__write', description: 'w', parameters: { type: 'object', properties: {} } }],
+		call: async () => { mcpCalled = true; return { result: 'ok', isError: false }; },
+		isReadOnly: () => false,
+	};
+	const provider = fakeProvider([
+		{ content: '', toolCalls: [
+			{ id: 'a', name: 'write_file', args: { path: 'z1.ts', content: 'x' } },
+			{ id: 'b', name: 'run_command', args: { command: 'echo hi' } },
+			{ id: 'c', name: 'mcp__fs__write', args: {} },
+			{ id: 'd', name: 'write_file', args: { path: 'z1.ts', content: 'y' } },
+		] },
+		{ content: 'done', toolCalls: [] },
+	]);
+	const counting = { confirm: async () => { confirms++; return { approved: true }; }, ask: async () => '' };
+	const ends = {};
+	const cb = { ...noopCallbacks(), onToolEnd: (c, r, e) => { ends[c.id] = e; } };
+	await new AgentRunner(provider, counting, 10, { readOnly: true, mcp }).run([{ role: 'user', content: 'go' }], params, cb);
+	assert.deepStrictEqual(ends, { a: true, b: true, c: true, d: true });
+	assert.strictEqual(workspaceFiles['z1.ts'], undefined, 'no file was written');
+	assert.strictEqual(mcpCalled, false);
+	assert.strictEqual(confirms, 0);
+}
+
+// 40. A step cut off by the output limit mid tool call does not run the repaired call.
+{
+	const provider = fakeProvider([
+		{ content: '', toolCalls: [{ id: 't1', name: 'write_file', args: { path: 'z2.ts', content: 'half' } }], truncated: true },
+		{ content: 'done', toolCalls: [] },
+	]);
+	const ends = {};
+	const cb = { ...noopCallbacks(), onToolEnd: (c, r, e) => { ends[c.id] = { r, e }; } };
+	await new AgentRunner(provider, approver, 10).run([{ role: 'user', content: 'go' }], params, cb);
+	assert.strictEqual(workspaceFiles['z2.ts'], undefined, 'the cut-off write never ran');
+	assert.strictEqual(ends.t1.e, true);
+	assert.match(ends.t1.r, /Output limit/);
+	assert.match(provider.seen[1].find(m => m.startsWith('tool:')), /Output limit/);
+}
+
+// 41. Model order is kept around a write-capable sub-agent: it runs before a later call.
+{
+	const order = [];
+	const provider = {
+		info: { id: 'fake', label: 'Fake', supportsTools: true, toolModelPatterns: [], visionModelPatterns: [] },
+		async listModels() { return []; },
+		async runAgentStep(request) {
+			if (request.messages.some(m => typeof m.content === 'string' && m.content.includes('CHILDGOAL'))) {
+				return { content: 'child ran', toolCalls: [] };
+			}
+			return request.messages.some(m => m.role === 'tool')
+				? { content: 'done', toolCalls: [] }
+				: { content: '', toolCalls: [
+					{ id: 's1', name: 'spawn_subagent', args: { goal: 'CHILDGOAL', readOnly: false } },
+					{ id: 'w1', name: 'write_file', args: { path: 'z3.ts', content: 'x' } },
+				] };
+		},
+	};
+	const cb = { ...noopCallbacks(), onToolStart: c => { if (!c.id.includes('/')) { order.push(c.id); } } };
+	await new AgentRunner(provider, approver, 10).run([{ role: 'user', content: 'go' }], params, cb);
+	assert.deepStrictEqual(order, ['s1', 'w1']);
+}
+
+// 42. An abort-shaped error from a delegate while the run is stopped propagates instead of becoming a tool result.
+{
+	const ac = new AbortController();
+	const provider = {
+		info: { id: 'fake', label: 'Fake', supportsTools: true, toolModelPatterns: [], visionModelPatterns: [] },
+		async listModels() { return []; },
+		async runAgentStep(request) {
+			if (request.messages.some(m => typeof m.content === 'string' && m.content.includes('ABORTME'))) {
+				ac.abort();
+				throw Object.assign(new Error('stopped'), { name: 'AbortError' });
+			}
+			return { content: '', toolCalls: [{ id: 's1', name: 'spawn_subagent', args: { goal: 'ABORTME', readOnly: true } }] };
+		},
+	};
+	const ends = {};
+	const cb = { ...noopCallbacks(), onToolEnd: (c, r) => { ends[c.id] = r; } };
+	let threw = false;
+	try {
+		await new AgentRunner(provider, approver, 10).run([{ role: 'user', content: 'go' }], { ...params, signal: ac.signal }, cb);
+	} catch { threw = true; }
+	assert.ok(threw || ends.s1 === undefined, 'abort is not reported as a failed tool call');
+	assert.ok(!/Sub-agent failed/.test(ends.s1 ?? ''));
 }
 
 console.log('test-agent-loop: all assertions passed');

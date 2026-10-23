@@ -106,4 +106,9 @@ assert.equal(render('(see https://a.com/x).'), '(see <a href="https://a.com/x">h
 assert.match(render('1. a\n   ```js\n   if (x) {\n     y();\n   }\n   ```\n2. b'),
 	/<code class="language-js" data-language="js">if \(x\) \{\n  y\(\);\n\}<\/code>/);
 
+// Placeholder delimiters in the input must not collide with the renderer's own: a literal
+// U+0000 0 U+0001 beside a code span used to splice the span's HTML in the wrong place.
+assert.equal(render('\u00000\u0001 `x`'), '0 <code>x</code><br />');
+assert.ok(!/[\u0000\u0001]/.test(render('a\u0000b\u0001c **d**')), 'control characters are stripped');
+
 console.log('PASS test-markdown.mjs');

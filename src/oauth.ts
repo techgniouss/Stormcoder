@@ -256,10 +256,32 @@ export class OAuthTokenStore {
 		if (record.expires - EXPIRY_SLACK_MS > Date.now()) {
 			return record.access;
 		}
+		// Single-flight per id: rotating refresh tokens mean a second concurrent refresh
+		// with the same (now spent) token would fail and wipe the winner's valid session.
+		let inflight = this.refreshing.get(id);
+		if (!inflight) {
+			inflight = this.refreshRecord(id, record).finally(() => {
+				this.refreshing.delete(id);
+			});
+			this.refreshing.set(id, inflight);
+		}
+		return inflight;
+	}
+
+	private readonly refreshing = new Map<string, Promise<string>>();
+
+	/** Refreshes one record and persists the result; clears the session only when it is truly dead. */
+	private async refreshRecord(id: string, record: StoredOAuth): Promise<string> {
 		const refreshed = record.type === 'anthropic' ? await refreshAnthropic(record.refresh)
 			: record.type === 'openai' ? await refreshOpenAI(record.refresh, record.access)
 				: await refreshAntigravity(record.refresh);
 		if (refreshed === 'invalid') {
+			// Another window or process may have rotated the token meanwhile; only clear
+			// when the stored refresh token is still the one that just failed.
+			const current = await this.get(id);
+			if (current && current.refresh !== record.refresh) {
+				return current.access;
+			}
 			await this.clear(id);
 			throw new Error('Your web sign-in session expired. Please sign in again.');
 		}
@@ -268,11 +290,29 @@ export class OAuthTokenStore {
 	}
 }
 
+/**
+ * True when a token endpoint response means the refresh token is dead: 401/403, or a
+ * 400 whose body says `invalid_grant`. Any other 400 is treated as a transient error.
+ */
+export function isRefreshRejected(status: number, json: any): boolean {
+	if (status === 401 || status === 403) {
+		return true;
+	}
+	if (status === 400) {
+		const error = typeof json?.error === 'string' ? json.error : typeof json?.error?.type === 'string' ? json.error.type : typeof json?.error?.code === 'string' ? json.error.code : '';
+		return error === 'invalid_grant';
+	}
+	return false;
+}
+
+const AUTH_REQUEST_TIMEOUT_MS = 25_000;
+
 async function postJson(url: string, body: Record<string, unknown>): Promise<{ status: number; json: any }> {
 	const response = await fetch(url, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(body),
+		signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS),
 	});
 	return { status: response.status, json: await response.json().catch(() => ({})) };
 }
@@ -282,6 +322,7 @@ async function postForm(url: string, body: Record<string, string>): Promise<{ st
 		method: 'POST',
 		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 		body: new URLSearchParams(body).toString(),
+		signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS),
 	});
 	return { status: response.status, json: await response.json().catch(() => ({})) };
 }
@@ -302,7 +343,7 @@ async function refreshAnthropic(refreshToken: string): Promise<StoredOAuth | 'in
 		refresh_token: refreshToken,
 		client_id: ANTHROPIC_CLIENT_ID,
 	});
-	if (status === 400 || status === 401 || status === 403) {
+	if (isRefreshRejected(status, json)) {
 		return 'invalid';
 	}
 	if (typeof json?.access_token !== 'string') {
@@ -322,7 +363,7 @@ async function refreshOpenAI(refreshToken: string, previousAccessToken: string):
 		client_id: OPENAI_CLIENT_ID,
 		scope: 'openid profile email',
 	});
-	if (status === 400 || status === 401 || status === 403) {
+	if (isRefreshRejected(status, json)) {
 		return 'invalid';
 	}
 	if (typeof json?.access_token !== 'string') {
@@ -343,7 +384,7 @@ async function refreshAntigravity(refreshToken: string): Promise<StoredOAuth | '
 		client_id: ANTIGRAVITY_CLIENT_ID,
 		client_secret: antigravityClientSecret(),
 	});
-	if (status === 400 || status === 401 || status === 403) {
+	if (isRefreshRejected(status, json)) {
 		return 'invalid';
 	}
 	if (typeof json?.access_token !== 'string') {
@@ -492,12 +533,17 @@ function waitForOpenAICallback(authorizeUrl: string, expectedState: string): Pro
 			const error = requestUrl.searchParams.get('error');
 			const code = requestUrl.searchParams.get('code');
 			const state = requestUrl.searchParams.get('state');
+			if (state !== expectedState) {
+				// A stray or forged request must not abort the real sign-in: answer 400 and keep listening.
+				res.writeHead(400, { 'Content-Type': 'text/plain' }).end('Invalid sign-in state.');
+				return;
+			}
 			res.writeHead(200, { 'Content-Type': 'text/html' });
 			res.end('<html><body style="font-family:sans-serif"><h2>Sign-in received</h2><p>You can close this window and return to the editor.</p></body></html>');
 			finish(() => {
 				if (error) {
 					reject(new Error(`ChatGPT sign-in was rejected: ${error}`));
-				} else if (!code || state !== expectedState) {
+				} else if (!code) {
 					reject(new Error('ChatGPT sign-in returned an invalid callback.'));
 				} else {
 					resolve(code);
@@ -604,12 +650,17 @@ function waitForAntigravityCallback(authorizeUrl: string, expectedState: string)
 			const error = requestUrl.searchParams.get('error');
 			const code = requestUrl.searchParams.get('code');
 			const state = requestUrl.searchParams.get('state');
+			if (state !== expectedState) {
+				// A stray or forged request must not abort the real sign-in: answer 400 and keep listening.
+				res.writeHead(400, { 'Content-Type': 'text/plain' }).end('Invalid sign-in state.');
+				return;
+			}
 			res.writeHead(200, { 'Content-Type': 'text/html' });
 			res.end('<html><body style="font-family:sans-serif"><h2>Sign-in received</h2><p>You can close this window and return to the editor.</p></body></html>');
 			finish(() => {
 				if (error) {
 					reject(new Error(`Antigravity sign-in was rejected: ${error}`));
-				} else if (!code || state !== expectedState) {
+				} else if (!code) {
 					reject(new Error('Antigravity sign-in returned an invalid callback.'));
 				} else {
 					resolve(code);

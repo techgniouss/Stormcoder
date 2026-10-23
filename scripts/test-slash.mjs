@@ -144,7 +144,28 @@ const CLIENT_ONLY_COMMANDS = new Set(['history', 'enhance']);
 {
 	const { effects, calls } = makeEffects();
 	assert.deepStrictEqual(runSlash('/mcp reconnect', effects), { handled: true });
-	assert.deepStrictEqual(calls, [{ fn: 'mcpReconnect' }]);
+	assert.deepStrictEqual(calls.map(c => c.fn), ['reply', 'mcpReconnect'], 'reconnect tells the user it is happening');
+}
+for (const [text, fn] of [['/mcp ADD', 'mcpAdd'], ['/mcp Add foo', 'mcpAdd'], ['/mcp Reconnect', 'mcpReconnect']]) {
+	const { effects, calls } = makeEffects();
+	assert.deepStrictEqual(runSlash(text, effects), { handled: true });
+	assert.ok(calls.some(c => c.fn === fn), `"${text}" dispatches ${fn}`);
+}
+
+// The command word ends at whitespace: "/ask-me" is a message, not "/ask" with "-me".
+{
+	assert.strictEqual(parseSlash('/ask-me'), undefined);
+	const { effects, calls } = makeEffects();
+	assert.deepStrictEqual(runSlash('/ask-me later', effects), { handled: false });
+	assert.deepStrictEqual(calls, []);
+}
+
+// /skill matches ids without regard to case but resolves to the real (case-sensitive) id.
+{
+	const { effects, calls } = makeEffects({ skills: [{ id: 'MySkill', name: 'My', description: '' }], active: [] });
+	assert.deepStrictEqual(runSlash('/skill myskill', effects), { handled: true });
+	assert.deepStrictEqual(runSlash('/skill Unknown-One', effects), { handled: true });
+	assert.deepStrictEqual(calls, [{ fn: 'setSkill', id: 'MySkill' }, { fn: 'setSkill', id: 'Unknown-One' }]);
 }
 
 // 8. /clear — the same effect case 'clearSession' has.

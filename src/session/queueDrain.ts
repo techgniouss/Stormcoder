@@ -14,9 +14,32 @@ export class QueueDrainGate {
 	/** Tabs whose last run has finished and whose queue has not been drained since. */
 	private readonly drainable = new Set<string>();
 
-	/** Records that `sessionId`'s run finished (its `done` is being posted). */
-	runFinished(sessionId: string): void {
+	/** The run each tab is currently on; a `done` from any other run is a superseded straggler. */
+	private readonly current = new Map<string, string>();
+
+	/** Records that `runId` is now `sessionId`'s current run (called as a send is admitted). */
+	runStarted(sessionId: string, runId: string): void {
+		this.current.set(sessionId, runId);
+		this.drainable.delete(sessionId);
+	}
+
+	/**
+	 * Records that `sessionId`'s run finished (its `done` is being posted). Keyed by run: the
+	 * trailing `done` of a run that was superseded must not re-arm the drain while the run
+	 * that replaced it is still going.
+	 */
+	runFinished(sessionId: string, runId?: string): void {
+		const current = this.current.get(sessionId);
+		if (runId && current !== undefined && current !== runId) {
+			return;
+		}
 		this.drainable.add(sessionId);
+	}
+
+	/** Forgets a closed tab. */
+	sessionClosed(sessionId: string): void {
+		this.current.delete(sessionId);
+		this.drainable.delete(sessionId);
 	}
 
 	/**
