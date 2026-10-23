@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.3
+
+- The thinking-line drawings are now rendered as lit objects instead of flat icons: brushed steel with a polished horizon reflection, gold, grained wood, glass, bone and lava, each with a specular edge and a glowing part that animates (the hammer's rune, the axe's charged edge, the skull's ember eyes, the cracks in a dying planet, falling sand). They are drawn 26px, up from 20.
+- New doomsday set: a skull, a falling meteor, a black hole, an hourglass and a cracking planet, paired with 22 new lines ("Counting down to doomsday", "Reading the Doomsday Clock", "Feeding the black hole", "Ragnarok incoming", "Bracing for impact" and more). Plain verbs never draw a doom glyph.
+- The storm set is redrawn the same way: a thundercloud, a star, a ringed planet, glowing code brackets and a plasma bolt.
+
 ## 1.3.2
 
 - The thinking-line drawings are redrawn: a war hammer with a lightning rune, a bearded axe with a glowing edge, a winged helm and a golden bolt, all on one grid with steel, gold and wood gradients that read on both themes. No raster artwork is used; they are inline SVG in the new `media/glyphs.js`.

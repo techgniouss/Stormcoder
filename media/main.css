@@ -998,7 +998,7 @@ body.settings-window #settingsPanel {
 	margin-right: 4px;
 	vertical-align: -3px;
 }
-.tool-glyph .thor-glyph, .tool-glyph .storm-glyph { width: auto; height: 15px; }
+.tool-glyph .thor-glyph, .tool-glyph .storm-glyph, .tool-glyph .doom-glyph { width: auto; height: 16px; }
 .tool.tool-error { border-left-color: var(--vscode-inputValidation-errorBorder, #f14c4c); }
 .tool-head {
 	display: flex;
@@ -1479,39 +1479,42 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 	align-items: center;
 	justify-content: center;
 	align-self: center;
-	width: 22px;
-	height: 22px;
+	width: 30px;
+	height: 30px;
 	line-height: 0;
 }
-/* The Asgard set: the hammer and axe swing from the butt of the handle, the helm hovers, the
-   golden bolt strikes. Percentages, not px: transform-origin resolves against the rendered box. */
-.thor-glyph { display: block; }
-.thor-glyph.hammer {
-	transform-origin: 50% 92%;
-	animation: stormcoder-swing 1.8s ease-in-out infinite;
-}
-.thor-glyph.axe {
-	transform-origin: 50% 92%;
-	animation: stormcoder-swing 2.1s ease-in-out infinite;
-}
-.thor-glyph.goldbolt {
-	filter: drop-shadow(0 0 4px color-mix(in srgb, var(--vscode-charts-yellow, #e2c08d) 55%, transparent));
-	animation: bolt-strike 1.5s steps(1, end) infinite;
-}
-.thor-glyph.helm {
-	animation: helm-hover 2.4s ease-in-out infinite;
-}
+/* The lit-object glyphs (media/glyphs.js). Each animates the glowing part of its drawing. */
+.thor-glyph, .doom-glyph { display: block; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / .45)); }
+.thor-glyph.hammer { transform-origin: 50% 92%; animation: stormcoder-swing 1.8s ease-in-out infinite; }
+.thor-glyph.axe { transform-origin: 50% 92%; animation: stormcoder-swing 2.1s ease-in-out infinite; }
+.thor-glyph.axe .edge { animation: glow-breathe 1.2s ease-in-out infinite; }
+.thor-glyph.axe .spark { animation: slash-blink 0.9s steps(1, end) infinite; }
+.thor-glyph.hammer .rune { animation: glow-breathe 1.4s ease-in-out infinite; }
+.thor-glyph.goldbolt { animation: bolt-strike 1.5s steps(1, end) infinite; }
+.thor-glyph.helm { animation: helm-hover 2.4s ease-in-out infinite; }
 @keyframes stormcoder-swing {
 	0%, 100% { transform: rotate(-16deg); }
 	42% { transform: rotate(14deg); }
 	52% { transform: rotate(9deg) translateY(1px); }
 }
 @keyframes helm-hover {
-	0%, 100% { transform: translateY(1px); opacity: 0.8; }
-	50% { transform: translateY(-2px); opacity: 1; }
+	0%, 100% { transform: translateY(1px); }
+	50% { transform: translateY(-2px); }
 }
+@keyframes glow-breathe { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+.doom-glyph.skull .eyes { animation: glow-breathe 1.6s ease-in-out infinite; }
+.doom-glyph.skull { animation: helm-hover 3s ease-in-out infinite; }
+.doom-glyph.meteor { animation: meteor-fall 2s ease-in-out infinite; }
+.doom-glyph.meteor .flame { animation: glow-breathe .5s ease-in-out infinite; }
+.doom-glyph.blackhole .halo { transform-origin: 50% 50%; animation: glow-breathe 2.2s ease-in-out infinite; }
+.doom-glyph.hourglass .stream { animation: sand-fall .5s linear infinite; }
+.doom-glyph.hourglass { animation: hourglass-turn 6s ease-in-out infinite; }
+.doom-glyph.cracked .lava { animation: glow-breathe 1.5s ease-in-out infinite; }
+@keyframes meteor-fall { 0%, 100% { transform: translate(-1px, 1px); } 50% { transform: translate(1.5px, -1.5px); } }
+@keyframes sand-fall { to { stroke-dashoffset: -4; } }
+@keyframes hourglass-turn { 0%, 80% { transform: rotate(0); } 95%, 100% { transform: rotate(180deg); } }
 /* One animation per glyph: the bolt strikes, the brackets breathe, the charge orbits, the cloud flashes. */
-.storm-glyph { display: block; color: var(--vscode-charts-blue, #4ea1ff); }
+.storm-glyph { display: block; color: var(--vscode-charts-blue, #4ea1ff); filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / .4)); }
 .storm-glyph.bolt {
 	filter: drop-shadow(0 0 4px color-mix(in srgb, currentColor 55%, transparent));
 	animation: bolt-strike 1.5s steps(1, end) infinite;
@@ -1519,7 +1522,9 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 .storm-glyph.brackets .l { animation: bracket-left 1.6s ease-in-out infinite; }
 .storm-glyph.brackets .r { animation: bracket-right 1.6s ease-in-out infinite; }
 .storm-glyph.brackets .s { animation: slash-blink 1.6s ease-in-out infinite; }
-.storm-glyph.orbit { animation: orbit-spin 2.6s linear infinite; }
+.storm-glyph.star .rays { transform-origin: 50% 50%; animation: star-twinkle 2.4s ease-in-out infinite; }
+.storm-glyph.planet { animation: helm-hover 3.2s ease-in-out infinite; }
+.storm-glyph.plasma .arc { animation: cloud-flash 1.3s steps(1, end) infinite; }
 .storm-glyph.cloud .b { animation: cloud-flash 1.7s steps(1, end) infinite; }
 /* Inline marks on finished content (a closed reasoning block) sit still. */
 .storm-glyph.still {
@@ -1536,10 +1541,10 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 	62%, 74% { opacity: 0.3; transform: scale(0.95); }
 	82%, 100% { opacity: 1; transform: scale(1); }
 }
-@keyframes bracket-left { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-1.6px); } }
-@keyframes bracket-right { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(1.6px); } }
+@keyframes bracket-left { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-3px); } }
+@keyframes bracket-right { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(3px); } }
 @keyframes slash-blink { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
-@keyframes orbit-spin { to { transform: rotate(360deg); } }
+@keyframes star-twinkle { 0%, 100% { transform: scale(1) rotate(0); opacity: 1; } 50% { transform: scale(.8) rotate(22deg); opacity: .8; } }
 @keyframes cloud-flash { 0%, 55%, 100% { opacity: 1; } 62%, 70% { opacity: .1; } 78% { opacity: 1; } 86% { opacity: .2; } }
 .working-word {
 	font-style: italic;
@@ -1564,7 +1569,7 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 }
 @media (prefers-reduced-motion: reduce) {
 	.working-word { animation: none; }
-	.thor-glyph, .storm-glyph, .storm-glyph * { animation: none !important; opacity: 1; }
+	.thor-glyph, .storm-glyph, .doom-glyph, .thor-glyph *, .storm-glyph *, .doom-glyph * { animation: none !important; }
 	.empty-hero { animation: none; }
 }
 

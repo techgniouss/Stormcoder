@@ -131,6 +131,7 @@ declare const OpenVSPairing: {
 declare const StormGlyphs: {
 	asgard: string[];
 	storm: string[];
+	doom: string[];
 	all: string[];
 	ensureDefs(): void;
 };

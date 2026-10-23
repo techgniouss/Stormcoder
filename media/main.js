@@ -1799,9 +1799,9 @@
 	// shows a whimsical cycling verb + elapsed time, so a queued or slow model never
 	// looks like the chat went idle. The first real token replaces it.
 
-	// Three lists on purpose. The plain verbs read as "a mind is working" and carry the message;
-	// the Asgard-and-Avengers lines and the storm-and-code lines are the character. A pick rolls the
-	// list first (35% plain, 35% Asgard, 30% storm) so no list drowns the others.
+	// Four lists on purpose. The plain verbs read as "a mind is working" and carry the message;
+	// the Asgard-and-Avengers, storm-and-code and doomsday lines are the character. A pick rolls the
+	// list first (30% plain, 25% Asgard, 23% storm, 22% doomsday) so no list drowns the others.
 	const PLAIN_WORDS = [
 		'Thinking',
 		'Pondering',
@@ -1840,11 +1840,20 @@
 		'Following the static', 'Rewiring the stack', 'Tuning the flux',
 	];
 
+	const DOOM_WORDS = [
+		'Counting down to doomsday', 'Reading the Doomsday Clock', 'Awaiting the apocalypse', 'Ragnarok incoming',
+		'Summoning Surtur', 'Binding Fenrir', 'Descending into Hel', 'Consulting Doctor Doom',
+		'Staring into the abyss', 'Feeding the black hole', 'Dodging asteroids', 'Cracking the planet',
+		'Brewing Armageddon', 'Awakening Galactus', 'Eclipsing the sun', 'Forging the end times',
+		'Outrunning the singularity', 'Crossing the event horizon', 'Sifting the ashes', 'Bracing for impact',
+		'Watching the sky fall', 'Racing the extinction event',
+	];
+
 	// The drawings beside the verb live in media/glyphs.js (StormGlyphs). The Asgard lines get the
 	// hammer, axe, helm and golden bolt; the storm-and-code lines get Stormcoder's own line glyphs;
-	// a plain verb draws from both. Pairing them is what makes "Charging Stormbreaker" arrive with
+	// a plain verb draws from the Asgard and storm sets (never doom, which would make "Marinating" look ominous). Pairing them is what makes "Charging Stormbreaker" arrive with
 	// an axe rather than a cloud.
-	const GLYPH_SETS = { asgard: StormGlyphs.asgard, storm: StormGlyphs.storm, plain: StormGlyphs.all };
+	const GLYPH_SETS = { asgard: StormGlyphs.asgard, storm: StormGlyphs.storm, doom: StormGlyphs.doom, plain: [...StormGlyphs.asgard, ...StormGlyphs.storm] };
 	let workingTimer = 0;
 	let lastWorkingWord = '';
 	let lastWordKind = 'plain';
@@ -1857,8 +1866,8 @@
 		let word = lastWorkingWord;
 		while (word === lastWorkingWord) {
 			const roll = Math.random();
-			const kind = roll < 0.35 ? 'plain' : roll < 0.7 ? 'asgard' : 'storm';
-			const pool = kind === 'plain' ? PLAIN_WORDS : kind === 'asgard' ? ASGARD_WORDS : STORM_WORDS;
+			const kind = roll < 0.3 ? 'plain' : roll < 0.55 ? 'asgard' : roll < 0.78 ? 'storm' : 'doom';
+			const pool = kind === 'plain' ? PLAIN_WORDS : kind === 'asgard' ? ASGARD_WORDS : kind === 'storm' ? STORM_WORDS : DOOM_WORDS;
 			word = pool[Math.floor(Math.random() * pool.length)];
 			lastWordKind = kind;
 		}

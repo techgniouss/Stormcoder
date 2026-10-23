@@ -22,7 +22,7 @@ try {
 	await chat.locator('#input').fill('think about it');
 	await chat.locator('#input').press('Enter');
 	const seen = new Set();
-	for (let i = 0; i < 30; i++) {
+	for (let i = 0; i < 16; i++) {
 		await page.waitForTimeout(1500);
 		const w = chat.locator('.working');
 		if (await w.count()) {
