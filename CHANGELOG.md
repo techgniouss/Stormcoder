@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.0
+
+- A new app icon: a glowing lightning bolt between code brackets, legible from 1024px down to 16px. The same mark is used in the rail, the welcome screen, the browser tab and the reasoning blocks.
+- The agent's "thinking" line is now entirely Stormcoder's own. The Marvel-derived wording (Avengers, Stormbreaker, Asgard, Loki and so on) and the Thor helm, hammer and Stormbreaker artwork are gone, replaced by original storm-and-code wording ("Charging the coil", "Chasing lightning", "Tempering the diff") and four drawn glyphs (bolt, code brackets, orbit, storm cloud) that follow the theme accent.
+- The agent introduces itself as Stormcoder instead of Thor, and the old raster artwork was removed from the app.
+
 ## 1.2.1
 
 Engine fixes imported from OpenVS Thor (branch `ccr-6b7439fd-4bim5m`, twelve commits).

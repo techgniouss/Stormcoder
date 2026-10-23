@@ -580,7 +580,7 @@
 		const summary = document.createElement('summary');
 		summary.className = 'tool-summary';
 		summary.textContent = 'running…';
-		// A tool call is the longest wait in a run, so it gets a Thor mark too — drawn from
+		// A tool call is the longest wait in a run, so it gets an animated mark too — drawn from
 		// the same rotating set as the working indicator, otherwise the bolt was the only
 		// glyph a user ever saw (the four only rotated in the brief empty-bubble window).
 		// An <svg> holds no text nodes, so summary.textContent stays exactly 'running…',
@@ -1799,106 +1799,42 @@
 	// shows a whimsical cycling verb + elapsed time, so a queued or slow model never
 	// looks like the chat went idle. The first real token replaces it.
 
-	// Two halves on purpose. The plain verbs are the ones that read as "a mind is working"
-	// — they carry the message. The Asgard lines are flavour; they only land because they
-	// are the minority, so keep the first block at least as long as the second.
+	// Two halves on purpose. The plain verbs are the ones that read as "a mind is working": they
+	// carry the message. The storm lines are the product's own flavour (a storm, a coil, a bolt,
+	// a patch) and only land because they are the minority, so keep the first block at least as
+	// long as the second. Everything here is original wording: no borrowed names or characters.
 	const WORKING_WORDS = [
 		'Thinking', 'Pondering', 'Musing', 'Imagining', 'Percolating', 'Noodling',
 		'Brewing', 'Cogitating', 'Ruminating', 'Marinating', 'Conjuring', 'Untangling',
 		'Scheming', 'Simmering', 'Whirring', 'Crunching', 'Focusing', 'Deliberating',
 		'Reticulating splines', 'Herding tokens', 'Warming neurons', 'Wrangling bits',
-		'Summoning lightning', 'Swinging Stormcoder', 'Charging Stormbreaker',
-		'Calling the storm', 'Gathering thunder', 'Proving worthy', 'Sharpening the axe',
-		'Consulting Heimdall', 'Opening the Bifrost', 'Channeling the Odinforce',
-		'Rousing Asgard', 'Waking the Warriors Three', 'Out-scheming Loki',
-		'Assembling the Avengers', 'Rallying the Revengers', 'Consulting the Ancient One',
-		'Checking 14,000,605 outcomes', 'Bargaining with the Grandmaster',
+		'Gathering clouds', 'Charging the coil', 'Calling the storm', 'Chasing lightning',
+		'Tracing the thunder', 'Reading the wind', 'Grounding the current', 'Sparking ideas',
+		'Arcing between files', 'Bottling lightning', 'Measuring the surge', 'Tempering the diff',
+		'Forging a patch', 'Following the static', 'Rewiring the stack', 'Tuning the flux',
 	];
-	// Thor-themed glyphs shown beside the verb, one picked per rotation: Stormcoder, a
-	// lightning bolt, and Thor's winged helm. Inline SVG rather than emoji or an image
-	// asset so they inherit the theme colour, stay crisp at any zoom, and need no
-	// extra CSP resource root. Each class gets its own animation in main.css.
-	//
-	// 19px is a floor, not a preference: the bolt survives any size, but below ~19 the
-	// hammer collapses into a featureless "T" and the helm into a blob. Shrinking these
-	// means redrawing them, not just changing the attribute.
+	// Glyphs shown beside the verb, one picked per rotation: a bolt, code brackets, an orbiting
+	// charge and a storm cloud. Drawn for this app on a 24 grid with one stroke weight, filled and
+	// stroked with the theme accent (`currentColor` on `.storm-glyph`), so they follow the theme and
+	// stay crisp at any zoom, with no emoji, image asset or extra CSP resource root. Each class gets
+	// its own animation in main.css.
 	const GLYPH_PX = 19;
-	const THOR_GLYPHS = [
-		// Stormcoder, verbatim as supplied — gray body, black outline, red haft. Left alone
-		// deliberately: recolouring it to follow the editor theme washes the art out, and
-		// the art is the point. It carries its own contrast on both light and dark.
-		`<svg class="thor-glyph hammer" viewBox="0 0 64 64" width="${GLYPH_PX}" height="${GLYPH_PX}" aria-hidden="true">`
-		+ '<polygon fill="gray" points="11 1 53 1 60 8 60 22 53 29 11 29 4 22 4 8 11 1"/>'
-		+ '<path fill="#000000" d="M53.41,30H10.59L3,22.41V7.59L10.59,0H53.41L61,7.59V22.41Zm-42-2H52.59L59,21.59V8.41L52.59,2H11.41L5,8.41V21.59Z"/>'
-		+ '<polygon fill="gray" points="7 9 11 5 11 25 7 21 7 9"/>'
-		+ '<path fill="#000000" d="M12,27.41l-6-6V8.59l6-6ZM8,20.59l2,2V7.41l-2,2Z"/>'
-		+ '<polygon fill="gray" points="57 9 53 5 53 25 57 21 57 9"/>'
-		+ '<path fill="#000000" d="M52,27.41V2.59l6,6V21.41Zm2-20V22.59l2-2V9.41Z"/>'
-		+ '<polygon fill="#000000" points="50 27 39.59 27 37.59 25 26.41 25 24.41 27 14 27 14 25 23.59 25 25.59 23 38.41 23 40.41 25 50 25 50 27"/>'
-		+ '<rect fill="#d21f23" width="8" height="25" x="28" y="29"/>'
-		+ '<path fill="#000000" d="M37,55H27V28H37Zm-8-2h6V30H29Z"/>'
-		+ '<path fill="gray" d="M36,63H28c-1.38,0-2.27-.91-2-2l2-7h8l2,7C38.27,62.09,37.38,63,36,63Z"/>'
-		+ '<path fill="#000000" d="M36,64H28a3.15,3.15,0,0,1-2.53-1.12A2.43,2.43,0,0,1,25,60.76L27.25,53h9.51L39,60.73a2.45,2.45,0,0,1-.43,2.16A3.15,3.15,0,0,1,36,64Zm-7.25-9L27,61.27a.43.43,0,0,0,.08.38A1.21,1.21,0,0,0,28,62h8a1.21,1.21,0,0,0,1-.35.45.45,0,0,0,.07-.41L35.25,55Z"/>'
-		+ '<rect fill="#000000" width="9.43" height="2" x="27.28" y="32.5" transform="rotate(-31.8 32.146 33.419)"/>'
-		+ '<rect fill="#000000" width="9.43" height="2" x="27.28" y="41.5" transform="rotate(-31.8 32.18 42.428)"/>'
-		+ '<rect fill="#000000" width="9.43" height="2" x="27.28" y="49.5" transform="rotate(-31.8 32.216 50.438)"/>'
+	const STORM_GLYPHS = [
+		`<svg class="storm-glyph bolt" viewBox="0 0 24 24" width="${GLYPH_PX}" height="${GLYPH_PX}" aria-hidden="true">`
+		+ '<path d="M14 2 5 14h6l-1.5 8 9.5-13h-6Z" fill="currentColor" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>'
 		+ '</svg>',
-		// Stormbreaker, verbatim as supplied, with two framing changes and no recolouring:
-		// mirrored (`scale(-1 1)`) so the blade faces the same way as the reference art,
-		// and the viewBox cropped to the drawing's own bounds — at a square 100x100 nearly
-		// half the box is empty margin, which renders it visibly punier than the hammer.
-		// It is tall and narrow, so it gets its own box; `.working-glyph` pins the overall
-		// slot size to stop the text jittering as glyphs rotate.
-		`<svg class="thor-glyph stormbreaker" viewBox="20 0 60 99" width="13" height="${GLYPH_PX + 3}" aria-hidden="true">`
-		+ '<g transform="translate(100 0) scale(-1 1)">'
-		+ '<rect width="7.876" height="2.343" x="41.114" y="38.759" fill="#eaa871"/>'
-		+ '<path fill="#d1dae7" d="M68.019,1.991C63.114,7.979,57.924,11.89,54.21,14.213L54,13h-4l-1.228,0.429L47.057,11H43 l-1.964,2.455l-1.146-0.497l-2.361,0.054l-0.548,0.315L26.019,9.991L22,14.949V23.5l-0.019-0.009v8.551L26,37l12.342-3.756 C38.704,34.638,51.965,34.923,52,32c3.741,2.198,10.568,6.361,16,13c0,0,11.014-6,11.014-21.525 C79.014,8,68.019,1.991,68.019,1.991z"/>'
-		+ '<path fill="#b1bdd0" d="M71.81,4.791l-6.052,6.278c0,0,3.878,4.431,4.242,7.931H52l1.745-4.896l5.005-2.912l9.269-9.201 L71.81,4.791z"/>'
-		+ '<path fill="#b1bdd0" d="M51.168,28.5h18.627c0,0-3.28,6.319-4.038,6.909l6.341,6.434L68,45c0,0-14.905-12.455-16.453-13.228 L51.168,28.5z"/>'
-		+ '<polygon fill="#b1bdd0" points="26.5,36.75 26.5,28.752 27,28 38.994,28 38.546,31.55 38.521,33.467"/>'
-		+ '<polygon fill="#b1bdd0" points="26.5,10.5 26.5,18.329 38.079,18.329 37.244,16.357 36.684,13.237"/>'
-		+ '<path fill="#b77748" d="M53.464,13.139c0,0,0.793,6.503-6.711,11.166c-5.012,3.114-2.588,10.372-2.588,10.372h1.482 c0,0,1.117-2.24,0.875-4.256c-0.539-4.487-10.066-11.802-9.605-16.816l4.007-0.467c0,0,1.967,5.693,5.873,9.027 s4.614,5.644,4.745,8.615s-2.667,7.287-2.667,7.287S49.193,80.594,44,92l-5,2l-2.099,3.088L30,91c0,0,12.708-17.141,11.009-52.5 c0,0-3.283-3.558-2.424-8.672s10.621-11.916,10.49-16.689H53.464z"/>'
-		+ '<polygon fill="#eaa871" points="46.5,79.5 36.304,79.384 38.5,67.244 47.326,67.244"/>'
-		+ '<rect width="7.375" height="8.346" x="41.5" y="38.759" fill="#eaa871"/>'
-		+ '<polygon fill="#b1bdd0" points="25.67,23.33 27.41,21.59 40.269,21.59 41.771,23.33 40.013,25.5 27.793,25.5 25.729,23.436"/>'
-		+ '<polygon fill="#b1bdd0" points="49.734,21.5 71.5,21.5 73.33,23.33 71.442,25.5 50,25.5 48.11,23.198"/>'
-		+ '<g fill="none" stroke="#24262e" stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10">'
-		+ '<path stroke-width="2" d="M68.019,1.991C63.114,7.979,57.924,11.89,54.21,14.213L54,13h-4l-1.228,0.429L47.057,11H43l-1.964,2.455l-1.146-0.497l-2.361,0.054 l-0.548,0.315L26.019,9.991L22,14.949V23.5l-0.019-0.009v8.551L26,37l12.342-3.756C38.704,34.638,39.45,36.45,41,38c0,0,1,39-11,53 l6.526,6.638L39,94l5-2c0,0,5-14,5-54c0,0,2.965-3.077,3-6c3.741,2.198,10.568,6.361,16,13c0,0,11.014-6,11.014-21.525 C79.014,8,68.019,1.991,68.019,1.991z"/>'
-		+ '<path d="M36.5,79.5h10M37.5,76.5h9M37.5,73.5h9M38.5,70.5h8M39.5,67.5h8"/>'
-		+ '<path d="M41.5,47.5h7M41.5,44.5h7M41.5,41.5h7M41.5,38.5h7"/>'
-		+ '<path d="M38.925,33.521c-0.768-2.447-1.064-7.176,5.08-12.132c5.4-4.53,5.07-8.251,5.07-8.251"/>'
-		+ '<path d="M53.464,14.104c0,0-0.071,4.277-5.692,9.226c-5.132,4.52-4.566,9.163-3.748,11.176"/>'
-		+ '<path d="M41.901,23.33c-4.06-4.261-5.298-7.335-4.919-10.003"/>'
-		+ '<path d="M45.647,34.506c0.621-1.126,1.879-4.106-0.598-7.838"/>'
-		+ '<path d="M47.921,23.198c3.146,3.281,4.661,7.361,2.845,11.479"/>'
-		+ '<path d="M41.114,13.867c0,0,0.863,3.317,3.935,6.591"/>'
-		+ '<polyline points="38.172,18.5 26.5,18.5 26.5,10.5"/>'
-		+ '<polyline points="29.086,28.5 26.5,28.5 26.5,36.5"/>'
-		+ '<path d="M38.172,28.5h-5.111M65.634,11.192l6.176-6.175M65.758,35.675l6.168,6.169"/>'
-		+ '<path d="M69.796,28.5c-0.782,2.708-2.182,5.154-4.039,7.175"/>'
-		+ '<path d="M65.634,11.192c1.918,2.046,3.363,4.54,4.162,7.308"/>'
-		+ '<polyline points="40.013,25.5 27.5,25.5 25.5,23.5 27.5,21.5 40.147,21.5"/>'
-		+ '<polyline points="49.734,21.5 71.5,21.5 73.5,23.5 71.5,25.5 49.896,25.5"/>'
-		+ '<path d="M69.796,18.5H64.5M51.889,18.5h5.611M69.796,28.5H51.334"/>'
-		+ '</g></g></svg>',
-		// Thunder and Thor's winged helm. Both are drawn to the supplied artwork's
-		// conventions rather than as flat silhouettes — a 100 grid, a heavy #24262e
-		// outline, and the same #d1dae7 / #b1bdd0 / #b77748 palette Stormbreaker uses —
-		// so the four glyphs read as one set as they rotate. Kept deliberately flat:
-		// two-tone shading seams are invisible at 19px and only muddy the shape.
-		`<svg class="thor-glyph bolt" viewBox="0 0 100 100" width="${GLYPH_PX}" height="${GLYPH_PX}" aria-hidden="true">`
-		+ '<path fill="#f0b840" stroke="#24262e" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" d="M64 8 26 54h18l-8 38 38-48H56Z"/>'
-		+ '</svg>',
-		`<svg class="thor-glyph helm" viewBox="0 0 100 100" width="${GLYPH_PX}" height="${GLYPH_PX}" aria-hidden="true">`
-		+ '<g stroke="#24262e" stroke-width="4" stroke-linejoin="round" stroke-linecap="round">'
-		+ '<path fill="#d1dae7" d="M24 44 4 14l4 32 16 8Z"/>'
-		+ '<path fill="#d1dae7" d="m76 44 20-30-4 32-16 8Z"/>'
-		+ '<path fill="#d1dae7" d="M50 18c-15 0-26 12-26 26v18h52V44c0-14-11-26-26-26Z"/>'
-		+ '<path fill="#b1bdd0" stroke="none" d="M50 18c15 0 26 12 26 26v18H50Z"/>'
-		+ '<path fill="none" d="M50 18c-15 0-26 12-26 26v18h52V44c0-14-11-26-26-26Z"/>'
-		+ '<path fill="#b77748" d="M19 61h62a5 5 0 0 1 0 10H19a5 5 0 0 1 0-10Z"/>'
-		+ '<path fill="#b1bdd0" d="M45 71h10v15a5 5 0 0 1-10 0Z"/>'
+		`<svg class="storm-glyph brackets" viewBox="0 0 24 24" width="${GLYPH_PX}" height="${GLYPH_PX}" aria-hidden="true">`
+		+ '<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+		+ '<path class="l" d="M8 7 3 12l5 5"/><path class="r" d="m16 7 5 5-5 5"/><path class="s" d="m13.5 5.5-3 13"/>'
 		+ '</g></svg>',
+		`<svg class="storm-glyph orbit" viewBox="0 0 24 24" width="${GLYPH_PX}" height="${GLYPH_PX}" aria-hidden="true">`
+		+ '<circle cx="12" cy="12" r="2.2" fill="currentColor"/>'
+		+ '<g fill="none" stroke="currentColor" stroke-width="1.5"><ellipse cx="12" cy="12" rx="9.5" ry="3.8" transform="rotate(-30 12 12)"/>'
+		+ '<ellipse cx="12" cy="12" rx="9.5" ry="3.8" transform="rotate(30 12 12)"/></g></svg>',
+		`<svg class="storm-glyph cloud" viewBox="0 0 24 24" width="${GLYPH_PX}" height="${GLYPH_PX}" aria-hidden="true">`
+		+ '<path d="M7 16a4.2 4.2 0 0 1-.7-8.3 5.6 5.6 0 0 1 10.8 1.3A3.5 3.5 0 0 1 17 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>'
+		+ '<path class="b" d="m12.6 12-2.4 4.4h3l-1.6 4.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>'
+		+ '</svg>',
 	];
 	let workingTimer = 0;
 	let lastWorkingWord = '';
@@ -1915,11 +1851,11 @@
 		return word;
 	}
 
-	/** Picks a Thor glyph, never the one already on screen. */
+	/** Picks a glyph, never the one already on screen. */
 	function pickGlyph() {
 		let glyph = lastGlyph;
 		while (glyph === lastGlyph) {
-			glyph = THOR_GLYPHS[Math.floor(Math.random() * THOR_GLYPHS.length)];
+			glyph = STORM_GLYPHS[Math.floor(Math.random() * STORM_GLYPHS.length)];
 		}
 		lastGlyph = glyph;
 		return glyph;
@@ -1978,7 +1914,7 @@
 	 * the empty streaming bubble, because that bubble's first token overwrote it about a
 	 * second in — so for the whole rest of a run, the part that actually feels slow, the
 	 * only sign of life left was the caret. The strip lives as long as the run does, so
-	 * the verb and the rotating Thor glyph stay on screen across streaming and tool calls.
+	 * the verb and the rotating glyph stay on screen across streaming and tool calls.
 	 *
 	 * Idempotent: every agent step re-opens a stream, so a second call re-anchors the
 	 * existing strip instead of building a new one. The clock it shows is not this

@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/screenshots/icon.png" width="128" alt="Stormcoder"></p>
+
 # Stormcoder
 
 A standalone desktop AI coding workspace. Chat with any model, plan a change, or hand a task to an agent that reads, edits and runs code in your project. It is its own application: there is no VS Code underneath.

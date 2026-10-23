@@ -24,8 +24,8 @@
 (function () {
 	'use strict';
 
-	/** Stormcoder's bolt, drawn once and reused by every Thor mark in the UI. */
-	const THOR_BOLT_PATH = 'M13.8 1.5 4.2 13.6c-.3.4 0 1 .5 1h4.6l-1.3 7.6c-.1.6.7.9 1.1.4l9.6-12.1c.3-.4 0-1-.5-1h-4.6l1.3-7.6c.1-.6-.7-.9-1.1-.4Z';
+	/** Stormcoder's bolt, drawn once and reused by every bolt mark in the UI. */
+	const STORM_BOLT_PATH = 'M14 2 5 14h6l-1.5 8 9.5-13h-6Z';
 
 	// Reasoning arrives inline in the token stream, fenced by these markers (see
 	// src/persona/thinking.ts, which also stamps the duration just inside the closer).
@@ -379,8 +379,8 @@
 		const body = stamp ? inner.slice(0, stamp.index) : inner;
 		const label = stamp ? `Thought for ${stamp[1]}s` : 'Thinking…';
 		return `<details class="thinking" data-think="${index}">`
-			+ `<summary><svg class="thor-glyph bolt still" viewBox="0 0 24 24" width="11" height="11" aria-hidden="true">`
-			+ `<path fill="currentColor" d="${THOR_BOLT_PATH}"/></svg> ${escapeHtml(label)}</summary>`
+			+ `<summary><svg class="storm-glyph bolt still" viewBox="0 0 24 24" width="11" height="11" aria-hidden="true">`
+			+ `<path fill="currentColor" d="${STORM_BOLT_PATH}"/></svg> ${escapeHtml(label)}</summary>`
 			+ `<div class="thinking-body">${renderProse(body)}</div></details>`;
 	}
 
@@ -414,5 +414,5 @@
 	}
 
 	// @ts-ignore — the webview's own namespace, consumed by main.js and the renderer tests.
-	globalThis.OpenVSMarkdown = { render, escapeHtml, THOR_BOLT_PATH };
+	globalThis.OpenVSMarkdown = { render, escapeHtml, STORM_BOLT_PATH };
 }());

@@ -3,7 +3,7 @@
   "displayName": "%displayName%",
   "description": "%description%",
   "version": "1.0.0",
-  "icon": "media/icon.png",
+  "icon": "build/icon.png",
   "publisher": "openvs",
   "license": "MIT",
   "engines": {

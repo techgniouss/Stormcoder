@@ -11,13 +11,13 @@ const m = await import(new URL('../out/persona/prompts.js', import.meta.url));
 
 // personaBase layers: identity first, env section when present, user base last.
 const base = m.personaBase('cwd: /repo\nbranch: main', 'User custom rules');
-assert.ok(base.startsWith('You are Thor'), 'identity must lead');
+assert.ok(base.startsWith('You are Stormcoder'), 'identity must lead');
 assert.ok(base.includes('# Environment'), 'env section present');
 assert.ok(base.indexOf('# Environment') < base.indexOf('User custom rules'), 'user base after env');
 
 // Empty env / empty user base: sections omitted, no double blank-line artifacts.
 const bare = m.personaBase('', '');
-assert.ok(bare.startsWith('You are Thor'));
+assert.ok(bare.startsWith('You are Stormcoder'));
 assert.ok(!bare.includes('# Environment'));
 assert.ok(!/\n{3,}/.test(bare), 'no triple newlines');
 
@@ -64,7 +64,7 @@ assert.ok(m.SUBAGENT_PREAMBLE.includes('evidence'), 'subagent preamble carries e
 {
 	const full = m.personaBase('cwd: /repo', 'User custom rules');
 	const compact = m.personaBase('cwd: /repo', 'User custom rules', true);
-	assert.ok(compact.startsWith('You are Thor'), 'compact identity still leads');
+	assert.ok(compact.startsWith('You are Stormcoder'), 'compact identity still leads');
 	assert.ok(compact.includes('# Environment') && compact.includes('User custom rules'), 'env and the user\'s own prompt are kept');
 	assert.ok(compact.length < full.length, 'compact identity is shorter');
 	for (const mode of ['ask', 'plan', 'agent']) {

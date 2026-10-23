@@ -29,7 +29,7 @@ interface Window {
 	/** Set by the host: true when this webview is the detached Settings editor tab. */
 	__OPENVS_SETTINGS_ONLY__?: boolean;
 	/**
-	 * Set by the host: the `vscode-webview://` URI of `media/hero.png`, the brand mark
+	 * Set by the host: the `vscode-webview://` URI of `shell/mark.svg`, the brand mark
 	 * drawn on the empty chat. The webview cannot build this itself — relative paths
 	 * resolve against the document, not the extension's media folder.
 	 */

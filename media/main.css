@@ -279,7 +279,7 @@ button:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visib
 	gap: 8px;
 	padding: 16px 8px;
 }
-/* The brand mark on a fresh chat. `media/hero.png` carries its own dark backdrop, so it
+/* The brand mark on a fresh chat. `shell/mark.svg` is the brand mark; it carries its own backdrop, so it
    is framed as a rounded card with a hairline border — that reads as deliberate on a
    light theme, where an unframed dark square would look pasted on. The glow is tinted
    from the theme rather than baked into the art, so it sits in any color scheme.
@@ -376,7 +376,7 @@ button:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visib
 /* No streaming caret on the bubble: a ::after on the body is laid out after the last
    block child, so it never trailed the text as a caret — it sat on its own line under
    the answer (or under the reasoning pill) for the whole run. The working strip already
-   carries an animated Thor glyph and a live verb, so the bolt was duplicate motion. */
+   carries an animated glyph and a live verb, so the bolt was duplicate motion. */
 
 /* Blocks carry their own vertical rhythm (markdown.js emits no break beside them), so the
    bubble's padding is the only space at its edges. */
@@ -987,7 +987,7 @@ body.settings-window #settingsPanel {
 	border-radius: 0 4px 4px 0;
 }
 .tool.running { opacity: 0.85; }
-/* A tool call is the longest wait in an agent run — it gets an animated Thor mark so it
+/* A tool call is the longest wait in an agent run — it gets an animated mark so it
    never reads as stalled. The glyph is a real element (appendToolEl) rather than a ::before
    glyph so it can be one of the four, not always the bolt; an <svg> holds no text, so the
    summary's textContent stays 'running…' for the stop/cleanup path. Height only, width
@@ -998,7 +998,7 @@ body.settings-window #settingsPanel {
 	margin-right: 4px;
 	vertical-align: -3px;
 }
-.tool-glyph .thor-glyph { width: auto; height: 15px; }
+.tool-glyph .storm-glyph { width: auto; height: 15px; }
 .tool.tool-error { border-left-color: var(--vscode-inputValidation-errorBorder, #f14c4c); }
 .tool-head {
 	display: flex;
@@ -1483,43 +1483,24 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 	height: 22px;
 	line-height: 0;
 }
-/* One animation per glyph: Stormcoder swings, the bolt strikes, the helm hovers. */
-.thor-glyph { display: block; }
-.thor-glyph.hammer {
-	/* Percentages, not px: transform-origin resolves against the rendered element box,
-	   not the glyph's viewBox units, so px values silently drift if the size changes.
-	   50% 96% is the pommel — Stormcoder swings from the butt of the handle.
-	   No colour override: it inherits the surrounding text colour so the outline stays
-	   theme-correct, leaving the handle's red as the only accent. */
-	transform-origin: 50% 96%;
-	animation: stormcoder-swing 1.8s ease-in-out infinite;
-}
-.thor-glyph.stormbreaker {
-	transform-origin: 50% 92%;
-	animation: stormcoder-swing 2.1s ease-in-out infinite;
-}
-.thor-glyph.bolt {
-	color: var(--vscode-charts-yellow, #e2c08d);
-	filter: drop-shadow(0 0 4px color-mix(in srgb, var(--vscode-charts-yellow, #e2c08d) 55%, transparent));
+/* One animation per glyph: the bolt strikes, the brackets breathe, the charge orbits, the cloud flashes. */
+.storm-glyph { display: block; color: var(--vscode-charts-blue, #4ea1ff); }
+.storm-glyph.bolt {
+	filter: drop-shadow(0 0 4px color-mix(in srgb, currentColor 55%, transparent));
 	animation: bolt-strike 1.5s steps(1, end) infinite;
 }
-/* No colour rule: the helm carries its own fills. The bolt keeps one because the same
-   class also renders the flat currentColor mark on collapsed reasoning blocks. */
-.thor-glyph.helm {
-	animation: helm-hover 2.4s ease-in-out infinite;
-}
+.storm-glyph.brackets .l { animation: bracket-left 1.6s ease-in-out infinite; }
+.storm-glyph.brackets .r { animation: bracket-right 1.6s ease-in-out infinite; }
+.storm-glyph.brackets .s { animation: slash-blink 1.6s ease-in-out infinite; }
+.storm-glyph.orbit { animation: orbit-spin 2.6s linear infinite; }
+.storm-glyph.cloud .b { animation: cloud-flash 1.7s steps(1, end) infinite; }
 /* Inline marks on finished content (a closed reasoning block) sit still. */
-.thor-glyph.still {
+.storm-glyph.still {
 	display: inline-block;
 	animation: none;
 	filter: none;
 	vertical-align: -1px;
 	opacity: 0.85;
-}
-@keyframes stormcoder-swing {
-	0%, 100% { transform: rotate(-16deg); }
-	42% { transform: rotate(14deg); }
-	52% { transform: rotate(9deg) translateY(1px); }
 }
 @keyframes bolt-strike {
 	0%, 30% { opacity: 1; transform: scale(1); }
@@ -1528,10 +1509,11 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 	62%, 74% { opacity: 0.3; transform: scale(0.95); }
 	82%, 100% { opacity: 1; transform: scale(1); }
 }
-@keyframes helm-hover {
-	0%, 100% { transform: translateY(1px); opacity: 0.7; }
-	50% { transform: translateY(-2px); opacity: 1; }
-}
+@keyframes bracket-left { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-1.6px); } }
+@keyframes bracket-right { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(1.6px); } }
+@keyframes slash-blink { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+@keyframes orbit-spin { to { transform: rotate(360deg); } }
+@keyframes cloud-flash { 0%, 55%, 100% { opacity: 1; } 62%, 70% { opacity: .1; } 78% { opacity: 1; } 86% { opacity: .2; } }
 .working-word {
 	font-style: italic;
 	animation: working-breathe 1.6s ease-in-out infinite;
@@ -1555,7 +1537,7 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 }
 @media (prefers-reduced-motion: reduce) {
 	.working-word { animation: none; }
-	.thor-glyph { animation: none; opacity: 1; }
+	.storm-glyph, .storm-glyph * { animation: none !important; opacity: 1; }
 	.empty-hero { animation: none; }
 }
 

@@ -111,7 +111,7 @@ button:active:not(:disabled) { transform: scale(.96); }
 .empty > :nth-child(7) { animation-delay: 460ms; }
 .empty-hero {
 	content: url("stormcoder-asset://app/shell/mark.svg");
-	width: 74px; height: 74px; padding: 17px; border-radius: 22px; border: 1px solid var(--accent-soft); opacity: 1;
+	width: 78px; height: 78px; padding: 12px; border-radius: 23px; border: 1px solid var(--accent-soft); opacity: 1;
 	background: radial-gradient(circle at 30% 20%, var(--accent-soft), transparent 70%), var(--surface); /* taste-skill-ignore: deliberate depth and accent */
 	box-shadow: 0 0 0 1px var(--border), 0 18px 50px var(--glow); animation: float 6s ease-in-out infinite !important;
 }

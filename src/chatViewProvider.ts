@@ -3882,7 +3882,7 @@ ${context.content}` }
 </head>
 <body class="${settingsOnly ? 'settings-window' : ''}">
 	<script nonce="${nonce}">window.__OPENVS_SETTINGS_ONLY__ = ${settingsOnly ? 'true' : 'false'};
-	window.__OPENVS_HERO_URI__ = ${JSON.stringify(String(mediaUri('hero.png')))};</script>
+	window.__OPENVS_HERO_URI__ = ${JSON.stringify(String(webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'shell', 'mark.svg'))))};</script>
 ${CHAT_APP_HTML}
 	<script nonce="${nonce}" src="${mediaUri('qr.js')}"></script>
 	<script nonce="${nonce}" src="${mediaUri('pairing.js')}"></script>

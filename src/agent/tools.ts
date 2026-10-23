@@ -1820,7 +1820,7 @@ async function fetchUrl(rawUrl: string, raw: boolean, approver: ToolApprover, g:
 				headers: {
 					// Named honestly. A site that blocks unknown agents should be able to say so
 					// rather than be worked around.
-					'user-agent': 'OpenVS-Thor/1.0 (+editor assistant)',
+					'user-agent': 'Stormcoder/1.0 (+coding assistant)',
 					accept: 'text/html,application/json,text/plain;q=0.9,*/*;q=0.5',
 				},
 			});
