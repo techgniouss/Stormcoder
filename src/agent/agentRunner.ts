@@ -431,7 +431,7 @@ export interface AgentOptions {
 	 * agent loop stays decoupled from key storage — the host wires this to
 	 * `withProviderResilience`'s rotation logic.
 	 */
-	onKeyFailure?: (message: string) => Promise<string | undefined>;
+	onKeyFailure?: (message: string, failedKey?: string) => Promise<string | undefined>;
 	/**
 	 * Called after any step succeeds. The host uses this to clear a quota cooldown recorded
 	 * by an earlier failed step in the same run — the (provider, model) pair isn't actually
@@ -561,7 +561,7 @@ export class AgentRunner {
 	/** Set once the MCP tool schemas were found not to fit the budget; they are then omitted. */
 	private mcpSchemasDropped = false;
 	/** See {@link AgentOptions.onKeyFailure}. */
-	private readonly onKeyFailure?: (message: string) => Promise<string | undefined>;
+	private readonly onKeyFailure?: (message: string, failedKey?: string) => Promise<string | undefined>;
 	/** See {@link AgentOptions.onStepSuccess}. */
 	private readonly onStepSuccess?: () => void;
 	/** See {@link AgentOptions.a2a}. Only ever set when {@link depth} is 0 — see that doc. */
@@ -852,7 +852,7 @@ export class AgentRunner {
 				// generic transient-retry check, and outside stepRetries' budget: rotating to a
 				// working key is progress, not a flaky-provider retry.
 				if (isKeyFailure(message) && this.onKeyFailure && keyRotationAttempts < MAX_KEY_ROTATION_ATTEMPTS) {
-					const nextKey = await this.onKeyFailure(message);
+					const nextKey = await this.onKeyFailure(message, params.apiKey);
 					if (nextKey !== undefined) {
 						params.apiKey = nextKey;
 						keyRotationAttempts++;
@@ -1701,7 +1701,7 @@ export class AgentRunner {
 				// without the step-loop's retry-count bookkeeping (this runs at most once
 				// per compaction, not once per step).
 				const message = err instanceof Error ? err.message : String(err);
-				const nextKey = isKeyFailure(message) ? await this.onKeyFailure?.(message) : undefined;
+				const nextKey = isKeyFailure(message) ? await this.onKeyFailure?.(message, params.apiKey) : undefined;
 				if (nextKey === undefined) {
 					throw err;
 				}

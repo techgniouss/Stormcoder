@@ -3079,9 +3079,9 @@ ${context.content}` }
 	private keyResilienceOptions(provider: ChatProvider, model: string, post: SessionPost): Pick<AgentOptions, 'onKeyFailure' | 'onStepSuccess'> {
 		const providerId = provider.info.id;
 		return {
-			onKeyFailure: async message => {
+			onKeyFailure: async (message, failedKey) => {
 				this.registry.cooldowns.markCooldown(providerId, model, message);
-				const rotated = await this.registry.rotateApiKey(providerId);
+				const rotated = await this.registry.rotateApiKey(providerId, failedKey);
 				return rotated ? (await this.registry.getApiKey(providerId)) ?? '' : undefined;
 			},
 			onStepSuccess: () => {

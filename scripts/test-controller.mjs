@@ -47,6 +47,7 @@ assert.equal(await can('readFile', path.join(project, '.vscode', 'mcp.json')), f
 await c.openFolder(project);
 assert.equal(await can('writeFile', path.join(project, '.openvs', 'mcp.json'), '{}'), true);
 assert.equal(await can('writeFile', path.join(project, 'src.txt'), 'x'), false);
+assert.equal(await can('writeFile', path.join(project, '.openvs', 'skills', 'x.md'), '# x'), true, 'project skills are editable');
 if (process.platform !== 'win32') {
 	fs.symlinkSync(secret, path.join(project, '.vscode'));
 	assert.equal(await can('writeFile', path.join(project, '.vscode', 'mcp.json'), '{}'), false, 'symlinked .vscode is refused');

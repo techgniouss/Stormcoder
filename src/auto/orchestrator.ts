@@ -546,9 +546,9 @@ export class AutoOrchestrator {
 	 * cooldowns identically to a plain Agent-mode run. */
 	private keyResilienceOptions(providerId: string, model: string): Pick<AgentOptions, 'onKeyFailure' | 'onStepSuccess'> {
 		return {
-			onKeyFailure: async message => {
+			onKeyFailure: async (message, failedKey) => {
 				this.registry.cooldowns.markCooldown(providerId, model, message);
-				const rotated = await this.registry.rotateApiKey(providerId);
+				const rotated = await this.registry.rotateApiKey(providerId, failedKey);
 				return rotated ? (await this.registry.getApiKey(providerId)) ?? '' : undefined;
 			},
 			onStepSuccess: () => {

@@ -278,7 +278,7 @@ export class Controller {
 	}
 
 	/**
-	 * The built-in editor may only touch the settings file, the MCP config files of a trusted
+	 * The built-in editor may only touch the settings file, the MCP config files and skills of a trusted
 	 * project, and (read-only) the logs. Never secrets, the encryption key or app state. Each
 	 * allowed path must also resolve to itself after following symlinks, so a `.vscode` that links
 	 * to `~/.ssh` cannot be used to escape.
@@ -291,7 +291,11 @@ export class Controller {
 		}
 		const folder = this.state.folder;
 		if (folder && this.state.trusted.includes(folder)) {
-			allowed.push({ base: folder, rel: path.join('.openvs', 'mcp.json') }, { base: folder, rel: path.join('.vscode', 'mcp.json') });
+			allowed.push(
+				{ base: folder, rel: path.join('.openvs', 'mcp.json') },
+				{ base: folder, rel: path.join('.vscode', 'mcp.json') },
+				{ base: folder, rel: path.join('.openvs', 'skills'), prefix: true },
+			);
 		}
 		return allowed.some(a => {
 			const lexical = path.join(path.resolve(a.base), a.rel);
