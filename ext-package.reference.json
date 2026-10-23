@@ -628,11 +628,15 @@
         "openvsChat.agent.maxSteps": {
           "type": "number",
           "default": 100,
+          "minimum": 1,
+          "maximum": 1000,
           "description": "%config.agent.maxSteps%"
         },
         "openvsChat.agent.maxContextTokens": {
           "type": "number",
           "default": 0,
+          "minimum": 0,
+          "maximum": 10000000,
           "description": "%config.agent.maxContextTokens%"
         },
         "openvsChat.ask.autoContext": {
@@ -648,11 +652,15 @@
         "openvsChat.stream.idleTimeoutMs": {
           "type": "number",
           "default": 120000,
+          "minimum": 0,
+          "maximum": 3600000,
           "description": "%config.stream.idleTimeoutMs%"
         },
         "openvsChat.agent.commandTimeoutMs": {
           "type": "number",
           "default": 300000,
+          "minimum": 1000,
+          "maximum": 3600000,
           "description": "%config.agent.commandTimeoutMs%"
         },
         "openvsChat.agent.shell": {
@@ -677,6 +685,8 @@
         "openvsChat.agent.maxAgentMessages": {
           "type": "number",
           "default": 3,
+          "minimum": 0,
+          "maximum": 50,
           "description": "%config.agent.maxAgentMessages%"
         },
         "openvsChat.agent.parallelResearch": {
@@ -692,6 +702,8 @@
         "openvsChat.agent.maxRunMinutes": {
           "type": "number",
           "default": 30,
+          "minimum": 1,
+          "maximum": 1440,
           "description": "%config.agent.maxRunMinutes%"
         },
         "openvsChat.agent.traceTiming": {
@@ -712,6 +724,8 @@
         "openvsChat.remote.promptEscalationSeconds": {
           "type": "number",
           "default": 30,
+          "minimum": 0,
+          "maximum": 3600,
           "description": "%config.remote.promptEscalationSeconds%"
         },
         "openvsChat.remote.enabled": {
@@ -759,11 +773,15 @@
         "openvsChat.remote.deviceTokenDays": {
           "type": "number",
           "default": 30,
+          "minimum": 1,
+          "maximum": 3650,
           "description": "%config.remote.deviceTokenDays%"
         },
         "openvsChat.remote.idleDisableHours": {
           "type": "number",
           "default": 12,
+          "minimum": 1,
+          "maximum": 8760,
           "description": "%config.remote.idleDisableHours%"
         },
         "openvsChat.remote.approvalFloor": {
@@ -985,12 +1003,14 @@
         "openvsChat.systemPrompt": {
           "type": "string",
           "editPresentation": "multilineText",
-          "default": "You are a helpful AI coding assistant integrated into the editor. Answer concisely and use Markdown for code.",
+          "default": "You are a helpful AI coding assistant in the Stormcoder desktop app. Answer concisely and use Markdown for code.",
           "description": "%config.systemPrompt%"
         },
         "openvsChat.maxTokens": {
           "type": "number",
           "default": 8192,
+          "minimum": 1,
+          "maximum": 1000000,
           "description": "%config.maxTokens%"
         },
         "openvsChat.completions.enabled": {
@@ -1006,36 +1026,50 @@
         "openvsChat.completions.debounceMs": {
           "type": "number",
           "default": 250,
+          "minimum": 0,
+          "maximum": 5000,
           "description": "%config.completions.debounceMs%"
         },
         "openvsChat.completions.maxLines": {
           "type": "number",
           "default": 6,
+          "minimum": 1,
+          "maximum": 200,
           "description": "%config.completions.maxLines%"
         },
         "openvsChat.completions.prefixChars": {
           "type": "number",
           "default": 2000,
+          "minimum": 0,
+          "maximum": 100000,
           "description": "%config.completions.prefixChars%"
         },
         "openvsChat.completions.suffixChars": {
           "type": "number",
           "default": 1000,
+          "minimum": 0,
+          "maximum": 100000,
           "description": "%config.completions.suffixChars%"
         },
         "openvsChat.completions.maxTokens": {
           "type": "number",
           "default": 96,
+          "minimum": 1,
+          "maximum": 4096,
           "description": "%config.completions.maxTokens%"
         },
         "openvsChat.completions.quotaReserve": {
           "type": "number",
           "default": 0.15,
+          "minimum": 0,
+          "maximum": 1,
           "description": "%config.completions.quotaReserve%"
         },
         "openvsChat.completions.slowMs": {
           "type": "number",
           "default": 3000,
+          "minimum": 0,
+          "maximum": 60000,
           "description": "%config.completions.slowMs%"
         },
         "openvsChat.completions.disabledLanguages": {
