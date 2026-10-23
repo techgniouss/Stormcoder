@@ -26,7 +26,7 @@ const WINDOWS: Array<[RegExp, number]> = [
 	[/gpt-5/i, 400_000],
 	[/gpt-4\.1/i, 1_000_000],
 	[/gpt-oss/i, 128_000],
-	[/o[134](-mini|-pro)?\b/i, 200_000],
+	[/(?:^|[/:])o[134](-mini|-pro)?\b/i, 200_000],
 	[/gpt-4o|gpt-4-turbo/i, 128_000],
 	[/deepseek-r1|deepseek-reasoner/i, 64_000],
 	[/deepseek/i, 128_000],

@@ -28,7 +28,13 @@ interface EnvContext {
 	readonly volatile: string;
 }
 
-let cached: { at: number; env: EnvContext } | undefined;
+let cached: { at: number; key: string; env: EnvContext } | undefined;
+
+/** What the cached snapshot depends on besides time: the open folders and whether the workspace is trusted. */
+function cacheKey(): string {
+	const folders = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.toString()).join('|');
+	return `${vscode.workspace.isTrusted ? 'trusted' : 'untrusted'}:${folders}`;
+}
 
 /** Runs git with the given args in `cwd`, resolving to stdout or '' on any failure. */
 function git(cwd: string, args: string[]): Promise<string> {
@@ -74,7 +80,7 @@ function openTabs(): string[] {
  * Builds the environment snapshot (Claude Code style): workspace root, platform, date and
  * git branch as {@link EnvContext.stable}; working-tree status and open editor tabs as
  * {@link EnvContext.volatile}.
- * Every probe fails soft (section omitted); result is cached for {@link CACHE_MS}
+ * Every probe fails soft (section omitted); result is cached for {@link CACHE_MS}, keyed on the workspace folders and trust so a folder change or trust grant rebuilds it,
  * and each half is hard-capped at {@link MAX_CHARS} characters. Git probes are skipped entirely
  * in untrusted workspaces (a malicious repo's `.git/config` can turn `git status`
  * into code execution), and all repo-derived strings (branch, status lines, open
@@ -82,7 +88,8 @@ function openTabs(): string[] {
  * being injected into the prompt.
  */
 export async function buildEnvContext(): Promise<EnvContext> {
-	if (cached && Date.now() - cached.at < CACHE_MS) {
+	const key = cacheKey();
+	if (cached && cached.key === key && Date.now() - cached.at < CACHE_MS) {
 		return cached.env;
 	}
 	const lines: string[] = [];
@@ -140,6 +147,6 @@ export async function buildEnvContext(): Promise<EnvContext> {
 		stable: lines.join('\n').slice(0, MAX_CHARS),
 		volatile: volatileLines.join('\n').slice(0, MAX_CHARS),
 	};
-	cached = { at: Date.now(), env };
+	cached = { at: Date.now(), key, env };
 	return env;
 }

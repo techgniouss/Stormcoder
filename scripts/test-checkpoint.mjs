@@ -69,4 +69,15 @@ const uri = path => ({ path, toString: () => `file://${path}` });
 	assert.strictEqual(describeRestore({ restored: [], removed: [], skipped: [], failed: [] }), 'Undo: nothing to restore.');
 }
 
+// A file with a BOM (as edit_file records it) is not "changed since" just because the restore
+// read decoded the BOM away; it is restored with its original text.
+{
+	const cp = new RunCheckpoint();
+	cp.record({ uri: uri('bom.ps1'), path: 'bom.ps1', before: '﻿old', after: '﻿new' });
+	const fs = memoryFs({ 'bom.ps1': '﻿new' });
+	const report = await cp.restore(fs);
+	assert.deepStrictEqual(report.skipped, []);
+	assert.deepStrictEqual(report.restored, ['bom.ps1']);
+}
+
 console.log('test-checkpoint: all assertions passed');
