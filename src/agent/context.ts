@@ -545,6 +545,9 @@ export function dropOrphanToolResults(messages: ChatMessage[]): ChatMessage[] {
 	return out;
 }
 
+/** Wording of a rate-limit / quota rejection, which also mentions tokens and "exceed" but is not an oversized request. */
+const RATE_LIMIT_WORDING = /rate.?limit|per minute|per min\b|tokens per|\btpm\b|\brpm\b|too many requests|\b429\b|quota/;
+
 /**
  * Whether a failed request was rejected for being too big, as opposed to any other 400.
  *
@@ -568,7 +571,7 @@ export function isContextLengthError(message: string): boolean {
 		|| m.includes('too many tokens')
 		|| m.includes('request too large')
 		|| m.includes('reduce your message size')
-		|| (m.includes('token') && m.includes('exceed'));
+		|| (m.includes('token') && m.includes('exceed') && !RATE_LIMIT_WORDING.test(m));
 }
 
 /** Smallest stated ceiling believed to be a real token budget. */

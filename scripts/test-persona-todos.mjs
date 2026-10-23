@@ -49,4 +49,12 @@ assert.ok('items' in long);
 assert.ok(long.items[0].content.length <= 200);
 assert.ok(!long.items[0].content.startsWith(' '));
 
+// Object.prototype names are not statuses; blank strings do not count toward the cap.
+{
+	const odd = parseTodoUpdate({ items: [{ content: 'a', status: 'constructor' }, { content: 'b', status: '__proto__' }] });
+	assert.deepStrictEqual(odd.items.map(i => i.status), ['pending', 'pending']);
+	const blanks = parseTodoUpdate({ items: [...Array(40).fill('  '), 'real'] });
+	assert.deepStrictEqual(blanks.items, [{ content: 'real', status: 'pending' }]);
+}
+
 console.log('test-persona-todos: all assertions passed');

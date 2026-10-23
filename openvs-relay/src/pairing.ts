@@ -75,3 +75,46 @@ export function recordAttempt(state: AttemptState): AttemptState {
 export function exceededAttempts(state: AttemptState): boolean {
 	return state.attempts >= MAX_PAIRING_ATTEMPTS;
 }
+
+/**
+ * Counts failed guesses per source key (an IP address). A key that reaches `max` failures inside
+ * `windowMs` is refused until the window passes. Per source rather than per room, so a stranger
+ * guessing cannot withdraw the codes the owner is about to type. Bounded to `maxKeys` entries.
+ */
+export class FailureLimiter {
+	private readonly entries = new Map<string, { count: number; first: number }>();
+
+	private readonly max: number;
+	private readonly windowMs: number;
+	private readonly maxKeys: number;
+
+	constructor(max: number, windowMs: number, maxKeys = 1000) {
+		this.max = max;
+		this.windowMs = windowMs;
+		this.maxKeys = maxKeys;
+	}
+
+	/** Whether `key` has used up its failures within the current window. */
+	isBlocked(key: string, nowMs: number): boolean {
+		const entry = this.entries.get(key);
+		return !!entry && nowMs - entry.first < this.windowMs && entry.count >= this.max;
+	}
+
+	/** Records one failed guess by `key`. */
+	recordFailure(key: string, nowMs: number): void {
+		const entry = this.entries.get(key);
+		if (!entry || nowMs - entry.first >= this.windowMs) {
+			this.entries.delete(key);
+			this.entries.set(key, { count: 1, first: nowMs });
+		} else {
+			entry.count++;
+		}
+		if (this.entries.size > this.maxKeys) {
+			for (const [k, e] of this.entries) {
+				if (nowMs - e.first >= this.windowMs || this.entries.size > this.maxKeys) {
+					this.entries.delete(k);
+				}
+			}
+		}
+	}
+}

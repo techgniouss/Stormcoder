@@ -41,12 +41,16 @@ const PAIRING_TTL_MS = 120_000;
 /** Mirrors `openvs-relay/src/pairing.ts`. */
 const MAX_PAIRING_ATTEMPTS = 5;
 /**
- * Wrong pairing codes a room tolerates before every live code for it is withdrawn. Counted
- * per room, because a wrong guess matches no code entry: the per-code attempt count never saw
- * it, so nothing at all limited guessing through the public tunnel. Ten is far past any
- * typing mistake; the host simply shows a new code.
+ * Wrong pairing codes one source address may present per {@link FAILED_CLAIM_WINDOW_MS}. A
+ * wrong guess matches no code entry, so the per-code attempt count never saw it and nothing
+ * limited guessing through the public tunnel. Counted per source, not per room, so a stranger
+ * guessing cannot withdraw the codes the owner is about to use. Mirrors
+ * `openvs-relay/src/pairing.ts`'s `FailureLimiter`.
  */
 const MAX_FAILED_CLAIMS = 10;
+const FAILED_CLAIM_WINDOW_MS = 10 * 60_000;
+/** The most distinct sources tracked at once. */
+const MAX_TRACKED_SOURCES = 1000;
 /** Mirrors `openvs-relay/src/pairing.ts` — Crockford base32 minus the ambiguous I, L, O, U. */
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 /** Mirrors `openvs-relay/src/room.ts`'s `HEARTBEAT_PONG_JSON`. */
@@ -149,6 +153,29 @@ interface PairingCode {
 	attempts: number;
 }
 
+/**
+ * Merges `disk` (what another window may have saved) with `memory` (this window's state): rooms
+ * are unioned, and within a room devices are unioned by id, keeping a revocation and the latest
+ * `lastSeenAt` from either side. Neither window's rooms or devices are ever dropped.
+ */
+export function mergeRelayStates(disk: RelayState, memory: RelayState): RelayState {
+	const rooms: RelayState['rooms'] = {};
+	for (const id of new Set([...Object.keys(disk.rooms), ...Object.keys(memory.rooms)])) {
+		const byId = new Map<string, DeviceRecord>();
+		for (const device of [...(disk.rooms[id]?.devices ?? []), ...(memory.rooms[id]?.devices ?? [])]) {
+			const known = byId.get(device.id);
+			if (!known) {
+				byId.set(device.id, { ...device });
+				continue;
+			}
+			known.revokedAt = known.revokedAt === null ? device.revokedAt : device.revokedAt === null ? known.revokedAt : Math.min(known.revokedAt, device.revokedAt);
+			known.lastSeenAt = known.lastSeenAt === null ? device.lastSeenAt : device.lastSeenAt === null ? known.lastSeenAt : Math.max(known.lastSeenAt, device.lastSeenAt);
+		}
+		rooms[id] = { devices: [...byId.values()] };
+	}
+	return { rooms };
+}
+
 function hmacHex(pepper: string, value: string): string {
 	return createHmac('sha256', pepper).update(value).digest('hex');
 }
@@ -181,8 +208,8 @@ export class LocalRelay {
 	private readonly rooms = new Map<string, string>();
 	/** Live pairing codes: `<room>|<codeHash>` → expiry/attempts. In memory on purpose — a code outlives nothing longer than two minutes. */
 	private readonly codes = new Map<string, PairingCode>();
-	/** Wrong codes presented per room since its codes were last minted; see {@link MAX_FAILED_CLAIMS}. */
-	private readonly failedClaims = new Map<string, number>();
+	/** Wrong codes presented per source address: source → count and the time of its first failure in the window; see {@link MAX_FAILED_CLAIMS}. */
+	private readonly failedClaims = new Map<string, { count: number; first: number }>();
 	private readonly now: () => number;
 	private listeningPort = 0;
 
@@ -269,7 +296,14 @@ export class LocalRelay {
 	/** Serves the phone app; any path that isn't a file gets `index.html` (it routes itself from the URL, like the cloud relay's single-page-application assets). */
 	private serveStatic(pathname: string, res: http.ServerResponse): void {
 		const root = path.resolve(this.options.pwaDir);
-		let file = path.resolve(root, `.${decodeURIComponent(pathname)}`);
+		let decoded: string;
+		try {
+			decoded = decodeURIComponent(pathname);
+		} catch {
+			reply(res, 400, 'malformed path');
+			return;
+		}
+		let file = path.resolve(root, `.${decoded}`);
 		if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
 			file = path.join(root, 'index.html');
 		}
@@ -325,14 +359,17 @@ export class LocalRelay {
 			reply(res, 400, 'missing code');
 			return;
 		}
+		const source = this.sourceOf(req);
+		if (this.claimsBlocked(source)) {
+			reply(res, 429, 'too many wrong codes — try again later');
+			return;
+		}
 		const key = `${roomId}|${hmacHex(this.options.pepper, body.code.trim().toUpperCase())}`;
 		const code = this.codes.get(key);
 		if (!code) {
-			const failures = (this.failedClaims.get(roomId) ?? 0) + 1;
-			this.failedClaims.set(roomId, failures);
-			if (failures >= MAX_FAILED_CLAIMS) {
-				this.withdrawCodes(roomId);
-				reply(res, 429, 'too many wrong codes — ask for a new pairing code');
+			this.recordFailedClaim(source);
+			if (this.claimsBlocked(source)) {
+				reply(res, 429, 'too many wrong codes — try again later');
 				return;
 			}
 			reply(res, 403, 'invalid or already-used code');
@@ -363,6 +400,34 @@ export class LocalRelay {
 		});
 		this.save();
 		reply(res, 200, JSON.stringify({ deviceId, token }), 'application/json');
+	}
+
+	/** Who a request is from: the tunnel's `Cf-Connecting-Ip` when it came through it (the socket peer is then always cloudflared), else the socket address. */
+	private sourceOf(req: http.IncomingMessage): string {
+		const forwarded = req.headers['cf-connecting-ip'];
+		return (typeof forwarded === 'string' && forwarded) || req.socket.remoteAddress || 'unknown';
+	}
+
+	private claimsBlocked(source: string): boolean {
+		const entry = this.failedClaims.get(source);
+		return !!entry && this.now() - entry.first < FAILED_CLAIM_WINDOW_MS && entry.count >= MAX_FAILED_CLAIMS;
+	}
+
+	private recordFailedClaim(source: string): void {
+		const now = this.now();
+		const entry = this.failedClaims.get(source);
+		if (!entry || now - entry.first >= FAILED_CLAIM_WINDOW_MS) {
+			this.failedClaims.delete(source);
+			this.failedClaims.set(source, { count: 1, first: now });
+		} else {
+			entry.count++;
+		}
+		for (const [key, value] of this.failedClaims) {
+			if (this.failedClaims.size <= MAX_TRACKED_SOURCES && now - value.first < FAILED_CLAIM_WINDOW_MS) {
+				break;
+			}
+			this.failedClaims.delete(key);
+		}
 	}
 
 	/** `/api/devices`: the host's device list — `room.ts`'s `handleDevices`. */
@@ -401,7 +466,11 @@ export class LocalRelay {
 
 	private save(): void {
 		try {
-			this.options.store.save(this.state);
+			// Another window may share this file with rooms and devices this one never saw;
+			// merging first keeps a save from erasing them (and picks up their revocations).
+			const merged = mergeRelayStates(this.options.store.load(), this.state);
+			this.state.rooms = merged.rooms;
+			this.options.store.save(merged);
 		} catch (err) {
 			console.warn('OpenVS local relay: could not save relay state.', err);
 		}
@@ -538,18 +607,8 @@ export class LocalRelay {
 			code += ALPHABET[byte % ALPHABET.length];
 		}
 		const expiresAt = this.now() + PAIRING_TTL_MS;
-		this.failedClaims.delete(host.room);
 		this.codes.set(`${host.room}|${hmacHex(this.options.pepper, code)}`, { expiresAt, attempts: 0 });
 		this.sendControl([host], { c: 'paired', code, expiresAt });
-	}
-
-	/** Invalidates every live pairing code for `roomId`. */
-	private withdrawCodes(roomId: string): void {
-		for (const key of [...this.codes.keys()]) {
-			if (key.startsWith(`${roomId}|`)) {
-				this.codes.delete(key);
-			}
-		}
 	}
 
 	private revoke(roomId: string, deviceId: string): void {

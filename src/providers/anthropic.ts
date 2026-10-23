@@ -346,7 +346,7 @@ export class AnthropicProvider implements ChatProvider {
 		events.close();
 
 		const toolCalls: ToolCall[] = events.blocksOf('tool_use')
-			.map(b => ({ id: b.id ?? '', name: b.name ?? 'unknown', args: parseToolArgs(b.json) }));
+			.map(b => ({ id: b.id ?? '', name: b.name ?? 'unknown', args: parseToolArgs(b.json, events.finishReason === 'length') }));
 		const thinkingBlocks: ThinkingBlock[] = events.blocks()
 			.flatMap((b): ThinkingBlock[] => b.type === 'thinking'
 				? [{ type: 'thinking', thinking: b.thinking, signature: b.signature }]

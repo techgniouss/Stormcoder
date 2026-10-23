@@ -8,7 +8,7 @@
 //   node extensions/openvs-chat/scripts/test-remote-redaction.mjs
 import assert from 'node:assert/strict';
 
-const { redactForRemote } = await import(new URL('../out/remote/remoteSink.js', import.meta.url));
+const { redactForRemote, RemoteSink } = await import(new URL('../out/remote/remoteSink.js', import.meta.url));
 
 const image = { mimeType: 'image/jpeg', data: 'A'.repeat(200_000) };
 
@@ -41,5 +41,32 @@ assert.equal(redactForRemote({ type: 'userTurn', content: 'typed on the desktop'
 assert.equal(
 	redactForRemote({ type: 'config', providers: [{ id: 'custom', baseUrl: 'https://gw.example.com/v1?token=secret' }] }).providers[0].baseUrl,
 	'gw.example.com');
+
+// Tool arguments/results, prompts and errors are scrubbed of credential shapes and bounded,
+// at any nesting depth.
+{
+	const key = 'sk-' + 'a'.repeat(30);
+	const start = redactForRemote({ type: 'toolStart', name: 'run_command', args: { command: `curl -H "Authorization: Bearer ${'t'.repeat(30)}" x`, env: { list: [`API_KEY=${key}`] } } });
+	assert.doesNotMatch(JSON.stringify(start), new RegExp(key));
+	assert.doesNotMatch(JSON.stringify(start), /ttttttttttttttt/);
+	const end = redactForRemote({ type: 'toolEnd', name: 'read_file', result: `${key}\n` + 'x'.repeat(20_000) });
+	assert.doesNotMatch(end.result, new RegExp(key));
+	assert.ok(end.result.length < 9_000, 'a long result is truncated');
+	assert.doesNotMatch(redactForRemote({ type: 'error', message: `failed with ${key}` }).message, new RegExp(key));
+	assert.doesNotMatch(redactForRemote({ type: 'askRequest', question: `use ${key}?` }).question, new RegExp(key));
+	assert.doesNotMatch(redactForRemote({ type: 'approvalRequest', title: `run ghp_${'b'.repeat(30)}` }).title, /ghp_/);
+}
+
+// Push notifications never carry a command's text and stay short.
+{
+	const controls = [];
+	const socket = { onRtt() {}, send() {}, sendControl: f => controls.push(f), dispose() {} };
+	const sink = new RemoteSink('r', socket);
+	sink.post({ type: 'approvalRequest', id: 'a', sessionId: 's1', kind: 'command', title: 'rm -rf /home/me/secret-project' });
+	sink.post({ type: 'error', sessionId: 's2', message: 'e'.repeat(500) });
+	assert.doesNotMatch(controls[0].body, /rm -rf/);
+	assert.ok(controls[1].body.length <= 120);
+	assert.ok(controls.every(c => c.title.length <= 120));
+}
 
 console.log('test-remote-redaction: all assertions passed');

@@ -38,11 +38,13 @@ export const SLASH_INLINE: readonly string[] = ['explain', 'fix', 'doc', 'optimi
  * of {@link runSlash} and exercised directly by `scripts/test-slash.mjs`.
  */
 export function parseSlash(text: string): { cmd: string; rest: string } | undefined {
-	const m = /^\/(\w+)\s*([\s\S]*)$/.exec(text);
+	// The command word must end at whitespace or the end of the line: `/ask-me` is a message,
+	// not `/ask` with "-me" as its text.
+	const m = /^\/(\w+)(?:\s+([\s\S]*))?$/.exec(text);
 	if (!m) {
 		return undefined;
 	}
-	return { cmd: m[1].toLowerCase(), rest: m[2].trim() };
+	return { cmd: m[1].toLowerCase(), rest: (m[2] ?? '').trim() };
 }
 
 /** The result of {@link runSlash} — what the caller (`chatViewProvider.ts`) should do next. */
@@ -226,26 +228,35 @@ export function runSlash(text: string, effects: SlashEffects, remote = false): S
 		return { handled: true };
 	}
 	if (cmd === 'skill') {
-		const id = rest.toLowerCase();
-		if (id === 'new' || id === 'create') {
+		const word = rest.toLowerCase();
+		if (word === 'new' || word === 'create') {
 			if (remote) {
 				return { handled: true, denied: true };
 			}
 			effects.createSkill();
 			return { handled: true };
 		}
-		effects.setSkill(id === 'off' || id === 'none' ? '' : id);
+		if (word === 'off' || word === 'none') {
+			effects.setSkill('');
+			return { handled: true };
+		}
+		// Skill ids are case-sensitive (they come from file and directory names), so the
+		// typed id is matched without regard to case but resolved to the real one.
+		const known = effects.listSkills().skills.find(s => s.id.toLowerCase() === word);
+		effects.setSkill(known ? known.id : rest);
 		return { handled: true };
 	}
 	if (cmd === 'mcp') {
 		if (remote) {
 			return { handled: true, denied: true };
 		}
-		if (rest === 'add') {
+		const sub = rest.split(/\s+/, 1)[0].toLowerCase();
+		if (sub === 'add') {
 			effects.mcpAdd();
 			return { handled: true };
 		}
-		if (rest === 'reconnect') {
+		if (sub === 'reconnect') {
+			effects.reply('Reconnecting MCP servers…');
 			effects.mcpReconnect();
 			return { handled: true };
 		}

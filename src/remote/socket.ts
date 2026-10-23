@@ -116,6 +116,27 @@ export interface Unsubscribe {
  */
 export type RemoteSocketStatus = 'unavailable' | 'connecting' | 'connected' | 'disconnected' | 'displaced';
 
+/**
+ * The relay base URL with trailing slashes removed, or `undefined` when it must not be dialled:
+ * the host token travels in the upgrade request, so anything but `https:`/`wss:` is refused,
+ * except plain `http:`/`ws:` to this machine itself (the local relay).
+ */
+export function normalizeRelayUrl(relayUrl: string): string | undefined {
+	let parsed: URL;
+	try {
+		parsed = new URL(relayUrl.trim());
+	} catch {
+		return undefined;
+	}
+	const secure = parsed.protocol === 'https:' || parsed.protocol === 'wss:';
+	const plain = parsed.protocol === 'http:' || parsed.protocol === 'ws:';
+	const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+	if (!secure && !(plain && loopback)) {
+		return undefined;
+	}
+	return relayUrl.trim().replace(/\/+$/, '');
+}
+
 /** What {@link RemoteSocket} needs to dial the relay for one room. */
 export interface RemoteSocketOptions {
 	readonly relayUrl: string;
@@ -186,8 +207,13 @@ export class RemoteSocket {
 			this.setStatus('unavailable');
 			return;
 		}
+		const base = normalizeRelayUrl(this.options.relayUrl);
+		if (!base) {
+			this.setStatus('unavailable');
+			return;
+		}
 		this.setStatus('connecting');
-		const url = `${this.options.relayUrl}/ws/host?room=${encodeURIComponent(this.options.publicRoomId)}`;
+		const url = `${base}/ws/host?room=${encodeURIComponent(this.options.publicRoomId)}`;
 		const socket = openAuthenticated(url, this.options.hostToken);
 		this.ws = socket;
 		// A handshake can hang as long as the OS's TCP timeout; give up sooner and retry.

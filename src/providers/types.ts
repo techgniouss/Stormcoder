@@ -148,7 +148,11 @@ export type FinishReason = 'stop' | 'length' | 'tool_calls' | 'filtered' | 'refu
 export interface AgentStep {
 	readonly content: string;
 	readonly toolCalls: ToolCall[];
-	/** True when the step was cut off by the max-token limit before the model finished. */
+	/**
+	 * True when the step was cut off by the max-token limit before the model finished. Tool
+	 * calls of a truncated step are never repaired into runnable ones: unparseable arguments
+	 * arrive as `MALFORMED_ARGS` (providers/toolCalls.ts), and the runner must not execute calls from such a step.
+	 */
 	readonly truncated?: boolean;
 	/** Normalized stop reason reported by the backend, when it reported one. */
 	readonly finishReason?: FinishReason;
@@ -785,6 +789,9 @@ function linkAbort(caller: AbortSignal, child: AbortController): () => void {
 	return () => caller.removeEventListener('abort', onAbort);
 }
 
+/** Floor for a server-stated wait, so `Retry-After: 0` still backs off briefly. */
+const MIN_RETRY_AFTER_MS = 500;
+
 function backoffMs(attempt: number, response?: Response): number {
 	const retryAfter = response?.headers.get('retry-after');
 	if (retryAfter) {
@@ -792,7 +799,12 @@ function backoffMs(attempt: number, response?: Response): number {
 		// Free tiers legitimately ask for 20-30s waits when a model is saturated; honor the
 		// server's own hint (capped at 30s so a hostile header can't stall us indefinitely).
 		if (!Number.isNaN(seconds)) {
-			return Math.min(seconds * 1000, 30_000);
+			// `Retry-After: 0` (or a negative) must not turn into a hot retry loop.
+			return Math.min(Math.max(seconds * 1000, MIN_RETRY_AFTER_MS), 30_000);
+		}
+		const date = Date.parse(retryAfter);
+		if (!Number.isNaN(date)) {
+			return Math.min(Math.max(date - Date.now(), MIN_RETRY_AFTER_MS), 30_000);
 		}
 	}
 	return Math.min(500 * 2 ** attempt, 8_000);
@@ -804,6 +816,50 @@ function backoffMs(attempt: number, response?: Response): number {
  * so it's worth being more patient about than a network error or a queued-request timeout.
  */
 const RATE_LIMIT_RETRIES = 4;
+
+/**
+ * Retry budget for a 429 when the request's key belongs to a multi-key pool: one more try
+ * on the same key is cheap, but waiting out minutes of backoff while a healthy spare key
+ * sits unused is not. After this, the 429 surfaces and key rotation takes over.
+ */
+const POOLED_KEY_RATE_LIMIT_RETRIES = 1;
+
+/** API keys known to belong to a pool of more than one key (see {@link notePooledKeys}). */
+const pooledKeys = new Set<string>();
+
+/**
+ * Records which keys are part of a multi-key pool, called by the registry whenever it
+ * resolves a provider's keys. {@link apiFetch} then fails fast on 429 for those keys so
+ * rotation happens promptly; single-key setups keep the patient retry budget.
+ */
+export function notePooledKeys(keys: readonly string[]): void {
+	if (keys.length > 1) {
+		for (const key of keys) {
+			if (key) {
+				pooledKeys.add(key);
+			}
+		}
+	}
+}
+
+/** True when the request carries a key from a multi-key pool (in a header or the URL). */
+function usesPooledKey(url: string, init: RequestInit): boolean {
+	if (!pooledKeys.size) {
+		return false;
+	}
+	let haystack = url;
+	try {
+		new Headers(init.headers).forEach(value => { haystack += `\n${value}`; });
+	} catch {
+		// Unreadable headers: fall back to the URL alone.
+	}
+	for (const key of pooledKeys) {
+		if (haystack.includes(key)) {
+			return true;
+		}
+	}
+	return false;
+}
 
 /**
  * Sleeps, but wakes immediately if the caller aborts.
@@ -858,7 +914,8 @@ export async function apiFetch(
 	opts?: ApiFetchOptions,
 ): Promise<Response> {
 	const retries = opts?.retries ?? 2;
-	const rateLimitRetries = opts?.rateLimitRetries ?? Math.max(retries, RATE_LIMIT_RETRIES);
+	const rateLimitRetries = opts?.rateLimitRetries
+		?? (usesPooledKey(url, init) ? POOLED_KEY_RATE_LIMIT_RETRIES : Math.max(retries, RATE_LIMIT_RETRIES));
 	const timeoutMs = opts?.timeoutMs ?? 60_000;
 	let lastError: unknown;
 	// Tracked separately so a run of 429s doesn't burn the (often smaller) network budget.

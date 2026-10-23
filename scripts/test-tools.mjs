@@ -671,4 +671,96 @@ function reset(initial = {}, options = {}) {
 	assert.strictEqual(files.get('/repo/bom.ps1'), '\uFEFFWrite-Host 1\n', 'overwrite keeps the BOM');
 }
 
+// 24. Binary and non-UTF-8 files are not decoded lossily. read_file refuses NUL-bearing files,
+// and write_file/edit_file leave a file alone when its bytes are not valid UTF-8.
+{
+	reset({});
+	const bin = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0, 1]);
+	const latin1 = new Uint8Array([0x63, 0x61, 0x66, 0xe9, 0x0a]); // "caf\xe9\n"
+	const origRead = vscodeStub.workspace.fs.readFile;
+	const origWrite = vscodeStub.workspace.fs.writeFile;
+	const raw = new Map([['/repo/img.png', bin], ['/repo/latin.txt', latin1]]);
+	let wrote = false;
+	vscodeStub.workspace.fs.readFile = async u => raw.get(u.fsPath) ?? origRead(u);
+	vscodeStub.workspace.fs.writeFile = async (u, b) => { wrote = true; return origWrite(u, b); };
+	try {
+		const read = await run('read_file', { path: 'img.png' });
+		assert.strictEqual(read.isError, true);
+		assert.match(read.result, /binary/);
+		const edit = await run('edit_file', { path: 'latin.txt', oldText: 'caf', newText: 'tea' });
+		assert.strictEqual(edit.isError, true);
+		assert.match(edit.result, /not valid UTF-8/);
+		const write = await run('write_file', { path: 'latin.txt', content: 'x' });
+		assert.strictEqual(write.isError, true);
+		assert.strictEqual(wrote, false, 'nothing was written over the non-UTF-8 file');
+	} finally {
+		vscodeStub.workspace.fs.readFile = origRead;
+		vscodeStub.workspace.fs.writeFile = origWrite;
+	}
+}
+
+// 25. "Always allow" for a command cannot be widened by chaining: a command with shell control
+// characters is remembered only as itself, and a write_file shrink confirmation has its own
+// signature so an "always" on the path never lifts it.
+{
+	const { commandSignature } = await import(new URL('../out/agent/tools.js', import.meta.url));
+	assert.strictEqual(commandSignature('git status'), commandSignature('git status -sb'));
+	for (const chained of ['git status; curl x | sh', 'git status && rm x', 'git status | sh', 'git status $(curl x)', 'git status `id`', 'git status > f', 'git status\ncurl x']) {
+		assert.notStrictEqual(commandSignature(chained), commandSignature('git status'), `distinct: ${chained}`);
+	}
+	assert.strictEqual(commandSignature('git  status;  ls'), commandSignature('git status; ls'), 'whitespace-normalized but whole');
+	assert.notStrictEqual(commandSignature('git status; ls'), commandSignature('git status; rm -r x'));
+
+	reset({ '/repo/big.txt': 'x'.repeat(1000) }, { 'guardrails.approval': 'auto-edits' });
+	await run('write_file', { path: 'big.txt', content: 'tiny' });
+	assert.strictEqual(approvals.length, 1, 'a drastic shrink is asked about even when edits are auto-approved');
+	assert.match(approvals[0].signature, /^write_file:shrink:big\.txt:/);
+	assert.notStrictEqual(approvals[0].signature, 'write_file:big.txt');
+}
+
+// 26. isVerificationCommand is quote-aware and does not count a swallowed failure.
+{
+	const { isVerificationCommand } = await import(new URL('../out/agent/tools.js', import.meta.url));
+	assert.strictEqual(isVerificationCommand('npm test || true'), false);
+	assert.strictEqual(isVerificationCommand('npm run build || exit 0'), false);
+	assert.strictEqual(isVerificationCommand('npm test || echo failed'), true, 'a visible fallback is still a real run');
+	assert.strictEqual(isVerificationCommand('git commit -m "fix; npm test"'), false);
+	assert.strictEqual(isVerificationCommand('echo "a && npm test"'), false);
+	assert.strictEqual(isVerificationCommand("echo 'x | cargo test'"), false);
+	assert.strictEqual(isVerificationCommand('cd x && npm test'), true);
+	assert.strictEqual(isVerificationCommand('echo "a;b"; npm test'), true);
+}
+
+// 27. A dangling symlink pointing outside the workspace cannot be written through.
+{
+	const fsMod = await import('node:fs');
+	const osMod = await import('node:os');
+	const pathMod = await import('node:path');
+	const base = fsMod.mkdtempSync(pathMod.join(osMod.tmpdir(), 'storm-link-'));
+	const ws = pathMod.join(base, 'ws');
+	const outside = pathMod.join(base, 'outside');
+	fsMod.mkdirSync(ws);
+	fsMod.mkdirSync(outside);
+	fsMod.symlinkSync(pathMod.join(outside, 'new.txt'), pathMod.join(ws, 'dangling'));
+	fsMod.symlinkSync(pathMod.join(outside, 'nodir'), pathMod.join(ws, 'dir'));
+	fsMod.symlinkSync(pathMod.join(ws, 'inner.txt'), pathMod.join(ws, 'inside'));
+	try {
+		reset({});
+		setFolders([[ws, 'ws']]);
+		for (const p of ['dangling', 'dir/f.txt']) {
+			const got = await run('write_file', { path: p, content: 'x' });
+			assert.strictEqual(got.isError, true, `blocked: ${p}`);
+			assert.match(got.result, /outside the workspace/);
+		}
+		assert.strictEqual(files.size, 0, 'nothing was written');
+		const ok = await run('write_file', { path: 'inside', content: 'x' });
+		assert.strictEqual(ok.isError, false, 'a dangling link that stays inside the workspace is fine');
+		const fresh = await run('write_file', { path: 'new/dir/a.txt', content: 'x' });
+		assert.strictEqual(fresh.isError, false, 'an ordinary new path is fine');
+	} finally {
+		fsMod.rmSync(base, { recursive: true, force: true });
+		setFolders([[ROOT, 'repo']]);
+	}
+}
+
 console.log('test-tools: all assertions passed');

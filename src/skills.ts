@@ -119,13 +119,19 @@ export class SkillRegistry {
 			return [];
 		}
 		const skills: Skill[] = [];
-		for (const [name, type] of entries) {
+		for (const [name, listedType] of entries) {
+			// A symlink (or anything the listing could not classify) is followed to what it
+			// points at, so a skill linked in from elsewhere is found like any other.
+			const type = await this.resolveType(vscode.Uri.joinPath(dir, name), listedType);
 			// `<id>.md`, or the layout skills are usually published in: `<id>/SKILL.md`.
 			let file: vscode.Uri;
 			let id: string;
-			if (type === vscode.FileType.File && name.endsWith('.md')) {
+			if (type === vscode.FileType.File && /\.md$/i.test(name)) {
+				if (/^readme\.md$/i.test(name)) {
+					continue; // documentation for the folder, not a skill
+				}
 				file = vscode.Uri.joinPath(dir, name);
-				id = name.replace(/\.md$/, '');
+				id = name.replace(/\.md$/i, '');
 			} else if (type === vscode.FileType.Directory) {
 				file = vscode.Uri.joinPath(dir, name, 'SKILL.md');
 				id = name;
@@ -140,6 +146,19 @@ export class SkillRegistry {
 			}
 		}
 		return skills;
+	}
+
+	/** The real type of a directory entry: symlinks and unclassified entries are resolved with `stat`. */
+	private async resolveType(uri: vscode.Uri, listed: vscode.FileType): Promise<vscode.FileType> {
+		if (listed !== vscode.FileType.Unknown && !(listed & vscode.FileType.SymbolicLink)) {
+			return listed;
+		}
+		try {
+			const stat = await vscode.workspace.fs.stat(uri);
+			return stat.type & ~vscode.FileType.SymbolicLink;
+		} catch {
+			return vscode.FileType.Unknown; // a dangling link
+		}
 	}
 }
 
@@ -184,16 +203,48 @@ function frontmatter(lines: readonly string[]): { fields: Map<string, string>; e
 			continue;
 		}
 		let value = match[2].trim();
+		// Indented lines that follow belong to this field: the body of a `>` / `|` block, or
+		// the continuation of a plain or quoted scalar wrapped over several lines.
+		const continuation: string[] = [];
+		let last = i;
+		while (last + 1 < end && (/^\s+\S/.test(lines[last + 1]) || !lines[last + 1].trim())) {
+			continuation.push(lines[++last].trim());
+		}
+		const folded = (first: string): string => [first, ...continuation].filter(Boolean).join(' ');
 		if (/^[>|][+-]?$/.test(value)) {
-			const block: string[] = [];
-			while (i + 1 < end && (/^\s/.test(lines[i + 1]) || !lines[i + 1].trim())) {
-				block.push(lines[++i].trim());
+			value = folded('');
+			i = last;
+		} else if (/^["']/.test(value)) {
+			const quote = value[0];
+			const whole = folded(value);
+			const close = closingQuote(whole, quote);
+			if (close > 0) {
+				value = whole.slice(1, close);
+				value = quote === '"' ? value.replace(/\\(["\\])/g, '$1') : value.replace(/''/g, '\'');
+				i = last;
 			}
-			value = block.filter(Boolean).join(' ');
-		} else if (/^(["']).*\1$/.test(value)) {
-			value = value.slice(1, -1);
+			// A quote that never closes is kept as written rather than guessed at.
+		} else if (value) {
+			value = folded(value);
+			i = last;
 		}
 		fields.set(match[1], value);
 	}
 	return { fields, end };
+}
+
+/** Index of the quote closing the quoted scalar that opens `text`, or -1 when it never closes. */
+function closingQuote(text: string, quote: string): number {
+	for (let k = 1; k < text.length; k++) {
+		if (quote === '"' && text[k] === '\\') {
+			k++;
+		} else if (text[k] === quote) {
+			if (quote === '\'' && text[k + 1] === '\'') {
+				k++;
+			} else {
+				return k;
+			}
+		}
+	}
+	return -1;
 }

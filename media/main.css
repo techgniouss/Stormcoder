@@ -222,6 +222,10 @@ button:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visib
 	text-decoration: none;
 	opacity: 0;
 	border-radius: 3px;
+	border: 0;
+	background: none;
+	padding: 0;
+	cursor: pointer;
 }
 .chat-tab.active .tab-close, .chat-tab:hover .tab-close, .chat-tab .tab-close:focus-visible { opacity: 0.6; }
 .chat-tab .tab-close:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
@@ -947,7 +951,7 @@ body.settings-window #settingsPanel {
 	max-height: 220px; overflow-y: auto; z-index: 10;
 	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border, #3c3c3c));
 	border-radius: 8px; background: var(--vscode-editorWidget-background, var(--vscode-dropdown-background));
-	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+	box-shadow: var(--shadow-menu); /* taste-skill-ignore: floating menu */
 }
 .slash-item {
 	display: flex; align-items: baseline; gap: 8px;
@@ -1312,13 +1316,13 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 	width: 16px;
 	height: 16px;
 	border-radius: 50%;
-	background: rgba(0, 0, 0, 0.62);
-	color: #fff;
+	background: var(--chip-scrim);
+	color: var(--on-chip);
 	text-decoration: none;
 	opacity: 0.85;
 	transition: opacity 0.12s ease, background-color 0.12s ease;
 }
-.image-chip a:hover { opacity: 1; background: rgba(0, 0, 0, 0.82); }
+.image-chip a:hover { opacity: 1; background: var(--chip-scrim-hover); }
 .message-images {
 	display: flex;
 	flex-wrap: wrap;
@@ -1486,7 +1490,7 @@ details.thinking > summary:hover { color: var(--vscode-foreground); }
 	line-height: 0;
 }
 /* The lit-object glyphs (media/glyphs.js). Each animates the glowing part of its drawing. */
-.thor-glyph, .doom-glyph, .hero-glyph { display: block; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / .45)); }
+.thor-glyph, .doom-glyph, .hero-glyph { display: block; filter: drop-shadow(0 1px 1.5px var(--chip-scrim)); }
 .thor-glyph.hammer { transform-origin: 50% 92%; animation: stormcoder-swing 1.8s ease-in-out infinite; }
 .thor-glyph.axe { transform-origin: 50% 92%; animation: stormcoder-swing 2.1s ease-in-out infinite; }
 .thor-glyph.axe .edge { animation: glow-breathe 1.2s ease-in-out infinite; }

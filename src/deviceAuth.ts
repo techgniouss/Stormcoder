@@ -49,7 +49,7 @@ export async function requestDeviceCode(config: DeviceFlowConfig, signal: AbortS
 		method: 'POST',
 		headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
 		body: new URLSearchParams({ client_id: config.clientId, scope: config.scope }).toString(),
-		signal,
+		signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
 	});
 	if (!response.ok) {
 		throw new Error(`device code request failed: HTTP ${response.status}`);

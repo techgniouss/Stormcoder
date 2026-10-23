@@ -118,4 +118,12 @@ assert.strictEqual(m.contextWindowFor('google/gemma-2-9b-it'), 8_000);
 	assert.ok(huge.maxTokens + huge.contextBudget <= 32_000, `fits the window: ${JSON.stringify(huge)}`);
 }
 
+// The o-series pattern is anchored: other model names containing "o1"/"o3" keep the default.
+for (const id of ['o1', 'o3-mini', 'openai/o1-pro', 'azure:o4-mini']) {
+	assert.strictEqual(m.contextWindowFor(id), 200_000, id);
+}
+for (const id of ['mistral-7b-o1-x', 'foo-o3', 'bar/baz-o4-mini', 'pro1']) {
+	assert.strictEqual(m.contextWindowFor(id), 32_000, `not an o-series model: ${id}`);
+}
+
 console.log('test-context-window: all assertions passed');

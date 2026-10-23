@@ -84,7 +84,8 @@ export class RunCheckpoint {
 		for (const file of this.files.values()) {
 			let current: string | undefined;
 			try {
-				current = new TextDecoder().decode(await fs.readFile(file.uri));
+				// `ignoreBOM` keeps a leading U+FEFF, matching the text the file tools recorded.
+				current = new TextDecoder('utf-8', { ignoreBOM: true }).decode(await fs.readFile(file.uri));
 			} catch {
 				current = undefined;
 			}

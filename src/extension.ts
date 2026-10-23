@@ -10,7 +10,7 @@ import { WebAuthManager } from './auth';
 import { RoleRouter } from './auto/router';
 import { ChatViewProvider, InlineKind } from './chatViewProvider';
 import { generateCommitMessage } from './git/commitMessage';
-import { McpManager, promptingConsent, rememberProjectConsent } from './mcp/manager';
+import { McpManager, isMissingFile, promptingConsent, rememberProjectConsent } from './mcp/manager';
 import { loadEnvFile } from './oauth';
 import { ProviderRegistry } from './providers/registry';
 import { setStreamIdleTimeout } from './providers/types';
@@ -394,12 +394,35 @@ async function mcpAdd(mcp: McpManager, workspaceState: vscode.Memento): Promise<
 	if (target.id === 'project' && root) {
 		const file = vscode.Uri.joinPath(root, '.openvs', 'mcp.json');
 		let config: { servers: Record<string, unknown> } = { servers: {} };
+		let raw: string | undefined;
 		try {
-			const existing = JSON.parse(new TextDecoder().decode(await vscode.workspace.fs.readFile(file)));
-			// Accept both wrapped and bare formats; keep whatever map we find.
-			config = existing.servers ? existing : (existing.mcpServers ? { servers: existing.mcpServers } : { servers: existing });
-		} catch {
+			raw = new TextDecoder().decode(await vscode.workspace.fs.readFile(file));
+		} catch (err) {
+			if (!isMissingFile(err)) {
+				vscode.window.showErrorMessage(`MCP: could not read ${file.fsPath} (${err instanceof Error ? err.message : String(err)}); nothing was changed.`);
+				return;
+			}
 			// New file.
+		}
+		if (raw !== undefined) {
+			// An existing file that does not parse is the user's work in progress: refuse to
+			// overwrite it (which would silently drop every server already in it).
+			let existing: any;
+			try {
+				existing = JSON.parse(raw);
+			} catch (err) {
+				vscode.window.showErrorMessage(`MCP: ${file.fsPath} is not valid JSON (${err instanceof Error ? err.message : String(err)}); fix it first. Nothing was changed.`);
+				return;
+			}
+			// Accept both wrapped and bare formats; keep whatever map we find.
+			const servers = existing && typeof existing === 'object' && !Array.isArray(existing)
+				? (existing.servers ?? existing.mcpServers ?? existing)
+				: undefined;
+			if (!servers || typeof servers !== 'object' || Array.isArray(servers)) {
+				vscode.window.showErrorMessage(`MCP: ${file.fsPath} does not hold a map of servers; fix it first. Nothing was changed.`);
+				return;
+			}
+			config = existing.servers ? existing : { servers };
 		}
 		config.servers[id] = entry;
 		await vscode.workspace.fs.writeFile(file, new TextEncoder().encode(JSON.stringify(config, null, '\t') + '\n'));
@@ -536,6 +559,34 @@ function remoteStatus(remoteService: RemoteService): void {
 }
 
 /**
+ * Where the relay package can actually be run from. In a packaged build the bundled copy sits
+ * inside `app.asar`, which a child process cannot use as a working directory, so it is mapped to
+ * the `app.asar.unpacked` mirror (see `asarUnpack`). If that location is not writable (a
+ * read-only AppImage or a system-wide install), `npm install` could not create `node_modules`
+ * there, so the package is copied into the user's storage directory and run from the copy.
+ * Returns `undefined` when the package cannot be found or copied.
+ */
+function writableRelayDir(bundled: string, storageDir: string): string | undefined {
+	const unpacked = bundled.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
+	if (!fs.existsSync(unpacked)) {
+		return undefined;
+	}
+	try {
+		fs.accessSync(unpacked, fs.constants.W_OK);
+		return unpacked;
+	} catch {
+		// read-only install: fall through to the copy
+	}
+	const copy = path.join(storageDir, 'openvs-relay');
+	try {
+		fs.cpSync(unpacked, copy, { recursive: true, force: true });
+		return copy;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
  * `openvsChat.remoteDeployRelay`: turns the manual "deploy your own relay" steps this
  * extension has always required (see `remoteEnable`'s warning) into one click — installs
  * `openvs-relay/`'s dependencies if needed, mints and uploads a `RELAY_PEPPER` secret, runs
@@ -556,8 +607,8 @@ function remoteStatus(remoteService: RemoteService): void {
  * non-interactive spawn.
  */
 async function remoteDeployRelay(context: vscode.ExtensionContext, registry: ProviderRegistry): Promise<void> {
-	const relayDir = vscode.Uri.joinPath(context.extensionUri, 'openvs-relay').fsPath;
-	if (!fs.existsSync(relayDir)) {
+	const relayDir = writableRelayDir(vscode.Uri.joinPath(context.extensionUri, 'openvs-relay').fsPath, context.globalStorageUri.fsPath);
+	if (!relayDir || !fs.existsSync(relayDir)) {
 		vscode.window.showErrorMessage(
 			'Could not find the bundled openvs-relay/ — the relay package is missing from this installation. '
 			+ 'From a checkout: cd openvs-relay && npm install && npx wrangler deploy, then paste the printed URL into "openvsChat.remote.relayUrl".');

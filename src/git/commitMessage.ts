@@ -81,7 +81,7 @@ export async function generateCommitMessage(
 	}
 	let diff: string;
 	try {
-		diff = await git(['diff', '--cached', '--no-color'], cwd);
+		diff = await git(['diff', '--cached', '--no-color', '--no-ext-diff', '--no-textconv'], cwd);
 	} catch (err) {
 		vscode.window.showErrorMessage(`Could not read the staged changes: ${err instanceof Error ? err.message : String(err)}`);
 		return;

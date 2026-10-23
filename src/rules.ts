@@ -35,6 +35,10 @@ export class RulesProvider {
 		const folders = vscode.workspace.workspaceFolders ?? [];
 		for (const folder of folders) {
 			for (const name of fileNames) {
+				if (!isInsideFolder(name)) {
+					this.warnOutside(name);
+					continue;
+				}
 				const text = await this.tryReadFile(folder.uri, name);
 				if (text) {
 					const label = folders.length > 1 ? `${folder.name}/${name}` : name;
@@ -54,6 +58,16 @@ export class RulesProvider {
 		return appendRules(base, await this.getRules());
 	}
 
+	private readonly warnedNames = new Set<string>();
+
+	/** Says once per name why a `ruleFiles` entry was ignored, instead of silently dropping it. */
+	private warnOutside(name: string): void {
+		if (!this.warnedNames.has(name)) {
+			this.warnedNames.add(name);
+			void vscode.window.showWarningMessage(`openvsChat.ruleFiles: "${name}" was ignored; rule files must be inside the workspace folder (no absolute paths or "..").`);
+		}
+	}
+
 	private async tryReadFile(root: vscode.Uri, name: string): Promise<string | undefined> {
 		try {
 			const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(root, name));
@@ -62,6 +76,28 @@ export class RulesProvider {
 			return undefined; // file not present — that's fine
 		}
 	}
+}
+
+/**
+ * Whether a `ruleFiles` entry stays inside the workspace folder it is resolved against.
+ * Rules are injected into the system prompt, so an entry like `../../.ssh/id_rsa` must not
+ * be able to read outside the project.
+ */
+export function isInsideFolder(name: unknown): boolean {
+	if (typeof name !== 'string' || !name || /^([a-zA-Z]:)?[\\/]/.test(name) || name.includes('\0')) {
+		return false;
+	}
+	let depth = 0;
+	for (const part of name.split(/[\\/]+/)) {
+		if (part === '..') {
+			if (--depth < 0) {
+				return false;
+			}
+		} else if (part && part !== '.') {
+			depth++;
+		}
+	}
+	return true;
 }
 
 /**

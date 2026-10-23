@@ -87,7 +87,9 @@
 
 		// Code spans come out of the RAW text, before escaping: their content is literal, so
 		// nothing inside one may be read as markdown.
-		let out = String(text).replace(/`([^`\n]+)`/g, (_m, code) => hold(`<code>${escapeHtml(code)}</code>`));
+		// U+0000/U+0001 delimit the placeholders below; literal ones in the input would be
+		// mistaken for them and splice in the wrong token (or undefined).
+		let out = String(text).replace(/[\u0000\u0001]/g, '').replace(/`([^`\n]+)`/g, (_m, code) => hold(`<code>${escapeHtml(code)}</code>`));
 		out = escapeHtml(out);
 
 		// Explicit links first, so the autolinker below never sees a URL that already has an

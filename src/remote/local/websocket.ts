@@ -23,6 +23,12 @@ const HANDSHAKE_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 /** The largest message accepted from a peer. Chunked image uploads send 64KB base64 slices; this leaves room without letting one peer buffer unbounded memory. */
 export const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 
+/** How often the server pings, and the most bytes it lets queue unsent for one peer before dropping it. */
+const DEFAULT_PING_INTERVAL_MS = 30_000;
+const DEFAULT_MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
+/** The longest close reason that fits in a 125-byte control frame beside its 2-byte code. */
+const MAX_CLOSE_REASON_BYTES = 123;
+
 const OP_CONTINUATION = 0x0;
 const OP_TEXT = 0x1;
 const OP_BINARY = 0x2;
@@ -36,6 +42,29 @@ export interface WsHandlers {
 	onClose(code: number, reason: string): void;
 }
 
+/** Tunables for a {@link WsConnection}; the defaults suit production, tests shorten them. */
+export interface WsOptions {
+	readonly pingIntervalMs?: number;
+	readonly maxBufferedBytes?: number;
+}
+
+/** Cuts `bytes` to at most `max` bytes without splitting a UTF-8 sequence. */
+export function truncateUtf8(bytes: Buffer, max: number): Buffer {
+	if (bytes.length <= max) {
+		return bytes;
+	}
+	let end = max;
+	while (end > 0 && (bytes[end] & 0xc0) === 0x80) {
+		end--;
+	}
+	return bytes.subarray(0, end);
+}
+
+/** Whether a peer may put `code` in a close frame (RFC 6455 §7.4: not 1004/1005/1006/1015, nothing outside the defined ranges). */
+function isValidCloseCode(code: number): boolean {
+	return (code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1014) || (code >= 3000 && code <= 4999);
+}
+
 /** One accepted WebSocket. */
 export class WsConnection {
 	private buffer: Buffer = Buffer.alloc(0);
@@ -43,11 +72,34 @@ export class WsConnection {
 	private fragmentOpcode = 0;
 	private fragmentBytes = 0;
 	private closed = false;
+	/** Whether a ping has gone unanswered (no frame of any kind since). */
+	private awaitingPong = false;
+	private pinger?: NodeJS.Timeout;
+	private readonly maxBufferedBytes: number;
 
-	constructor(private readonly socket: Duplex, private readonly handlers: WsHandlers, head?: Buffer) {
-		socket.on('data', (chunk: Buffer) => this.onData(chunk));
+	constructor(private readonly socket: Duplex, private readonly handlers: WsHandlers, head?: Buffer, options: WsOptions = {}) {
+		this.maxBufferedBytes = options.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
+		socket.on('data', (chunk: Buffer) => {
+			this.awaitingPong = false;
+			this.onData(chunk);
+		});
 		socket.on('close', () => this.finish(1006, ''));
 		socket.on('error', () => this.finish(1006, ''));
+		// A peer that vanished without a FIN (phone out of range) never errors; a ping that
+		// goes unanswered for a whole interval is how it is found and dropped.
+		this.pinger = setInterval(() => {
+			if (this.closed) {
+				return;
+			}
+			if (this.awaitingPong) {
+				this.finish(1006, 'ping timeout');
+				this.socket.destroy();
+				return;
+			}
+			this.awaitingPong = true;
+			this.writeFrame(OP_PING, Buffer.alloc(0));
+		}, options.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS);
+		this.pinger.unref?.();
 		// Bytes the client sent right behind its upgrade request arrive here, not as `data`.
 		if (head?.length) {
 			queueMicrotask(() => this.onData(head));
@@ -71,7 +123,7 @@ export class WsConnection {
 		if (this.closed) {
 			return;
 		}
-		const reasonBytes = Buffer.from(reason, 'utf8').subarray(0, 123);
+		const reasonBytes = truncateUtf8(Buffer.from(reason, 'utf8'), MAX_CLOSE_REASON_BYTES);
 		const payload = Buffer.alloc(2 + reasonBytes.length);
 		payload.writeUInt16BE(code, 0);
 		reasonBytes.copy(payload, 2);
@@ -85,6 +137,7 @@ export class WsConnection {
 			return;
 		}
 		this.closed = true;
+		clearInterval(this.pinger);
 		this.handlers.onClose(code, reason);
 		// A peer that never answers our close must not hold the socket open forever.
 		setTimeout(() => this.socket.destroy(), 1000).unref?.();
@@ -106,6 +159,10 @@ export class WsConnection {
 			header.writeBigUInt64BE(BigInt(payload.length), 2);
 		}
 		this.socket.write(Buffer.concat([header, payload]));
+		// A peer that stopped reading must not make this process buffer for it without bound.
+		if (opcode !== OP_CLOSE && this.socket.writableLength > this.maxBufferedBytes) {
+			this.close(1013, 'too much unsent data');
+		}
 	}
 
 	private onData(chunk: Buffer): void {
@@ -127,6 +184,11 @@ export class WsConnection {
 		}
 		const fin = (buf[0] & 0x80) !== 0;
 		const opcode = buf[0] & 0x0f;
+		if ((buf[0] & 0x70) !== 0) {
+			// RFC 6455 §5.2: RSV bits are zero unless an extension was negotiated (none is).
+			this.close(1002, 'reserved bits set');
+			return undefined;
+		}
 		const masked = (buf[1] & 0x80) !== 0;
 		let length = buf[1] & 0x7f;
 		let offset = 2;
@@ -147,6 +209,11 @@ export class WsConnection {
 			}
 			length = Number(big);
 			offset = 10;
+		}
+		if (opcode >= OP_CLOSE && (!fin || length > 125)) {
+			// RFC 6455 §5.5: control frames are never fragmented and carry at most 125 bytes.
+			this.close(1002, 'invalid control frame');
+			return undefined;
 		}
 		if (!masked) {
 			// RFC 6455 §5.1: a server must close on an unmasked client frame.
@@ -171,9 +238,17 @@ export class WsConnection {
 
 	private handleFrame(fin: boolean, opcode: number, payload: Buffer): void {
 		if (opcode === OP_CLOSE) {
-			const code = payload.length >= 2 ? payload.readUInt16BE(0) : 1005;
-			const reason = payload.length > 2 ? payload.subarray(2).toString('utf8') : '';
-			this.close(code === 1005 ? 1000 : code, reason);
+			if (payload.length === 1) {
+				this.close(1002, 'invalid close frame');
+				return;
+			}
+			const code = payload.length >= 2 ? payload.readUInt16BE(0) : 1000;
+			if (!isValidCloseCode(code)) {
+				// Never echo a code that must not appear on the wire (0, 1005, 1006, ...).
+				this.close(1002, 'invalid close code');
+				return;
+			}
+			this.close(code, payload.length > 2 ? payload.subarray(2).toString('utf8') : '');
 			return;
 		}
 		if (opcode === OP_PING) {
@@ -216,7 +291,7 @@ export class WsConnection {
  * Completes the upgrade handshake on `socket` and returns the open connection, or answers with
  * `400` and returns `undefined` for a request that isn't a valid WebSocket upgrade.
  */
-export function acceptUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, handlers: WsHandlers): WsConnection | undefined {
+export function acceptUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, handlers: WsHandlers, options?: WsOptions): WsConnection | undefined {
 	const key = req.headers['sec-websocket-key'];
 	if (String(req.headers.upgrade ?? '').toLowerCase() !== 'websocket' || typeof key !== 'string' || !key) {
 		rejectUpgrade(socket, 400, 'expected websocket');
@@ -231,7 +306,7 @@ export function acceptUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer
 	if ('setNoDelay' in socket && typeof socket.setNoDelay === 'function') {
 		socket.setNoDelay(true);
 	}
-	return new WsConnection(socket, handlers, head);
+	return new WsConnection(socket, handlers, head, options);
 }
 
 /** Refuses an upgrade with a plain HTTP status, the way the cloud relay's `Response` does. */

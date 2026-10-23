@@ -25,7 +25,7 @@ import { OpenAIProvider } from './openai';
 import { OpenCodeZenProvider } from './opencodeZen';
 import { OpenRouterProvider } from './openrouter';
 import { QwenProvider } from './qwen';
-import { ChatProvider, ModelEntry } from './types';
+import { ChatProvider, ModelEntry, notePooledKeys } from './types';
 import { GeminiWebProvider } from './webCookie/geminiWebProvider';
 import { XkiroProvider } from './xkiro';
 import { ZaiProvider } from './zai';
@@ -207,7 +207,9 @@ export class ProviderRegistry {
 			return [];
 		}
 		const extra = await this.getExtraApiKeys(id);
-		return [primary, ...extra];
+		const all = [primary, ...extra];
+		notePooledKeys(all);
+		return all;
 	}
 
 	async getApiKey(id: string): Promise<string | undefined> {
@@ -230,11 +232,12 @@ export class ProviderRegistry {
 	 * key errored and advances to the next stored key. Returns true when a *different* key is
 	 * now active — the caller should re-resolve via {@link getApiKey} and retry the same
 	 * request once. Returns false when there is no spare key (single-key or no-key providers),
-	 * in which case the caller should treat the failure as final.
+	 * in which case the caller should treat the failure as final. Pass `failedKey` (the key the
+	 * failed request used) so concurrent failures of the same key rotate only once.
 	 */
-	async rotateApiKey(id: string): Promise<boolean> {
+	async rotateApiKey(id: string, failedKey?: string): Promise<boolean> {
 		const keys = await this.getApiKeys(id);
-		return this.keyRotator.rotate(id, keys);
+		return this.keyRotator.rotate(id, keys, failedKey || undefined);
 	}
 
 	/** Drops `id`'s errored-key history after a successful call. See {@link KeyRotator.clear}. */
