@@ -643,6 +643,11 @@ export async function executeTool(rawCall: ToolCall, approver: ToolApprover, gua
 				return await fetchUrl(asString(call.args.url), asBoolean(call.args.raw), approver, g, limits?.maxReadChars, signal);
 			case 'write_file': {
 				const found = pathArg(true);
+				if (found.ok && (call.args.content === undefined || call.args.content === null)) {
+					// Absent is not empty: reading it as '' would overwrite the file with nothing,
+					// which is how a call whose arguments were cut short destroys a real file.
+					return { result: 'write_file requires "content" (the complete new file text). Nothing was written; send the call again with the content, or use edit_file for a targeted change.', isError: true };
+				}
 				return found.ok ? await writeFile(found.target, asString(call.args.content), approver, g)
 					: { result: found.error, isError: true };
 			}
@@ -1020,7 +1025,10 @@ export function renderDiff(before: string, after: string): string {
 /** Reads a file's current text, or undefined when it doesn't exist yet. */
 async function readIfExists(uri: vscode.Uri): Promise<string | undefined> {
 	try {
-		return new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+		// `ignoreBOM` keeps a leading U+FEFF in the text instead of silently dropping it, so an
+		// edit written back out keeps the file's BOM (PowerShell 5 and several Windows tools
+		// read a BOM-less file as the wrong encoding).
+		return new TextDecoder('utf-8', { ignoreBOM: true }).decode(await vscode.workspace.fs.readFile(uri));
 	} catch {
 		return undefined;
 	}
@@ -1107,6 +1115,10 @@ async function writeFile(target: WorkspacePath, content: string, approver: ToolA
 		if (!approved) {
 			return { result: denialMessage('write', feedback), isError: true };
 		}
+	}
+	// A full overwrite keeps the BOM the file had; the model's text never includes one.
+	if (existing?.startsWith('\uFEFF') && !content.startsWith('\uFEFF')) {
+		content = '\uFEFF' + content;
 	}
 	await vscode.workspace.fs.writeFile(target.uri, new TextEncoder().encode(content));
 	approver.recordWrite?.({ uri: target.uri, path, before: existing, after: content });
@@ -1798,16 +1810,52 @@ async function fetchUrl(rawUrl: string, raw: boolean, approver: ToolApprover, g:
 		if (signal?.aborted) {
 			throw new DOMException('Aborted', 'AbortError');
 		}
-		const response = await fetch(url, {
-			redirect: 'follow',
-			signal: abort.signal,
-			headers: {
-				// Named honestly. A site that blocks unknown agents should be able to say so
-				// rather than be worked around.
-				'user-agent': 'OpenVS-Thor/1.0 (+editor assistant)',
-				accept: 'text/html,application/json,text/plain;q=0.9,*/*;q=0.5',
-			},
-		});
+		// Redirects are followed by hand. The approval above is per host, and an automatic
+		// redirect lets an approved page send the request to a host the user never saw.
+		let response: Response;
+		for (let hops = 0; ; hops++) {
+			response = await fetch(url, {
+				redirect: 'manual',
+				signal: abort.signal,
+				headers: {
+					// Named honestly. A site that blocks unknown agents should be able to say so
+					// rather than be worked around.
+					'user-agent': 'OpenVS-Thor/1.0 (+editor assistant)',
+					accept: 'text/html,application/json,text/plain;q=0.9,*/*;q=0.5',
+				},
+			});
+			const location = response.status >= 300 && response.status < 400 ? response.headers.get('location') : null;
+			if (!location) {
+				break;
+			}
+			await response.body?.cancel().catch(() => { /* nothing left to read */ });
+			if (hops >= MAX_FETCH_REDIRECTS) {
+				return { result: `${rawUrl} redirected more than ${MAX_FETCH_REDIRECTS} times, so it was not followed any further.`, isError: true };
+			}
+			let next: URL;
+			try {
+				next = new URL(location, url);
+			} catch {
+				return { result: `${url} redirected to "${location}", which is not a valid URL.`, isError: true };
+			}
+			if (next.protocol !== 'http:' && next.protocol !== 'https:') {
+				return { result: `${url} redirected to a ${next.protocol} address, which fetch_url does not follow.`, isError: true };
+			}
+			if (next.host !== url.host && !autoApproves(g)) {
+				const { approved, feedback } = await approver.confirm({
+					kind: 'command',
+					signature: `fetch_url:${next.host}`,
+					title: 'Follow a redirect to another host?',
+					detail: `${url.host} redirected the request to ${next.host}.`,
+					preview: next.toString(),
+					previewLanguage: 'text',
+				});
+				if (!approved) {
+					return { result: denialMessage('command', feedback), isError: true };
+				}
+			}
+			url = next;
+		}
 		const type = response.headers.get('content-type') ?? '';
 		if (/^(image|audio|video|application\/(octet-stream|pdf|zip))/i.test(type)) {
 			return {
@@ -1874,16 +1922,19 @@ async function readCapped(response: Response, maxBytes: number): Promise<string>
 	return text;
 }
 
+/** How long Stop waits for a killed command to exit before returning anyway. */
+const STOP_GRACE_MS = 3_000;
+
+/** Redirect hops `fetch_url` follows before giving up. */
+const MAX_FETCH_REDIRECTS = 5;
+
 /**
  * Ends a command and every process it started. `child.kill()` ends only the shell the command
  * runs in: its children (npm, then node, then the test runner) survive it, and on Windows
  * nothing reaps them. `taskkill /T` takes the tree there; elsewhere the command runs as the
  * leader of its own process group, which a negative pid signals as a whole.
  */
-/** How long Stop waits for a killed command to exit before returning anyway. */
-const STOP_GRACE_MS = 3_000;
-
-function killTree(child: ReturnType<typeof spawn>): void {
+function killTree(child: ReturnType<typeof spawn>, signal: NodeJS.Signals = 'SIGTERM'): void {
 	if (child.pid === undefined) {
 		return;
 	}
@@ -1891,10 +1942,10 @@ function killTree(child: ReturnType<typeof spawn>): void {
 		if (process.platform === 'win32') {
 			spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }).on('error', () => child.kill());
 		} else {
-			process.kill(-child.pid, 'SIGTERM');
+			process.kill(-child.pid, signal);
 		}
 	} catch {
-		child.kill();
+		child.kill(signal);
 	}
 }
 
@@ -1954,7 +2005,12 @@ async function runCommand(dir: vscode.Uri, dirLabel: string, command: string, ap
 		const onStop = () => {
 			stopped = true;
 			killTree(child);
-			setTimeout(cancel, STOP_GRACE_MS);
+			setTimeout(() => {
+				if (!settled) {
+					killTree(child, 'SIGKILL');
+				}
+				cancel();
+			}, STOP_GRACE_MS);
 		};
 		const finish = (result: ToolResult) => {
 			if (!settled) {
@@ -1978,7 +2034,26 @@ async function runCommand(dir: vscode.Uri, dirLabel: string, command: string, ap
 		timer = setTimeout(() => {
 			timedOut = true;
 			killTree(child);
+			// A process that traps SIGTERM never closes, and this promise would wait on it for
+			// good — the timeout is the one backstop against a hung command, so it must not
+			// depend on the command's cooperation. Escalate, then report without waiting.
+			setTimeout(() => {
+				if (!settled) {
+					killTree(child, 'SIGKILL');
+					reportTimeout();
+				}
+			}, STOP_GRACE_MS).unref?.();
 		}, g.commandTimeoutMs);
+		const reportTimeout = () => {
+			const out = collector.render();
+			const seconds = Math.round(g.commandTimeoutMs / 1000);
+			finish({
+				result: `The command was killed after the ${seconds}s timeout (openvsChat.agent.commandTimeoutMs) — it did NOT fail on its own. `
+					+ `Its exit status is unknown. Re-run a faster subset, or raise the timeout.`
+					+ (out ? `\n\nOutput before it was killed:\n${out}` : ''),
+				isError: true,
+			});
+		};
 
 		child.stdout?.on('data', (chunk: Buffer) => collector.add(chunk.toString()));
 		child.stderr?.on('data', (chunk: Buffer) => collector.add(chunk.toString()));
@@ -1991,13 +2066,7 @@ async function runCommand(dir: vscode.Uri, dirLabel: string, command: string, ap
 			// A timeout is the one case where the exit status is meaningless, so it is
 			// reported as such rather than as a failing build the model would try to fix.
 			if (timedOut) {
-				const seconds = Math.round(g.commandTimeoutMs / 1000);
-				return finish({
-					result: `The command was killed after the ${seconds}s timeout (openvsChat.agent.commandTimeoutMs) — it did NOT fail on its own. `
-						+ `Its exit status is unknown. Re-run a faster subset, or raise the timeout.`
-						+ (out ? `\n\nOutput before it was killed:\n${out}` : ''),
-					isError: true,
-				});
+				return reportTimeout();
 			}
 			const failed = code !== 0;
 			const status = failed ? `\n\n[exit code ${code ?? `killed by ${exitSignal}`}]` : '';

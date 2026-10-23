@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.1
+
+Engine fixes imported from OpenVS Thor (branch `ccr-6b7439fd-4bim5m`, twelve commits).
+
+- Agent loop: fixed batching of parallel tool calls, sub-agent card ids and a command timeout that could hang a run; `spawn_subagent` is refused where it is not offered; parallel tool calls that share an index are split.
+- Safer files: `write_file` without content no longer truncates the file, and a UTF-8 byte-order mark is kept on edits.
+- Guardrails: the command lists fail closed when the setting is not supplied, and Windows destructive commands (`rmdir /s`, `del /s`, `format`, recursive `Remove-Item`) and split-flag `rm -r -f` are denied by default.
+- MCP: stdio servers launch `.cmd` shims on Windows and answer requests the server sends.
+- Tool-call repair: undoubled Windows path backslashes and bare keys in malformed JSON.
+- `fetch_url` asks again before following a redirect to another host.
+- Markdown: links with parentheses, and code fences nested in list items.
+- The agent is taught when to delegate to sub-agents; the page nonce now comes from `crypto`.
+
 ## 1.2.0
 
 Menus, and the motion that goes with them.
