@@ -115,7 +115,7 @@ kbd {
 #runLine.on { opacity: 1; }
 #runLine span {
 	position: absolute; inset: 0 auto 0 0; width: 36%;
-	background: linear-gradient(90deg, transparent, var(--accent) 45%, #bfe6ff 55%, transparent); /* taste-skill-ignore: deliberate depth and accent */
+	background: linear-gradient(90deg, transparent, var(--accent) 45%, var(--glint) 55%, transparent); /* taste-skill-ignore: deliberate depth and accent */
 	animation: run 1.5s var(--ease-in-out) infinite;
 }
 @keyframes run { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }

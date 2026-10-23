@@ -454,7 +454,8 @@
 		}
 		const overlay = $('keys');
 		overlay.classList.remove('hidden');
-		const close = () => { overlay.classList.add('hidden'); document.removeEventListener('keydown', onKey, true); overlay.removeEventListener('mousedown', onDown); };
+		const release = trapFocus(overlay);
+		const close = () => { overlay.classList.add('hidden'); document.removeEventListener('keydown', onKey, true); overlay.removeEventListener('mousedown', onDown); release(); };
 		const onKey = e => { if (e.key === 'Escape' || e.key === '?') { e.preventDefault(); e.stopPropagation(); close(); } };
 		const onDown = e => { if (e.target === overlay) { close(); } };
 		document.addEventListener('keydown', onKey, true);
@@ -465,7 +466,38 @@
 
 	// ------------------------------------------------------------------ dialogs and toasts
 
+	/**
+	 * Keeps Tab inside a modal and hands focus back to whatever opened it. Returns a release
+	 * function that removes the trap and restores that focus.
+	 * @param {HTMLElement} overlay
+	 */
+	function trapFocus(overlay) {
+		const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		/** @param {KeyboardEvent} e */
+		const onTab = e => {
+			if (e.key !== 'Tab') { return; }
+			const items = Array.from(overlay.querySelectorAll('button, [href], input, select, textarea, [tabindex]'))
+				.filter(el => el instanceof HTMLElement && !el.hasAttribute('disabled') && el.tabIndex >= 0 && el.offsetParent !== null);
+			if (!items.length) { e.preventDefault(); return; }
+			const first = /** @type {HTMLElement} */ (items[0]);
+			const last = /** @type {HTMLElement} */ (items[items.length - 1]);
+			const cur = document.activeElement;
+			if (!overlay.contains(cur)) { e.preventDefault(); first.focus(); }
+			else if (e.shiftKey && cur === first) { e.preventDefault(); last.focus(); }
+			else if (!e.shiftKey && cur === last) { e.preventDefault(); first.focus(); }
+		};
+		document.addEventListener('keydown', onTab, true);
+		return () => {
+			document.removeEventListener('keydown', onTab, true);
+			if (opener && opener.isConnected && !overlay.contains(opener)) { opener.focus(); }
+		};
+	}
+
+	/** Cancels the dialog currently on screen, if any, so a newer one never strands its promise. */
+	let cancelPendingDialog = null;
+
 	function dialog(req) {
+		if (cancelPendingDialog) { cancelPendingDialog(); }
 		return new Promise(resolve => {
 			const overlay = $('dialog');
 			$('dialogText').textContent = req.text;
@@ -474,7 +506,16 @@
 			detail.classList.toggle('hidden', !req.detail);
 			const box = $('dialogActions');
 			box.textContent = '';
-			const done = value => { overlay.classList.add('hidden'); document.removeEventListener('keydown', onKey, true); resolve(value); };
+			const release = trapFocus(overlay);
+			const done = value => {
+				if (cancelPendingDialog === cancel_) { cancelPendingDialog = null; }
+				overlay.classList.add('hidden');
+				document.removeEventListener('keydown', onKey, true);
+				release();
+				resolve(value);
+			};
+			const cancel_ = () => done(undefined);
+			cancelPendingDialog = cancel_;
 			const actions = req.actions.length ? req.actions : ['OK'];
 			actions.forEach((label, n) => {
 				const b = document.createElement('button');
@@ -566,8 +607,10 @@
 				try { await api.writeFile(file, text.value); original = text.value; note.textContent = 'Saved'; }
 				catch (err) { note.textContent = String(err.message || err); note.classList.add('bad'); }
 			}
+			let releaseTrap = null;
 			function close() {
 				overlay.classList.add('hidden');
+				if (releaseTrap) { releaseTrap(); }
 				save.removeEventListener('click', doSave);
 				$('editorClose').removeEventListener('click', close);
 				text.removeEventListener('input', validate);
@@ -583,6 +626,7 @@
 			text.addEventListener('input', validate);
 			document.addEventListener('keydown', onKey, true);
 			overlay.classList.remove('hidden');
+			releaseTrap = trapFocus(overlay);
 			validate();
 			text.focus();
 		});
