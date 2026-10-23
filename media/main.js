@@ -587,7 +587,7 @@
 		// which the stop/cleanup path at 'stopped' compares against.
 		const mark = document.createElement('span');
 		mark.className = 'tool-glyph';
-		mark.innerHTML = pickGlyph();
+		mark.innerHTML = pickToolGlyph();
 		summary.insertBefore(mark, summary.firstChild);
 		const out = document.createElement('pre');
 		out.className = 'tool-out';
@@ -1863,7 +1863,12 @@
 	// hammer, axe, helm and golden bolt; the storm-and-code lines get Stormcoder's own line glyphs;
 	// a plain verb draws from the Asgard and storm sets (never doom, which would make "Marinating" look ominous). Pairing them is what makes "Charging Stormbreaker" arrive with
 	// an axe rather than a cloud.
-	const GLYPH_SETS = { asgard: StormGlyphs.asgard, storm: StormGlyphs.storm, doom: StormGlyphs.doom, villain: StormGlyphs.villain, spider: StormGlyphs.spiderman, plain: [...StormGlyphs.asgard, ...StormGlyphs.storm] };
+	// A missing glyphs.js (a stripped build, a blocked script) must cost the drawings, not the whole chat.
+	const GLYPHS = typeof StormGlyphs === 'undefined'
+		? { asgard: [], storm: [], doom: [], villain: [], spiderman: [] }
+		: StormGlyphs;
+	const NEUTRAL_GLYPHS = [...GLYPHS.asgard, ...GLYPHS.storm];
+	const GLYPH_SETS = { asgard: GLYPHS.asgard, storm: GLYPHS.storm, doom: GLYPHS.doom, villain: GLYPHS.villain, spider: GLYPHS.spiderman, plain: NEUTRAL_GLYPHS };
 	const WORD_POOLS = { plain: PLAIN_WORDS, asgard: ASGARD_WORDS, storm: STORM_WORDS, doom: DOOM_WORDS, villain: VILLAIN_WORDS, spider: SPIDER_WORDS };
 	let workingTimer = 0;
 	let lastWorkingWord = '';
@@ -1889,12 +1894,21 @@
 	/** Picks a glyph from the set matching the last verb, never the one already on screen. */
 	function pickGlyph() {
 		const set = GLYPH_SETS[lastWordKind];
+		if (!set.length) { return ''; }
 		let glyph = lastGlyph;
-		while (glyph === lastGlyph) {
+		while (glyph === lastGlyph && set.length > 1) {
 			glyph = set[Math.floor(Math.random() * set.length)];
 		}
 		lastGlyph = glyph;
 		return glyph;
+	}
+
+	/**
+	 * A tool card's mark. It ignores the verb on screen: a skull or a web next to "read_file" is
+	 * decoration with no line to explain it, so cards draw from the neutral Asgard and storm sets.
+	 */
+	function pickToolGlyph() {
+		return NEUTRAL_GLYPHS.length ? NEUTRAL_GLYPHS[Math.floor(Math.random() * NEUTRAL_GLYPHS.length)] : '';
 	}
 
 	/**

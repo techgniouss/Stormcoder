@@ -999,6 +999,8 @@ body.settings-window #settingsPanel {
 	vertical-align: -3px;
 }
 .tool-glyph .thor-glyph, .tool-glyph .storm-glyph, .tool-glyph .doom-glyph, .tool-glyph .hero-glyph { width: auto; height: 16px; }
+/* Only a running call animates: a transcript of finished cards must not keep dozens of loops alive. */
+.tool:not(.running) .tool-glyph svg, .tool:not(.running) .tool-glyph svg * { animation: none; }
 .tool.tool-error { border-left-color: var(--vscode-inputValidation-errorBorder, #f14c4c); }
 .tool-head {
 	display: flex;

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.5
+
+Audit pass over the thinking-line work.
+
+- Finished tool cards no longer keep their glyph animating; only a running call does, so a long transcript is not hundreds of live loops. Tool cards also draw only from the Asgard and storm sets, never a skull or a web next to `read_file`.
+- A missing or blocked `glyphs.js` now costs the drawings only; before, the chat script would have failed to start.
+- The web glyph had white strands that vanished on the light theme; it now has a slate underlay.
+- New `scripts/test-glyphs.mjs` checks every glyph (well-formed, only defined gradients, no ids, an animation rule, at least two per set), the six word lists (non-empty, no word in two lists, every list reachable), the missing-script fallback, tool-card rules and reduced motion.
+
 ## 1.3.4
 
 - Character lines get their own drawings. Doctor Doom lines ("Consulting Doctor Doom", "Forging Doombots", "Snapping the gauntlet") show Doom's green-hooded iron mask or a gem-set gauntlet; a new Spider-Man set ("Spinning a web", "Tingling spider-sense", "Thwip!", "Swinging between skyscrapers") shows a spider, a web or the red mask. Six word lists now share the line: plain 24%, Asgard 20%, storm 16%, doomsday 16%, Doom 12%, Spider-Man 12%.

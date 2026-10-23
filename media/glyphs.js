@@ -308,13 +308,16 @@
 		+ spec('M25 36C24 41 25 46 28 50', 0.45)
 		+ '</svg>';
 
-	const web = open('hero', 'web')
-		+ '<g class="strands" fill="none" stroke="url(#sc-web)" stroke-linecap="round" stroke-linejoin="round">'
+	/** Web strands, drawn twice: a slate underlay so white silk still reads on a light theme. */
+	const strands = ''
 		+ '<path d="M32 3V61M3 32H61M11.5 11.5 52.5 52.5M52.5 11.5 11.5 52.5" stroke-width="1.5"/>'
 		+ '<path d="M32 12 40.5 23.5 52 32 40.5 40.5 32 52 23.5 40.5 12 32 23.5 23.5Z" stroke-width="1.4"/>'
 		+ '<path d="M32 21 36 28 43 32 36 36 32 43 28 36 21 32 28 28Z" stroke-width="1.4"/>'
-		+ '<path d="M32 4 41 18 58 32 41 46 32 60 23 46 6 32 23 18Z" stroke-width="1.2" opacity=".75"/></g>'
-		+ '<g fill="#fff"><circle cx="40.5" cy="23.5" r="1.7"/><circle cx="23.5" cy="40.5" r="1.7"/><circle cx="52" cy="32" r="1.4"/><circle cx="12" cy="32" r="1.4"/></g>'
+		+ '<path d="M32 4 41 18 58 32 41 46 32 60 23 46 6 32 23 18Z" stroke-width="1.2" opacity=".75"/>';
+	const web = open('hero', 'web')
+		+ `<g fill="none" stroke="#56647e" stroke-opacity=".85" stroke-linecap="round" stroke-linejoin="round" stroke-width="3">${strands.replace(/ stroke-width="[\d.]+"/g, '')}</g>`
+		+ `<g class="strands" fill="none" stroke="url(#sc-web)" stroke-linecap="round" stroke-linejoin="round">${strands}</g>`
+		+ '<g fill="#fff" stroke="#56647e" stroke-width=".8"><circle cx="40.5" cy="23.5" r="1.9"/><circle cx="23.5" cy="40.5" r="1.9"/><circle cx="52" cy="32" r="1.5"/><circle cx="12" cy="32" r="1.5"/></g>'
 		+ '</svg>';
 
 	const mask = open('hero', 'mask')
