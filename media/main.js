@@ -1372,10 +1372,34 @@
 		}
 	}
 
+	/**
+	 * A designed empty state: an icon tile, a headline and a sentence on what to do next.
+	 * @param {string} kind selects the icon in CSS (`history`, `mcp`)
+	 * @param {string} title
+	 * @param {string} text
+	 */
+	function emptyCard(kind, title, text) {
+		const card = document.createElement('div');
+		card.className = `empty-card empty-card-${kind}`;
+		const icon = document.createElement('div');
+		icon.className = 'empty-card-icon';
+		const h = document.createElement('strong');
+		h.textContent = title;
+		const p = document.createElement('p');
+		p.textContent = text;
+		card.append(icon, h, p);
+		return card;
+	}
+
 	/** Renders MCP server status lines in the settings panel. */
 	function renderMcpList(status, toolCount) {
 		if (!els.mcpList) { return; }
 		els.mcpList.innerHTML = '';
+		const noServers = !status || !status.length || (status.length === 1 && /no mcp servers/i.test(status[0]));
+		if (!toolCount && noServers) {
+			els.mcpList.appendChild(emptyCard('mcp', 'No MCP servers yet', 'Add a server to give the agent databases, browsers and APIs. Tools appear as mcp__server__tool.'));
+			return;
+		}
 		const summary = document.createElement('div');
 		summary.className = 'mcp-summary';
 		summary.textContent = toolCount > 0
@@ -1556,10 +1580,7 @@
 	function renderHistoryPanel() {
 		els.historyList.innerHTML = '';
 		if (!history.length) {
-			const p = document.createElement('p');
-			p.className = 'hint';
-			p.textContent = 'No saved chats yet — close a chat tab and its conversation lands here.';
-			els.historyList.appendChild(p);
+			els.historyList.appendChild(emptyCard('history', 'No saved chats yet', 'Close a chat tab and its conversation lands here, ready to reopen.'));
 			return;
 		}
 		for (const h of history) {

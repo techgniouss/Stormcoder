@@ -7,40 +7,41 @@
 	<title>Stormcoder</title>
 	<link rel="icon" href="stormcoder-asset://app/shell/mark.svg" />
 	<link rel="stylesheet" href="stormcoder-asset://app/shell/tokens.css" />
+	<link rel="stylesheet" href="stormcoder-asset://app/shell/menu.css" />
 	<link rel="stylesheet" href="stormcoder-asset://app/shell/shell.css" />
 </head>
 <body>
 	<div id="shell">
 		<nav id="rail" aria-label="Main">
 			<span class="rail-ind" aria-hidden="true"></span>
-			<div class="rail-mark" title="Stormcoder" aria-hidden="true">
+			<button class="rail-mark" id="markBtn" aria-label="Menu" title="Menu" type="button">
 				<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="13" height="7" rx="1"/><path d="M9.5 10v11"/><path d="M16 6.5h3.5L21 8"/></svg>
-			</div>
+			</button>
 			<div class="rail-group">
-				<button class="rail-btn" data-view="chat" data-label="Chat" aria-label="Chat" title="Chat  (Ctrl+1)">
+				<button class="rail-btn" data-view="chat" aria-label="Chat" title="Chat  (Ctrl+1)">
 					<svg viewBox="0 0 16 16"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>
 				</button>
-				<button class="rail-btn" data-view="history" data-label="History" aria-label="History" title="History  (Ctrl+2)">
+				<button class="rail-btn" data-view="history" aria-label="History" title="History  (Ctrl+2)">
 					<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path d="M8 4.8V8l2.2 1.4"/></svg>
 				</button>
 			</div>
 			<div class="rail-group">
-				<button class="rail-btn" data-view="skills" data-label="Skills" aria-label="Skills" title="Skills  (Ctrl+3)">
+				<button class="rail-btn" data-view="skills" aria-label="Skills" title="Skills  (Ctrl+3)">
 					<svg viewBox="0 0 16 16"><path d="M3.5 2.5h7l2 2v9h-9z"/><path d="M5.5 7h5M5.5 9.5h5"/></svg>
 				</button>
-				<button class="rail-btn" data-view="mcp" data-label="MCP servers" aria-label="MCP servers" title="MCP servers  (Ctrl+4)">
+				<button class="rail-btn" data-view="mcp" aria-label="MCP servers" title="MCP servers  (Ctrl+4)">
 					<svg viewBox="0 0 16 16"><path d="M6 2.5v3M10 2.5v3M4.5 5.5h7v2.5a3.5 3.5 0 0 1-7 0zM8 11.5v2"/></svg>
 				</button>
-				<button class="rail-btn" data-view="settings" data-label="Settings" aria-label="Settings" title="Settings  (Ctrl+,)">
+				<button class="rail-btn" data-view="settings" aria-label="Settings" title="Settings  (Ctrl+,)">
 					<svg viewBox="0 0 16 16"><path d="M2.5 4.5h6M11.5 4.5h2M2.5 8h2M7.5 8h6M2.5 11.5h7M12.5 11.5h1"/><circle cx="10" cy="4.5" r="1.5"/><circle cx="5.5" cy="8" r="1.5"/><circle cx="11" cy="11.5" r="1.5"/></svg>
 				</button>
 			</div>
 			<div class="rail-spacer"></div>
 			<div class="rail-group">
-				<button class="rail-btn" id="paletteBtn" data-label="Command palette" aria-label="Command palette" title="Command palette">
+				<button class="rail-btn" id="paletteBtn" aria-label="Command palette" title="Command palette">
 					<svg viewBox="0 0 16 16"><path d="M5.5 3.5a2 2 0 1 0-2 2h9a2 2 0 1 0-2-2v9a2 2 0 1 0 2-2h-9a2 2 0 1 0 2 2z"/></svg>
 				</button>
-				<button class="rail-btn" id="themeBtn" data-label="Switch theme" aria-label="Switch theme">
+				<button class="rail-btn" id="themeBtn" aria-label="Switch theme">
 					<svg class="i-moon" viewBox="0 0 16 16"><path d="M13 9.6A5.4 5.4 0 0 1 6.4 3a5.4 5.4 0 1 0 6.6 6.6z"/></svg>
 					<svg class="i-sun" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.8"/><path d="M8 1.6v1.6M8 12.8v1.6M1.6 8h1.6M12.8 8h1.6M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M3.5 12.5l1.1-1.1M11.4 4.6l1.1-1.1"/></svg>
 				</button>
@@ -64,8 +65,8 @@
 			<div id="progressBar" class="hidden"><span></span></div>
 			<div id="runLine" aria-hidden="true"><span></span></div>
 			<div id="views">
-				<iframe id="view-chat" class="view" title="Chat" data-view="chat"></iframe>
-				<iframe id="view-settings" class="view hidden" title="Settings" data-view="settings"></iframe>
+				<iframe id="view-chat" class="view" aria-label="Chat" data-view="chat"></iframe>
+				<iframe id="view-settings" class="view hidden" aria-label="Settings" data-view="settings"></iframe>
 			</div>
 		</div>
 	</div>
@@ -101,9 +102,17 @@
 		</div>
 	</div>
 
+	<div id="keys" class="overlay hidden" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+		<div class="keys-card">
+			<div class="keys-head"><h2>Keyboard shortcuts</h2><button id="keysClose" class="toast-x" aria-label="Close">&times;</button></div>
+			<div id="keysBody" class="keys-body"></div>
+		</div>
+	</div>
+
 	<div id="toasts" aria-live="polite"></div>
 
 	<script src="stormcoder-asset://app/shell/web-api.js"></script>
+	<script src="stormcoder-asset://app/shell/menu-kit.js"></script>
 	<script src="stormcoder-asset://app/shell/shell.js"></script>
 </body>
 </html>

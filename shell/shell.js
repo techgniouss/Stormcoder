@@ -149,7 +149,7 @@
 		btn.addEventListener('click', () => navigate(btn.dataset.view));
 	}
 	$('paletteBtn').addEventListener('click', () => openCommands());
-	$('projectBtn').addEventListener('click', () => openProjects());
+	$('projectBtn').addEventListener('click', () => openProjectMenu());
 	$('kbdHint').addEventListener('click', () => openCommands());
 
 	function shortcut(key) {
@@ -159,8 +159,12 @@
 		else if (key === '2') { navigate('history'); }
 		else if (key === '3') { navigate('skills'); }
 		else if (key === '4') { navigate('mcp'); }
+		else if (key === '?') { openShortcuts(); }
 	}
 	window.addEventListener('keydown', e => {
+		const t = e.target;
+		const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+		if (e.key === '?' && !typing && !e.ctrlKey && !e.metaKey) { e.preventDefault(); shortcut('?'); return; }
 		if ((e.ctrlKey || e.metaKey) && /^[1-4,k]$/i.test(e.key)) {
 			e.preventDefault();
 			shortcut(e.key.toLowerCase());
@@ -335,6 +339,8 @@
 		].map(([label, key]) => ({ label, description: 'Navigate', run: () => navigate(key) }));
 		const project = [
 			{ label: 'Open Project Folder…', description: 'Project', run: () => api.command('app.openFolder') },
+			{ label: 'Keyboard Shortcuts', description: 'Help', run: () => openShortcuts() },
+			{ label: 'Toggle Light / Dark Theme', description: 'View', run: () => setTheme(theme === 'light' ? 'dark' : 'light') },
 			...(appState.folder ? [{ label: 'Close Project Folder', description: 'Project', run: () => api.command('app.closeFolder') }] : []),
 			...appState.recent.filter(f => f !== appState.folder).map(f => ({ label: 'Open ' + baseName(f), description: f, run: () => api.command('app.openFolder', f) })),
 			...(appState.userDataDir ? [{ label: 'Edit settings.json', description: 'Settings', run: () => openEditor(appState.userDataDir + sep() + 'settings.json') }] : []),
@@ -350,18 +356,112 @@
 		if (typeof choice === 'number') { items[choice].run(); }
 	}
 
-	async function openProjects() {
-		const items = [
-			{ label: 'Open Project Folder…', description: 'Browse', run: () => api.command('app.openFolder') },
-			...appState.recent.map(f => ({ label: baseName(f), description: f, run: () => api.command('app.openFolder', f) })),
-			...(appState.folder ? [{ label: 'Close Project Folder', description: 'No project', run: () => api.command('app.closeFolder') }] : []),
-		];
-		const choice = await palette({ mode: 'pick', title: 'Project', placeholder: 'Choose a project folder', items });
-		if (typeof choice === 'number') { items[choice].run(); }
-	}
-
 	function baseName(p) { return String(p).split(/[\\/]/).filter(Boolean).pop() || p; }
 	function sep() { return appState.platform === 'win32' ? '\\' : '/'; }
+
+
+	// ------------------------------------------------------------------ menus
+
+	/** 16px outline icon paths for menu rows. */
+	const IC = {
+		chat: 'M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z', plus: 'M8 3v10M3 8h10', folder: 'M2 4.5h4l1.5 1.5H14v6.5H2z',
+		history: 'M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 5v3.2l2.2 1.4', skills: 'M3.5 2.5h7l2 2v9h-9zM5.5 7h5M5.5 9.5h5',
+		mcp: 'M6 2.5v3M10 2.5v3M4.5 5.5h7v2.5a3.5 3.5 0 0 1-7 0zM8 11.5v2', settings: 'M2.5 4.5h6M11.5 4.5h2M2.5 8h2M7.5 8h6M2.5 11.5h7M12.5 11.5h1',
+		palette: 'M5.5 3.5a2 2 0 1 0-2 2h9a2 2 0 1 0-2-2v9a2 2 0 1 0 2-2h-9a2 2 0 1 0 2 2z', keys: 'M2 4.5h12v7H2zM4.5 7h1M7.5 7h1M10.5 7h1M5 9.5h6',
+		sun: 'M8 5.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6zM8 1.6v1.6M8 12.8v1.6M1.6 8h1.6M12.8 8h1.6',
+		moon: 'M13 9.6A5.4 5.4 0 0 1 6.4 3a5.4 5.4 0 1 0 6.6 6.6z', refresh: 'M13.5 2.5v4h-4M13.2 6.5A5.5 5.5 0 1 0 14 8',
+		logs: 'M3.5 2.5h9v11h-9zM5.5 5.5h5M5.5 8h5M5.5 10.5h3', link: 'M6 3.5H3.5v9h9V10M9 2.5h4.5V7M13.5 2.5L7.5 8.5',
+		zoomIn: 'M7 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM11 11l3 3M5 7h4M7 5v4', power: 'M8 2v6M4.8 4.4a5 5 0 1 0 6.4 0', close: 'M4 4l8 8M12 4l-8 8',
+	};
+	const MOD = () => appState.platform === 'darwin' ? '⌘' : 'Ctrl';
+
+	/** The app menu: opened from the brand mark, so Windows and Linux (menu bar hidden) have a way in. */
+	function openAppMenu() {
+		const mod = MOD();
+		const recent = appState.recent.filter(f => f !== appState.folder).slice(0, 4);
+		const items = [
+			{ label: 'New chat', icon: IC.plus, shortcut: [mod, 'N'], onSelect: () => api.command('openvsChat.newChat') },
+			{ label: 'Open project folder…', icon: IC.folder, shortcut: [mod, 'O'], onSelect: () => api.command('app.openFolder') },
+			...(recent.length ? [{ type: 'header', label: 'Recent projects' }, ...recent.map(f => ({ label: baseName(f), detail: f, icon: IC.folder, onSelect: () => api.command('app.openFolder', f) }))] : []),
+			{ type: 'sep' },
+			{ label: 'Chat', icon: IC.chat, shortcut: [mod, '1'], onSelect: () => navigate('chat') },
+			{ label: 'History', icon: IC.history, shortcut: [mod, '2'], onSelect: () => navigate('history') },
+			{ label: 'Skills', icon: IC.skills, shortcut: [mod, '3'], onSelect: () => navigate('skills') },
+			{ label: 'MCP servers', icon: IC.mcp, shortcut: [mod, '4'], onSelect: () => navigate('mcp') },
+			{ label: 'Settings', icon: IC.settings, shortcut: [mod, ','], onSelect: () => navigate('settings') },
+			{ type: 'sep' },
+			{ label: 'Command palette', icon: IC.palette, shortcut: [mod, 'K'], onSelect: () => openCommands() },
+			{ label: 'Keyboard shortcuts', icon: IC.keys, shortcut: ['?'], onSelect: () => openShortcuts() },
+			{ label: theme === 'light' ? 'Dark theme' : 'Light theme', icon: theme === 'light' ? IC.moon : IC.sun, onSelect: () => setTheme(theme === 'light' ? 'dark' : 'light') },
+			{ label: 'Zoom in', icon: IC.zoomIn, onSelect: () => api.command('app.zoomIn') },
+			{ label: 'Reset zoom', icon: IC.refresh, onSelect: () => api.command('app.zoomReset') },
+			{ type: 'sep' },
+			{ label: 'Check for updates…', icon: IC.refresh, onSelect: () => api.command('app.checkUpdates') },
+			{ label: 'Open logs folder', icon: IC.logs, onSelect: () => api.command('app.openLogs') },
+			{ label: 'Stormcoder on GitHub', icon: IC.link, onSelect: () => api.command('app.openGitHub') },
+			{ type: 'sep' },
+			{ label: 'Quit', icon: IC.power, danger: true, onSelect: () => api.command('app.quit') },
+		];
+		StormMenu.open({ anchor: $('markBtn'), placement: 'right-start', items, minWidth: 280, ariaLabel: 'Stormcoder menu' });
+	}
+
+	/** The project switcher: a popover under the project chip instead of a full palette. */
+	function openProjectMenu() {
+		const others = appState.recent.filter(f => f !== appState.folder);
+		const items = [
+			...(appState.folder ? [{ type: 'header', label: 'Current project' }, { label: baseName(appState.folder), detail: appState.folder, icon: IC.folder, checked: true, onSelect: () => undefined }] : []),
+			...(others.length ? [{ type: 'header', label: 'Recent' }, ...others.map(f => ({ label: baseName(f), detail: f, icon: IC.folder, onSelect: () => api.command('app.openFolder', f) }))] : []),
+			{ type: 'sep' },
+			{ label: 'Open project folder…', icon: IC.plus, shortcut: [MOD(), 'O'], onSelect: () => api.command('app.openFolder') },
+			...(appState.folder ? [{ label: 'Close project', icon: IC.close, onSelect: () => api.command('app.closeFolder') }] : []),
+		];
+		StormMenu.open({ anchor: $('projectBtn'), placement: 'bottom-start', items, minWidth: 320, ariaLabel: 'Project' });
+	}
+
+	$('markBtn').addEventListener('click', openAppMenu);
+
+	// ------------------------------------------------------------------ shortcuts sheet
+
+	function shortcutGroups() {
+		const m = MOD();
+		return [
+			['Go to', [['Chat', [m, '1']], ['History', [m, '2']], ['Skills', [m, '3']], ['MCP servers', [m, '4']], ['Settings', [m, ',']], ['Command palette', [m, 'K']]]],
+			['Chat', [['Send', ['Enter']], ['New line', ['Shift', 'Enter']], ['Slash commands', ['/']], ['New chat', [m, 'N']], ['Open project', [m, 'O']]]],
+			['Menus', [['Move', ['↑', '↓']], ['Choose', ['Enter']], ['Close', ['Esc']], ['Search a list', ['type']]]],
+		];
+	}
+
+	function openShortcuts() {
+		const body = $('keysBody');
+		body.textContent = '';
+		for (const [title, rows] of shortcutGroups()) {
+			const group = document.createElement('section');
+			const h = document.createElement('h3');
+			h.textContent = title;
+			group.appendChild(h);
+			for (const [label, keys] of rows) {
+				const row = document.createElement('div');
+				row.className = 'keys-row';
+				const l = document.createElement('span');
+				l.textContent = label;
+				const k = document.createElement('span');
+				k.className = 'keys-k';
+				for (const key of keys) { const kb = document.createElement('kbd'); kb.textContent = key; k.appendChild(kb); }
+				row.append(l, k);
+				group.appendChild(row);
+			}
+			body.appendChild(group);
+		}
+		const overlay = $('keys');
+		overlay.classList.remove('hidden');
+		const close = () => { overlay.classList.add('hidden'); document.removeEventListener('keydown', onKey, true); overlay.removeEventListener('mousedown', onDown); };
+		const onKey = e => { if (e.key === 'Escape' || e.key === '?') { e.preventDefault(); e.stopPropagation(); close(); } };
+		const onDown = e => { if (e.target === overlay) { close(); } };
+		document.addEventListener('keydown', onKey, true);
+		overlay.addEventListener('mousedown', onDown);
+		$('keysClose').onclick = close;
+		$('keysClose').focus();
+	}
 
 	// ------------------------------------------------------------------ dialogs and toasts
 
@@ -541,7 +641,14 @@
 
 	api.onState(state => {
 		appState = state;
-		$('kbdMod').textContent = state.platform === 'darwin' ? '\u2318' : 'Ctrl';
+		const mac = state.platform === 'darwin';
+		$('kbdMod').textContent = mac ? '\u2318' : 'Ctrl';
+		if (mac) {
+			// Shortcut hints in tooltips say Command, not Ctrl.
+			for (const el of document.querySelectorAll('#rail [title], #rail [data-tip]')) {
+				for (const attr of ['title', 'data-tip']) { const v = el.getAttribute(attr); if (v) { el.setAttribute(attr, v.replace(/Ctrl\+/g, '\u2318')); } }
+			}
+		}
 		$('projectName').textContent = state.folder ? baseName(state.folder) : 'No folder open';
 		$('projectBtn').title = state.folder || 'Open a project folder so the agent can work on it';
 		$('trustPill').classList.toggle('hidden', !state.folder || state.trusted);
@@ -550,6 +657,10 @@
 		note.textContent = 'Keys use file encryption (no OS keychain found)';
 		hostCommands = (state.commandList || []).filter(c => state.commands.includes(c.id));
 	});
+
+	// Tooltips for the rail sit beside it.
+	for (const el of document.querySelectorAll('#rail .rail-btn, #rail .rail-mark')) { el.dataset.tipSide = 'right'; }
+	StormMenu.tooltips();
 
 	mark('chat');
 	api.ready();

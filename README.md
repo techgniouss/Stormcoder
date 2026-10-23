@@ -14,6 +14,7 @@ Stormcoder is the desktop home of the OpenVS Thor chat engine (previously an ext
 - **Skills and rules.** Instruction packs you switch on per chat, plus always-on rules from `AGENTS.md`, `.openvs/rules.md` and similar files.
 - **MCP servers.** Stdio and HTTP (Streamable HTTP and legacy SSE), per project or global. Project servers ask before they start.
 - **Remote control.** Pair a phone through a relay (hosted on Cloudflare, or served from your machine through a tunnel) to send messages and answer approvals away from the desk.
+- **Polished to use.** Searchable model and provider menus, an app menu, a project switcher, right-click menus, a copy button on every message, styled tooltips, a shortcuts sheet (`?`), and dark and light themes.
 - **Hard guardrails.** Protected paths, denied commands, workspace confinement and untrusted-folder write blocking are enforced in code, whatever the model says.
 
 | Light theme | Settings |
@@ -23,6 +24,10 @@ Stormcoder is the desktop home of the OpenVS Thor chat engine (previously an ext
 | Welcome | Command palette |
 | --- | --- |
 | ![Welcome screen](docs/screenshots/hero-dark.png) | ![Command palette](docs/screenshots/palette-dark.png) |
+
+| Model menu | App menu |
+| --- | --- |
+| ![Model menu](docs/screenshots/model-menu-dark.png) | ![App menu](docs/screenshots/app-menu-dark.png) |
 
 ## Using it
 

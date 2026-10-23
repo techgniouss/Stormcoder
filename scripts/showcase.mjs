@@ -70,6 +70,14 @@ try {
 	await chat.locator('#messages').evaluate(el => { el.scrollTop = 0; });
 	await page.waitForTimeout(500);
 	await page.screenshot({ path: `${out}/03b-top.png` });
+	await chat.locator('#modelSelectButton').click(); await page.waitForTimeout(500);
+	await page.screenshot({ path: `${out}/03c-model-menu.png` });
+	await page.keyboard.type('qwen'); await page.waitForTimeout(300);
+	await page.screenshot({ path: `${out}/03d-model-search.png` });
+	await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+	await chat.locator('#approvalSelectButton').click(); await page.waitForTimeout(500);
+	await page.screenshot({ path: `${out}/03e-approval-menu.png` });
+	await page.keyboard.press('Escape'); await page.waitForTimeout(300);
 	await page.click('[data-view=settings]'); await page.waitForTimeout(1200);
 	await page.screenshot({ path: `${out}/04-settings.png` });
 	await page.click('[data-view=skills]'); await page.waitForTimeout(500);

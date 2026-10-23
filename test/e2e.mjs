@@ -2,72 +2,25 @@
 // server. Covers a chat turn (streaming), an Agent run that writes a file through the tool
 // loop, and that the transcript survives a reload.
 import { launchChromium } from './browser.mjs';
-import { spawn } from 'node:child_process';
+import { startHost, startMock } from './harness.mjs';
 import fs from 'node:fs';
-import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 
-const root = path.resolve(import.meta.dirname, '..');
-const work = fs.mkdtempSync(path.join(os.tmpdir(), 'mj-e2e-'));
-const project = path.join(work, 'project');
-const data = path.join(work, 'data');
-fs.mkdirSync(project, { recursive: true });
-fs.mkdirSync(data, { recursive: true });
-
-const seen = [];
-const mock = http.createServer((req, res) => {
-	let body = '';
-	req.on('data', c => body += c);
-	req.on('end', () => {
-		if (req.method === 'GET') {
-			res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'mock-model' }] }));
-			return;
-		}
-		const json = JSON.parse(body || '{}');
-		seen.push(json);
-		const send = (delta, finish) => res.write(`data: ${JSON.stringify({ id: 'x', object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason: finish ?? null }] })}\n\n`);
-		res.writeHead(200, { 'content-type': 'text/event-stream' });
-		const last = json.messages[json.messages.length - 1];
-		// Write once per conversation: after that the agent's own completion gate may nudge the
-		// model to verify, and a model that wrote again on every nudge would never finish.
-		const alreadyWrote = json.messages.some(m => m.role === 'tool');
-		if (json.tools?.some(t => t.function?.name === 'write_file') && !alreadyWrote) {
-			send({ role: 'assistant', content: 'Creating the file.' });
-			send({ tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({ path: 'hello.txt', content: 'hello from stormcoder\n' }) } }] });
-			send({}, 'tool_calls');
-		} else if (alreadyWrote) {
-			send({ role: 'assistant', content: 'Done: hello.txt written.' });
-			send({}, 'stop');
-		} else {
-			send({ role: 'assistant', content: 'Hello from the mock model.' });
-			send({}, 'stop');
-		}
-		res.write('data: [DONE]\n\n');
-		res.end();
-	});
+// Write once per conversation: after that the agent's own completion gate may nudge the model to
+// verify, and a model that wrote again on every nudge would never finish.
+const mock = await startMock(req => {
+	const alreadyWrote = req.messages.some(m => m.role === 'tool');
+	if (req.tools?.some(t => t.function?.name === 'write_file') && !alreadyWrote) {
+		return { text: 'Creating the file.', tool: { name: 'write_file', args: { path: 'hello.txt', content: 'hello from stormcoder\n' } } };
+	}
+	return alreadyWrote ? 'Done: hello.txt written.' : 'Hello from the mock model.';
 });
-await new Promise(r => mock.listen(0, '127.0.0.1', r));
-const mockPort = mock.address().port;
-
-fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify({
-	'openvsChat.defaultProvider': 'custom',
-	'openvsChat.custom.baseUrl': `http://127.0.0.1:${mockPort}/v1`,
-	'openvsChat.custom.model': 'mock-model',
-	'openvsChat.guardrails.approval': 'yolo',
-}));
-
-const host = spawn(process.execPath, [path.join(root, 'dist/dev-host.js')], {
-	env: { ...process.env, MJ_USER_DATA: data, MJ_FOLDER: project, MJ_PORT: '0' },
-	stdio: ['ignore', 'pipe', 'pipe'],
-});
-let hostLog = '';
-host.stderr.on('data', d => { hostLog += d; });
-const url = await new Promise((resolve, reject) => {
-	const t = setTimeout(() => reject(new Error('dev host did not start\n' + hostLog)), 15000);
-	host.stdout.on('data', d => { const m = /STORMCODER_DEV (\S+)/.exec(String(d)); if (m) { clearTimeout(t); resolve(m[1]); } });
-});
+const seen = mock.seen;
+const host = await startHost({ mockPort: mock.port });
+const project = host.project;
+const url = host.url;
 
 const browser = await launchChromium();
 let failed = false;
@@ -138,6 +91,55 @@ try {
 	assert.equal(anim, 'none', 'no entrance animation under reduced motion');
 	await page.emulateMedia({ reducedMotion: 'no-preference' });
 
+	await page.click('[data-view=chat]');
+
+	// Menus replace native dropdowns: the model picker lists the provider's models, narrows as you
+	// type, and choosing one sets the real (hidden) select.
+	await chat.locator('#modelSelectButton').click();
+	const menu = chat.locator('.sc-menu.open');
+	await menu.waitFor();
+	assert.ok(await menu.locator('.sc-item').count() > 7, 'the model list is shown');
+	assert.equal(await chat.locator('#modelSelectButton').getAttribute('aria-expanded'), 'true');
+	await page.keyboard.type('qwen');
+	assert.equal(await menu.locator('.sc-item').count(), 1, 'typing narrows the list');
+	await page.keyboard.press('Enter');
+	await menu.waitFor({ state: 'detached' });
+	assert.equal(await chat.locator('#modelSelect').inputValue(), 'qwen3-coder-480b');
+	assert.match(await chat.locator('#modelSelectButton .picker-label').textContent(), /qwen3-coder/);
+
+	// Arrow keys and Enter drive a menu without the mouse.
+	await chat.locator('#approvalSelectButton').click();
+	await page.keyboard.press('ArrowUp');
+	await page.keyboard.press('Enter');
+	assert.equal(await chat.locator('#approvalSelect').inputValue(), 'auto-edits');
+
+	// The app menu opens from the brand mark and leads to the shortcuts sheet.
+	await page.click('#markBtn');
+	await page.locator('.sc-menu.open').waitFor();
+	await page.locator('.sc-item', { hasText: 'Keyboard shortcuts' }).click();
+	await page.locator('#keys:not(.hidden)').waitFor();
+	await page.keyboard.press('Escape');
+	await page.locator('#keys.hidden').waitFor({ state: 'attached' });
+
+	// The project popover names the open folder.
+	await page.click('#projectBtn');
+	await page.locator('.sc-menu.open .sc-item.checked').waitFor();
+	assert.match(await page.locator('.sc-menu.open .sc-item.checked').textContent(), /project/);
+	await page.keyboard.press('Escape');
+
+	// Tooltips are ours, not the browser's: hovering moves the title into a styled bubble.
+	await page.hover('[data-view=skills]');
+	await page.locator('.sc-tip.open').waitFor();
+	assert.match(await page.locator('.sc-tip.open').textContent(), /^Skills/);
+	assert.equal(await page.locator('.sc-tip.open').getAttribute('data-side'), 'right', 'rail tips sit beside the rail');
+	assert.equal(await page.getAttribute('[data-view=skills]', 'title'), null);
+
+	// Right-clicking a message offers Copy message; the hover button is there too.
+	await chat.locator('.message .body').first().click({ button: 'right' });
+	await chat.locator('.sc-menu.open').waitFor();
+	assert.ok((await chat.locator('.sc-menu.open').textContent()).includes('Copy message'));
+	await page.keyboard.press('Escape');
+
 	// 5. Creating a skill walks three prompts, writes the file, opens it in the built-in editor,
 	//    and the skill then shows up in Settings.
 	await page.keyboard.press('Control+k');
@@ -165,11 +167,10 @@ try {
 	console.error('e2e: FAILED\n', err);
 	try { await (await browser.contexts()[0].pages())[0].screenshot({ path: path.join(os.tmpdir(), 'e2e-fail.png') }); console.error('screenshot: ' + path.join(os.tmpdir(), 'e2e-fail.png')); } catch { /* best effort */ }
 	console.error('requests seen by mock:', JSON.stringify(seen).slice(0, 800));
-	console.error(hostLog);
+	console.error(host.log());
 } finally {
 	await browser.close();
-	host.kill();
+	host.stop();
 	mock.close();
-	fs.rmSync(work, { recursive: true, force: true });
 }
 process.exit(failed ? 1 : 0);

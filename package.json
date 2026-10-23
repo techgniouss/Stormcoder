@@ -1,7 +1,7 @@
 {
 	"name": "stormcoder",
 	"productName": "Stormcoder",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"description": "Stormcoder \u2014 a standalone desktop AI coding workspace: multi-provider chat, Plan and Agent modes, MCP, skills and phone remote control.",
 	"main": "dist/main.js",
 	"license": "MIT",

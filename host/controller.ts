@@ -28,6 +28,8 @@ export interface ControllerOptions {
 	confirmTrust(folder: string): Promise<'trust' | 'readonly' | 'cancel'>;
 	showFatal(title: string, detail: string): void;
 	onExternalActivity?(): void;
+	/** App-level commands the shell can ask for (`app.quit`, `app.checkUpdates`, `app.openLogs`, `app.zoom`…). */
+	appCommand?(id: string, args: unknown[]): void | Promise<void>;
 }
 
 interface AppState {
@@ -260,6 +262,7 @@ export class Controller {
 				if (id === 'app.closeFolder') { return this.closeFolder(); }
 				if (id === 'app.state') { return this.publicState(); }
 				if (id === 'app.settingsDefaults') { return settingDefaults(); }
+				if (id.startsWith('app.')) { return this.opts.appCommand?.(id, rest); }
 				return runCommand(id, ...rest);
 			}
 			case 'readFile': {

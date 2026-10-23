@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.0
+
+Menus, and the motion that goes with them.
+
+- Provider, model and permission dropdowns are now popover menus. The model menu searches as you type, shows `tools` and `free` as badges, and the permission menu explains each level.
+- An app menu on the brand mark (New chat, Open project, Recent projects, navigation, theme, zoom, updates, logs, Quit), so Windows and Linux, where the menu bar is hidden, have one.
+- A project switcher under the project chip, replacing the full-screen palette for that job.
+- A keyboard shortcuts sheet (press `?`).
+- Right-click menus on messages, code blocks and chat tabs; the usual Cut / Copy / Paste menu in text fields, which Electron does not provide by default.
+- A copy button on every message, with a drawn check on success.
+- Styled tooltips everywhere, replacing the operating system's, with shortcuts shown (and Command on macOS).
+- Designed empty states for History and MCP servers; a shimmer on the agent's working line.
+- Menus open with a short scale-and-fade, list items stagger in, the selected item's check draws itself, and all of it is off under reduced motion.
+
 ## 1.1.0
 
 A new look and feel.

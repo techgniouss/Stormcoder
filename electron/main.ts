@@ -3,7 +3,7 @@
  *  Licensed under the MIT License.
  *--------------------------------------------------------------------------------------------*/
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, protocol, safeStorage, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, MenuItemConstructorOptions, net, protocol, safeStorage, session, shell } from 'electron';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -167,6 +167,17 @@ function createWindow(): void {
 	});
 	window.webContents.on('will-navigate', e => e.preventDefault());
 	window.webContents.on('will-attach-webview', e => e.preventDefault());
+	// Right-click in text fields and over selected text gets the usual Cut/Copy/Paste menu. Custom
+	// menus (messages, code, tabs) call preventDefault in the page, which suppresses this event.
+	window.webContents.on('context-menu', (_e, params) => {
+		if (!params.isEditable && !params.selectionText) {
+			return;
+		}
+		const items: MenuItemConstructorOptions[] = params.isEditable
+			? [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { type: 'separator' }, { role: 'selectAll' }]
+			: [{ role: 'copy' }, { role: 'selectAll' }];
+		Menu.buildFromTemplate(items).popup({ window });
+	});
 	window.webContents.on('render-process-gone', (_e, details) => {
 		logMain('fatal', 'renderer gone', details);
 		if (details.reason !== 'clean-exit') {
@@ -263,6 +274,18 @@ if (!app.requestSingleInstanceLock()) {
 				return r.response === 0 ? 'trust' : r.response === 1 ? 'readonly' : 'cancel';
 			},
 			showFatal: (title, detail) => dialog.showErrorBox(title, detail),
+			appCommand: id => {
+				switch (id) {
+					case 'app.checkUpdates': return void checkForUpdates(true);
+					case 'app.openLogs': return void shell.openPath(path.join(userDataDir, 'logs'));
+					case 'app.openGitHub': return void shell.openExternal('https://github.com/techgniouss/Stormcoder');
+					case 'app.zoomIn': return window?.webContents.setZoomLevel(window.webContents.getZoomLevel() + 0.5);
+					case 'app.zoomOut': return window?.webContents.setZoomLevel(window.webContents.getZoomLevel() - 0.5);
+					case 'app.zoomReset': return window?.webContents.setZoomLevel(0);
+					case 'app.quit': return app.quit();
+					default: return undefined;
+				}
+			},
 		}, extension, prepareViewHtml);
 
 		ipcMain.on('renderer:ready', () => controller.rendererIsReady());

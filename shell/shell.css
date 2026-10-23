@@ -43,6 +43,8 @@ kbd {
 	box-shadow: inset 0 0 0 1px var(--accent-soft);
 	transition: transform var(--t-ui) var(--ease-out), box-shadow var(--t-ui) ease;
 }
+.rail-mark { cursor: pointer; border: 0; padding: 0; }
+.rail-mark[aria-expanded="true"] { box-shadow: inset 0 0 0 1px var(--accent-line), 0 0 22px var(--glow); }
 .rail-mark:hover { transform: rotate(-6deg) scale(1.06); box-shadow: inset 0 0 0 1px var(--accent-line), 0 0 22px var(--glow); }
 .rail-mark svg { width: 21px; height: 21px; }
 .rail-group { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; position: relative; }
@@ -70,16 +72,6 @@ kbd {
 	transition: transform 420ms var(--ease-expo), opacity var(--t-ui) ease;
 }
 .rail-ind.on { opacity: 1; }
-.rail-btn::after {
-	content: attr(data-label);
-	position: absolute; left: calc(100% + 12px); top: 50%;
-	transform: translate(-6px, -50%);
-	padding: 5px 10px; white-space: nowrap; pointer-events: none; opacity: 0;
-	font-size: 12px; font-weight: 500; color: var(--text);
-	background: var(--raised); border: 1px solid var(--border-strong); border-radius: 7px; box-shadow: var(--shadow-soft);
-	transition: opacity var(--t-hover) ease, transform var(--t-ui) var(--ease-out);
-}
-.rail-btn:hover::after { opacity: 1; transform: translate(0, -50%); transition-delay: .35s; }
 #themeBtn .i-sun { display: none; }
 :root[data-theme="light"] #themeBtn .i-sun { display: block; }
 :root[data-theme="light"] #themeBtn .i-moon { display: none; }
@@ -224,3 +216,14 @@ kbd {
 	#runLine span, #progressBar span { animation: none; width: 100%; }
 	.rail-btn[data-view="chat"].busy::before { animation: none; }
 }
+
+/* ---------------------------------------------------------------- keyboard shortcuts sheet */
+.keys-card { width: min(760px, calc(100vw - 32px)); margin-top: 9vh; padding: 22px 26px 26px; background: var(--raised); border: 1px solid var(--border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-float); /* taste-skill-ignore: floating overlay */ animation: cardIn 280ms var(--ease-out) both; }
+.keys-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.keys-head h2 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -.01em; }
+.keys-body { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px; }
+.keys-body h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.keys-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--rule); color: var(--text-2); font-size: 13px; }
+.keys-row:last-child { border-bottom: 0; }
+.keys-k { display: inline-flex; gap: 4px; }
+@media (max-width: 760px) { .keys-body { grid-template-columns: 1fr; } }

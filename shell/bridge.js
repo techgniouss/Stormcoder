@@ -29,6 +29,13 @@
 		}
 	}, true);
 	window.addEventListener('keydown', function (e) {
+		var t = e.target;
+		var typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+		if (e.key === '?' && !typing && !e.ctrlKey && !e.metaKey) {
+			parent.postMessage({ mj: 'key', key: '?' }, location.origin);
+			e.preventDefault();
+			return;
+		}
 		// Palette and navigation shortcuts work wherever focus is.
 		if ((e.ctrlKey || e.metaKey) && /^[1-4,k]$/i.test(e.key)) {
 			parent.postMessage({ mj: 'key', key: e.key.toLowerCase() }, location.origin);

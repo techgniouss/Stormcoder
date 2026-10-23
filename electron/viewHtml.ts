@@ -17,6 +17,6 @@ export function prepareViewHtml(html: string): string {
 	const bridge = `<script src="${ASSET_ORIGIN}/shell/bridge.js"></script>`;
 	let out = html.replace(/script-src ('nonce-[^']+')/, `script-src $1 ${ASSET_ORIGIN}`);
 	out = out.replace(/(<link [^>]*rel="stylesheet"[^>]*>)/, `$1\n\t<link href="${ASSET_ORIGIN}/shell/theme.css" rel="stylesheet" />`);
-	out = out.replace(/<\/body>/, `<script src="${ASSET_ORIGIN}/shell/frame.js"></script>\n</body>`);
+	out = out.replace(/<\/body>/, `<script src="${ASSET_ORIGIN}/shell/menu-kit.js"></script>\n<script src="${ASSET_ORIGIN}/shell/frame.js"></script>\n</body>`);
 	return out.includes('<body') ? out.replace(/(<body[^>]*>)/, `$1\n\t${bridge}`) : bridge + out;
 }

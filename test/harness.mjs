@@ -16,7 +16,7 @@ export async function startMock(reply, { chunkDelay = 0 } = {}) {
 		req.on('data', c => body += c);
 		req.on('end', async () => {
 			if (req.method === 'GET') {
-				res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'mock-model' }] }));
+				res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: ['mock-model', 'qwen3-coder-480b', 'llama-3.3-70b-instruct', 'deepseek-r1-distill', 'mistral-large-2', 'gpt-oss-120b', 'gemma-3-27b-it', 'kimi-k2-instruct', 'glm-4.6', 'phi-4-reasoning', 'command-r-plus', 'nemotron-70b', 'yi-lightning'].map(id => ({ id })) }));
 				return;
 			}
 			const json = JSON.parse(body || '{}');
