@@ -10,7 +10,7 @@
 // test-session-store.mjs's own doc), so the compiled module is imported directly, no stub
 // needed.
 import assert from 'node:assert/strict';
-import { MAX_PICK_BYTES, MAX_PICK_FILES, MAX_SESSION_BYTES, MAX_UPLOAD_BYTES, UploadAssembler, readPickedImages } from '../out/remote/attachments.js';
+import { MAX_PICK_BYTES, MAX_PICK_FILES, MAX_SESSION_BYTES, MAX_UPLOAD_BYTES, UploadAssembler, readPickedImages, sanitizeInlineImages } from '../out/remote/attachments.js';
 
 /** Leading bytes of each image type; the assembler reads the type from these, not from the client's claim. */
 const MAGIC = { jpeg: [0xff, 0xd8, 0xff], png: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] };
@@ -239,6 +239,37 @@ function splitBase64(base64, size) {
 			],
 			readHuge: false,
 		});
+}
+
+// Session cap is freed once the images are consumed; in-flight uploads are bounded globally.
+{
+	const a = new UploadAssembler();
+	const big = base64OfSize(MAX_UPLOAD_BYTES - 1000);
+	for (let n = 0; n < 5; n++) {
+		const r = a.addChunk({ sessionId: 's', uploadId: `u${n}`, index: 0, total: 1, chunk: big });
+		assert.equal(r.status, n < 4 ? 'complete' : 'rejected', `upload ${n}`);
+		if (n === 4) {
+			a.release('s');
+			assert.equal(a.addChunk({ sessionId: 's', uploadId: 'after', index: 0, total: 1, chunk: big }).status, 'complete', 'release frees the session cap');
+		}
+	}
+	const b = new UploadAssembler();
+	let rejected;
+	for (let n = 0; n < 20 && !rejected; n++) {
+		const r = b.addChunk({ sessionId: `s${n}`, uploadId: `u${n}`, index: 0, total: 2, chunk: base64OfSize(1000) });
+		rejected = r.status === 'rejected' ? r.reason : undefined;
+	}
+	assert.match(rejected, /too many uploads/, 'a flood of half-finished uploads across sessions is capped');
+}
+
+// Inline images from a non-desktop origin: count, size, type and base64 are enforced.
+{
+	const ok = { mimeType: 'image/svg+xml', data: base64OfSize(1000, 'png') };
+	const { images, dropped } = sanitizeInlineImages([ok, { data: 'not base64!!' }, { data: base64OfSize(1000).replace(/^.{4}/, 'AAAA') }, { data: base64OfSize(6 * 1024 * 1024) }, null, ok, ok, ok]);
+	assert.equal(images.length, 1);
+	assert.ok(images.every(i => i.mimeType === 'image/png'), 'the type is sniffed, not claimed');
+	assert.equal(images.length + dropped, 8, 'every entry is kept or counted as dropped');
+	assert.equal(sanitizeInlineImages(Array(9).fill(ok)).images.length, 5, 'at most five');
 }
 
 console.log('test-attachments: all assertions passed');

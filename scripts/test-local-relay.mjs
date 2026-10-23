@@ -140,26 +140,28 @@ await relay.stop();
 	await second.stop();
 }
 
-// Guessing pairing codes through the public tunnel is limited per room: a wrong guess matches
-// no code, so the per-code attempt count never saw it and nothing limited guessing at all.
-// Past the limit every live code is withdrawn; a freshly minted one works again.
+// Guessing pairing codes through the public tunnel is limited per source address: a wrong guess
+// matches no code, so the per-code attempt count never saw it and nothing limited guessing at
+// all. A guessing source is refused for a while; live codes are NOT withdrawn, so another
+// source (the owner's phone) still pairs with the code it was shown.
 {
 	const r = new LocalRelay({ pwaDir, pepper: 'p', store: memoryStore() });
 	r.registerRoom(ROOM, HOST_TOKEN);
 	const port = await r.start();
 	const h = await open(`ws://127.0.0.1:${port}/ws/host?room=${ROOM}`, { headers: { Authorization: `Bearer ${HOST_TOKEN}` } });
-	const claimAt = code => fetch(`http://127.0.0.1:${port}/pair/claim?room=${ROOM}`, { method: 'POST', body: JSON.stringify({ code }) });
+	const claimAt = (code, ip) => fetch(`http://127.0.0.1:${port}/pair/claim?room=${ROOM}`, { method: 'POST', headers: { 'Cf-Connecting-Ip': ip }, body: JSON.stringify({ code }) });
 	control(h, { c: 'pair' });
 	const first = (await h.next(isC('paired'))).p.code;
 	const statuses = [];
 	for (let i = 0; i < 10; i++) {
-		statuses.push((await claimAt(`WRONG${i}`)).status);
+		statuses.push((await claimAt(`WRONG${i}`, '203.0.113.9')).status);
 	}
 	assert.deepStrictEqual(statuses, [403, 403, 403, 403, 403, 403, 403, 403, 403, 429]);
-	assert.equal((await claimAt(first)).status, 429, 'the live code was withdrawn, and the room stays locked until a new code');
-	control(h, { c: 'pair' }, 2);
-	const second = (await h.next(isC('paired'))).p.code;
-	assert.equal((await claimAt(second)).status, 200, 'a new code resets the count');
+	assert.equal((await claimAt(first, '203.0.113.9')).status, 429, 'the guessing source stays refused');
+	assert.equal((await claimAt(first, '198.51.100.7')).status, 200, 'another source still claims the live code');
+
+	// A malformed percent-escape in the path is the client's mistake: 400, not a 500.
+	assert.equal((await fetch(`http://127.0.0.1:${port}/%E0%A4%A`)).status, 400);
 
 	// The phone app cannot be framed by another site (a clickjacked Approve) or sniffed.
 	const page = await fetch(`http://127.0.0.1:${port}/p/${ROOM}`);
@@ -169,6 +171,42 @@ await relay.stop();
 	);
 	h.close();
 	await r.stop();
+}
+
+// Two windows share one state file: each saves its own room without erasing the other's, and
+// a revocation made in one is not undone by the other's later save.
+{
+	const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'openvs-relay-shared-')), 'local-relay.json');
+	const a = new LocalRelay({ pwaDir, pepper: 'p', store: fileStore(file) });
+	const b = new LocalRelay({ pwaDir, pepper: 'p', store: fileStore(file) });
+	a.registerRoom('ROOM-A', 'ta');
+	b.registerRoom('ROOM-B', 'tb');
+	const portA = await a.start();
+	const portB = await b.start();
+	const pairOn = async (relay, port, room, token) => {
+		const host = await open(`ws://127.0.0.1:${port}/ws/host?room=${room}`, { headers: { Authorization: `Bearer ${token}` } });
+		control(host, { c: 'pair' });
+		const code = (await host.next(isC('paired'))).p.code;
+		const res = await fetch(`http://127.0.0.1:${port}/pair/claim?room=${room}`, { method: 'POST', body: JSON.stringify({ code, name: 'phone' }) });
+		assert.equal(res.status, 200);
+		return { host, ...(await res.json()) };
+	};
+	const pa = await pairOn(a, portA, 'ROOM-A', 'ta');
+	const pb = await pairOn(b, portB, 'ROOM-B', 'tb');
+	const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+	assert.deepStrictEqual(Object.keys(saved.rooms).sort(), ['ROOM-A', 'ROOM-B'], 'both windows\' rooms survive');
+	assert.equal(saved.rooms['ROOM-A'].devices.length, 1);
+	assert.equal(saved.rooms['ROOM-B'].devices.length, 1);
+	control(pb.host, { c: 'revoke', deviceId: pb.deviceId });
+	await pb.host.next(isC('revoked'));
+	pa.host.close();
+	const client = await open(`ws://127.0.0.1:${portA}/ws/client?room=ROOM-A&token=${encodeURIComponent(pa.token)}`);
+	client.close();
+	const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+	assert.notEqual(after.rooms['ROOM-B'].devices[0].revokedAt, null, 'a save from the other window kept the revocation');
+	pb.host.close();
+	await a.stop();
+	await b.stop();
 }
 
 fs.rmSync(pwaDir, { recursive: true, force: true });

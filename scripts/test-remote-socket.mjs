@@ -15,7 +15,7 @@
 import assert from 'node:assert/strict';
 import {
 	buildByeEnvelope, buildHelloEnvelope, buildPairEnvelope, buildPingEnvelope, buildRevokeEnvelope,
-	hasNativeWebSocket, nextBackoffMs, RemoteSocket,
+	hasNativeWebSocket, nextBackoffMs, normalizeRelayUrl, RemoteSocket,
 } from '../out/remote/socket.js';
 
 // 1. hasNativeWebSocket() reflects globalThis.WebSocket's actual presence. Trivially true in
@@ -109,5 +109,14 @@ import {
 		Math.random = realRandom;
 	}
 }
+
+// The relay URL: trailing slashes are stripped, and only https/wss (or http/ws to this machine) is dialled.
+assert.equal(normalizeRelayUrl('https://relay.example.com//'), 'https://relay.example.com');
+assert.equal(normalizeRelayUrl('wss://relay.example.com'), 'wss://relay.example.com');
+assert.equal(normalizeRelayUrl('http://127.0.0.1:5000/'), 'http://127.0.0.1:5000');
+assert.equal(normalizeRelayUrl('ws://localhost:5000'), 'ws://localhost:5000');
+assert.equal(normalizeRelayUrl('http://relay.example.com'), undefined, 'plain http to a remote host would send the host token in clear');
+assert.equal(normalizeRelayUrl('ftp://x'), undefined);
+assert.equal(normalizeRelayUrl('not a url'), undefined);
 
 console.log('test-remote-socket: all assertions passed');

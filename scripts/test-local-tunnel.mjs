@@ -16,8 +16,8 @@ const { Tunnel, findCloudflared, releaseAsset, installCloudflared, checkTunnelDn
 /** A spawner that runs a tiny node script printing `lines` to stderr, recording the args it was given. */
 function fakeCloudflared(lines, { exitAfterMs } = {}) {
 	const calls = [];
-	const spawner = (command, args) => {
-		calls.push({ command, args });
+	const spawner = (command, args, env) => {
+		calls.push({ command, args, env });
 		const script = `
 			for (const line of ${JSON.stringify(lines)}) { process.stderr.write(line + '\\n'); }
 			${exitAfterMs === undefined ? 'setInterval(() => {}, 1000);' : `setTimeout(() => process.exit(1), ${exitAfterMs});`}
@@ -46,7 +46,8 @@ function fakeCloudflared(lines, { exitAfterMs } = {}) {
 	const fake = fakeCloudflared(['2026-09-23T10:00:02Z INF Registered tunnel connection connIndex=0 location=bom01']);
 	const { tunnel, url } = Tunnel.start({ binary: 'cloudflared', localUrl: 'http://127.0.0.1:8787', token: 'TOKEN', hostname: 'https://remote.example.com/', spawner: fake.spawner }, () => { });
 	assert.equal(await url, 'https://remote.example.com');
-	assert.deepEqual(fake.calls[0].args, ['tunnel', '--no-autoupdate', 'run', '--token', 'TOKEN']);
+	assert.deepEqual(fake.calls[0].args, ['tunnel', '--no-autoupdate', 'run'], 'the token is not on the command line');
+	assert.deepEqual(fake.calls[0].env, { TUNNEL_TOKEN: 'TOKEN' }, 'it is passed through the environment');
 	tunnel.stop();
 }
 
@@ -81,10 +82,35 @@ assert.equal(releaseAsset('win32', 'arm64'), 'cloudflared-windows-amd64.exe');
 assert.equal(releaseAsset('darwin', 'arm64'), 'cloudflared-darwin-arm64.tgz');
 assert.equal(releaseAsset('linux', 'arm64'), 'cloudflared-linux-arm64');
 
-// A download that isn't a binary (an HTML error page) is refused, not installed.
-await assert.rejects(
-	installCloudflared('unused', async () => new Response('<html>rate limited</html>'), 'win32', 'x64'),
-	/not a cloudflared binary/);
+// Downloads are checked against the SHA-256 the release publishes, and fail closed otherwise.
+{
+	const { createHash } = await import('node:crypto');
+	const fs = await import('node:fs');
+	const os = await import('node:os');
+	const path = await import('node:path');
+	const binary = Buffer.alloc(2 * 1024 * 1024, 7);
+	const sha = createHash('sha256').update(binary).digest('hex');
+	const url = 'https://github.com/cloudflare/cloudflared/releases/download/2099.1.0/cloudflared-windows-amd64.exe';
+	const stub = (digest, body = binary) => async target => String(target).includes('api.github.com')
+		? new Response(JSON.stringify({ assets: [{ name: 'cloudflared-windows-amd64.exe', browser_download_url: url, digest }] }))
+		: new Response(body);
+
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openvs-cf-'));
+	const installed = await installCloudflared(dir, stub(`sha256:${sha}`), 'win32', 'x64');
+	assert.ok(fs.existsSync(installed), 'a download matching the published checksum is installed');
+	fs.rmSync(installed);
+
+	await assert.rejects(installCloudflared(dir, stub(`sha256:${'0'.repeat(64)}`), 'win32', 'x64'), /does not match the checksum/);
+	await assert.rejects(installCloudflared(dir, stub(undefined), 'win32', 'x64'), /publishes no SHA-256/);
+	await assert.rejects(installCloudflared(dir, stub(`sha256:${sha}`, Buffer.alloc(2 * 1024 * 1024, 8)), 'win32', 'x64'), /does not match the checksum/);
+	assert.ok(!fs.existsSync(installed), 'nothing is left behind by a refused download');
+	fs.rmSync(dir, { recursive: true, force: true });
+
+	// An error page instead of release metadata is refused too.
+	await assert.rejects(
+		installCloudflared('unused', async () => new Response('<html>rate limited</html>'), 'win32', 'x64'),
+		/Couldn't read the cloudflared release/);
+}
 
 // DNS: the address is held until it's published, and an ISP resolver that refuses
 // trycloudflare.com (seen on Reliance Jio) is detected rather than left to fail on the phone.

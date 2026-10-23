@@ -65,6 +65,14 @@ export const MAX_SESSION_BYTES = 32 * 1024 * 1024;
  */
 export const MAX_UPLOAD_CHUNKS = 1024;
 
+/** Bytes and uploads in flight at once across every session on one assembler; a many-session flood cannot hold more than this. */
+export const MAX_INFLIGHT_BYTES = 64 * 1024 * 1024;
+export const MAX_INFLIGHT_UPLOADS = 16;
+
+/** Limits for images sent inline on a `send` by a non-desktop origin: they skip the chunked path, so they get the same ceilings here. */
+export const MAX_INLINE_IMAGES = 5;
+export const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
+
 /** An upload with no chunk for this long is abandoned (the phone dropped mid-upload). */
 export const UPLOAD_IDLE_MS = 2 * 60 * 1000;
 
@@ -120,8 +128,12 @@ interface UploadState {
  */
 export class UploadAssembler {
 	private readonly uploads = new Map<string, UploadState>();
-	/** sessionId -> cumulative accepted bytes, across every upload (completed or in-flight) this instance has ever admitted for that session. Never decremented on completion — it is a lifetime ceiling on attachment volume per session, not a watermark. */
+	/** sessionId -> cumulative accepted bytes, across every upload (completed or in-flight) this instance has ever admitted for that session. Completed uploads stay counted until {@link release}d. */
 	private readonly sessionBytes = new Map<string, number>();
+
+	/** sessionId -> bytes of completed uploads still counted against the session cap, until {@link release}d. */
+	private readonly completedBytes = new Map<string, number>();
+	private inflightBytes = 0;
 
 	/** @param now Clock for {@link UPLOAD_IDLE_MS}; injectable for tests. */
 	constructor(private readonly now: () => number = Date.now) { }
@@ -147,6 +159,9 @@ export class UploadAssembler {
 			return { status: 'rejected', reason: 'chunk total changed mid-upload' };
 		}
 		if (!upload) {
+			if (this.uploads.size >= MAX_INFLIGHT_UPLOADS) {
+				return { status: 'rejected', reason: 'too many uploads in progress' };
+			}
 			upload = { sessionId, total, chunks: new Map(), receivedBytes: 0, lastChunkAt: 0 };
 			this.uploads.set(uploadId, upload);
 		}
@@ -168,6 +183,11 @@ export class UploadAssembler {
 			return { status: 'rejected', reason: `session exceeds the ${MAX_SESSION_BYTES}-byte per-session limit` };
 		}
 
+		if (this.inflightBytes + deltaBytes > MAX_INFLIGHT_BYTES) {
+			this.dropUpload(uploadId);
+			return { status: 'rejected', reason: 'too many bytes in flight across uploads' };
+		}
+		this.inflightBytes += deltaBytes;
 		upload.chunks.set(index, chunk);
 		upload.receivedBytes = newUploadBytes;
 		this.sessionBytes.set(sessionId, newSessionBytes);
@@ -186,6 +206,8 @@ export class UploadAssembler {
 			return { status: 'rejected', reason: 'not a JPEG, PNG, GIF or WebP image' };
 		}
 		this.uploads.delete(uploadId);
+		this.inflightBytes = Math.max(0, this.inflightBytes - upload.receivedBytes);
+		this.completedBytes.set(sessionId, (this.completedBytes.get(sessionId) ?? 0) + upload.receivedBytes);
 		return {
 			status: 'complete',
 			sessionId: upload.sessionId,
@@ -207,6 +229,19 @@ export class UploadAssembler {
 		}
 	}
 
+	/**
+	 * Frees the session-cap bytes of its completed uploads once their images have been consumed
+	 * (attached to a sent turn). Without it the cap was a lifetime ceiling: a tab that had sent
+	 * 32MB of screenshots over a day could never attach another.
+	 */
+	release(sessionId: string): void {
+		const held = this.completedBytes.get(sessionId) ?? 0;
+		if (held) {
+			this.completedBytes.delete(sessionId);
+			this.sessionBytes.set(sessionId, Math.max(0, (this.sessionBytes.get(sessionId) ?? 0) - held));
+		}
+	}
+
 	/** Drops an upload (rejection or abandonment), rolling its bytes back out of the session's running total so a rejected upload cannot itself count toward the very cap that rejected it. */
 	private dropUpload(uploadId: string): void {
 		const upload = this.uploads.get(uploadId);
@@ -215,8 +250,37 @@ export class UploadAssembler {
 		}
 		const remaining = (this.sessionBytes.get(upload.sessionId) ?? 0) - upload.receivedBytes;
 		this.sessionBytes.set(upload.sessionId, Math.max(0, remaining));
+		this.inflightBytes = Math.max(0, this.inflightBytes - upload.receivedBytes);
 		this.uploads.delete(uploadId);
 	}
+}
+
+/**
+ * Filters the `images` of a `send` that did not come from the desktop webview: at most
+ * {@link MAX_INLINE_IMAGES}, each valid base64 under {@link MAX_INLINE_IMAGE_BYTES} decoded and
+ * typed by its leading bytes (the claimed MIME type is replaced by the sniffed one). Offenders
+ * are dropped and counted in `dropped`, never trusted.
+ */
+export function sanitizeInlineImages(images: unknown): { images: { mimeType: string; data: string }[]; dropped: number } {
+	if (!Array.isArray(images)) {
+		return { images: [], dropped: 0 };
+	}
+	const kept: { mimeType: string; data: string }[] = [];
+	let dropped = Math.max(0, images.length - MAX_INLINE_IMAGES);
+	for (const image of images.slice(0, MAX_INLINE_IMAGES)) {
+		const data = (image as { data?: unknown } | null)?.data;
+		if (typeof data !== 'string' || data.length > MAX_INLINE_IMAGE_BYTES * 1.4 || !BASE64.test(data) || decodedLength(data) > MAX_INLINE_IMAGE_BYTES) {
+			dropped++;
+			continue;
+		}
+		const mimeType = sniffImageType(data);
+		if (!mimeType) {
+			dropped++;
+			continue;
+		}
+		kept.push({ mimeType, data });
+	}
+	return { images: kept, dropped };
 }
 
 // ---- Desktop "Attach image" dialog ----------------------------------------------------------

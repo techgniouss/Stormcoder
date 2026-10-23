@@ -167,12 +167,29 @@ function fakeSql() {
 			if (row) { row.failureCount++; }
 			return result([]);
 		}
-		if (/^DELETE FROM push WHERE deviceId = \?/.test(s)) {
+		if (/^DELETE FROM push WHERE deviceId = \?$/.test(s)) {
 			const [deviceId] = params;
 			for (let i = push.length - 1; i >= 0; i--) {
 				if (push[i].deviceId === deviceId) { push.splice(i, 1); }
 			}
 			return result([]);
+		}
+		if (/^DELETE FROM push WHERE deviceId = \? AND endpoint = \?/.test(s)) {
+			const [deviceId, endpoint] = params;
+			for (let i = push.length - 1; i >= 0; i--) {
+				if (push[i].deviceId === deviceId && push[i].endpoint === endpoint) { push.splice(i, 1); }
+			}
+			return result([]);
+		}
+		if (/^DELETE FROM push WHERE rowid IN/.test(s)) {
+			// Keeps the newest `offset` rows of one device (the per-device cap).
+			const [deviceId, offset] = params;
+			const mine = push.filter(r => r.deviceId === deviceId).sort((a, b) => b.createdAt - a.createdAt);
+			for (const row of mine.slice(offset)) { push.splice(push.indexOf(row), 1); }
+			return result([]);
+		}
+		if (/^SELECT COUNT\(\*\) AS n FROM push WHERE deviceId = \?/.test(s)) {
+			return result([{ n: push.filter(r => r.deviceId === params[0]).length }]);
 		}
 		if (/^DELETE FROM push WHERE failureCount/.test(s)) {
 			const [threshold] = params;
@@ -591,24 +608,74 @@ const FAKE_ENV = { RELAY_PEPPER: 'x', VAPID_PUBLIC: '', VAPID_PRIVATE: '', VAPID
 	assert.deepEqual(client.sent.map(m => JSON.parse(m).p), [{ c: 'pong' }]);
 }
 
-// Wrong pairing codes are limited per room. The per-code attempt counter only ever saw claims
-// of a code that exists, so a wrong guess counted nowhere and guessing a live code through the
-// public relay was unlimited; past the limit every live code is withdrawn.
+// Wrong pairing codes are limited per source address. A source that guesses wrong ten times is
+// refused for a while; the room's live codes are NOT withdrawn, so another source (the owner's
+// own phone) still pairs.
 {
 	const { hashCode, PAIRING_TTL_MS } = await import('../src/pairing.ts');
 	const state = new FakeDurableObjectState();
 	const room = new WorkspaceRoom(state, FAKE_ENV);
 	const live = 'ABCDEFGH';
 	state.storage.sql.exec('INSERT OR REPLACE INTO pairing (codeHash, expiresAt, usedAt) VALUES (?, ?, NULL)', await hashCode(live, FAKE_ENV.RELAY_PEPPER), Date.now() + PAIRING_TTL_MS);
-	const claim = code => room.fetch(new Request('https://relay.example/pair/claim?room=R', { method: 'POST', body: JSON.stringify({ code }) }));
+	const claim = (code, ip, extra = {}) => room.fetch(new Request('https://relay.example/pair/claim?room=R', { method: 'POST', headers: { 'CF-Connecting-IP': ip }, body: JSON.stringify({ code, ...extra }) }));
 	const statuses = [];
 	for (let i = 0; i < 10; i++) {
-		statuses.push((await claim(`WRONG00${i}`)).status);
+		statuses.push((await claim(`WRONG00${i}`, '203.0.113.9')).status);
 	}
 	assert.deepEqual(statuses, [403, 403, 403, 403, 403, 403, 403, 403, 403, 429]);
-	assert.equal((await claim(live)).status, 429, 'refused: the room stays locked until a new code is minted');
+	assert.equal((await claim(live, '203.0.113.9')).status, 429, 'the guessing source stays refused, even with the right code');
 	const [row] = state.storage.sql.exec('SELECT codeHash, expiresAt, usedAt FROM pairing WHERE codeHash = ?', await hashCode(live, FAKE_ENV.RELAY_PEPPER)).toArray();
-	assert.notEqual(row.usedAt, null, 'and the live code itself was withdrawn');
+	assert.equal(row.usedAt, null, 'the live code was not withdrawn');
+	const ok = await claim(live, '198.51.100.7', { name: 'x'.repeat(500) });
+	assert.equal(ok.status, 200, 'a legitimate claim from another source still succeeds');
+	const big = await claim('WHATEVER', '198.51.100.8', { pubkeyJwk: { x: 'y'.repeat(5000) } });
+	assert.equal(big.status, 400, 'an oversized public key is refused');
+}
+
+// A client's hello claiming role 'host' must not evict the real host; only a host-tagged socket may.
+{
+	const state = new FakeDurableObjectState();
+	const room = new WorkspaceRoom(state, FAKE_ENV);
+	const host = new FakeWebSocket('host');
+	const client = new FakeWebSocket('client');
+	state.acceptWebSocket(host, [HOST_TAG]);
+	state.acceptWebSocket(client, [clientTag('device-a')]);
+	await room.webSocketMessage(client, JSON.stringify({ v: 1, t: 'c', seq: 1, p: { c: 'hello', role: 'host', lastSeq: 0 } }));
+	assert.equal(host.closed, undefined, 'a client claiming to be the host does not displace it');
+	const host2 = new FakeWebSocket('host2');
+	state.acceptWebSocket(host2, [HOST_TAG]);
+	await room.webSocketMessage(host2, JSON.stringify({ v: 1, t: 'c', seq: 1, p: { c: 'hello', role: 'host', lastSeq: 0 } }));
+	assert.equal(host.closed?.code, 4003, 'a real host hello still displaces the old host');
+}
+
+// A revoked device loses /api/pending and /api/push/subscribe, not just its WebSocket; push
+// subscriptions must be https and are capped per device.
+{
+	const state = new FakeDurableObjectState();
+	const room = new WorkspaceRoom(state, FAKE_ENV);
+	const roomId = 'room1';
+	const deviceId = 'device-r';
+	const issuedAt = Date.now();
+	const token = await mintToken(deviceId, roomId, issuedAt, FAKE_ENV.RELAY_PEPPER);
+	const tokenHash = await hashForStorage(`${roomId}|${token}`, FAKE_ENV.RELAY_PEPPER);
+	state.storage.sql.exec(
+		'INSERT INTO device (id, name, tokenHash, pubkeyJwk, createdAt, lastSeenAt, revokedAt) VALUES (?, ?, ?, ?, ?, ?, NULL)',
+		deviceId, 'Phone', tokenHash, 'null', issuedAt, issuedAt,
+	);
+	const subscribe = endpoint => room.fetch(new Request(`https://relay.example/api/push/subscribe?room=${roomId}`, {
+		method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: JSON.stringify({ endpoint, keys: { p256dh: 'k', auth: 'a' } }),
+	}));
+	const pending = () => room.fetch(new Request(`https://relay.example/api/pending?room=${roomId}`, { headers: { Authorization: `Bearer ${token}` } }));
+	assert.equal((await subscribe('http://push.example/1')).status, 400, 'a non-https endpoint is refused');
+	for (let i = 0; i < 8; i++) {
+		assert.equal((await subscribe(`https://push.example/${i}`)).status, 204);
+	}
+	const [{ n }] = state.storage.sql.exec('SELECT COUNT(*) AS n FROM push WHERE deviceId = ?', deviceId).toArray();
+	assert.equal(n, 5, 'a device keeps at most five push subscriptions');
+	assert.equal((await pending()).status, 200);
+	state.storage.sql.exec('UPDATE device SET revokedAt = ? WHERE id = ?', Date.now(), deviceId);
+	assert.equal((await pending()).status, 403, 'a revoked device cannot read /api/pending');
+	assert.equal((await subscribe('https://push.example/new')).status, 403, 'a revoked device cannot subscribe to push');
 }
 
 console.log('test-room-relay: all assertions passed');

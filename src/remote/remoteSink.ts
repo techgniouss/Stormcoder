@@ -38,6 +38,58 @@ function isPushableEventType(type: string): type is PushableEventType {
 	return type === 'approvalRequest' || type === 'askRequest' || type === 'error' || type === 'done';
 }
 
+/**
+ * Shapes of credentials that must not cross the relay inside tool output, command lines or
+ * error text. Deliberately a short list of well-known token formats plus `key=value` pairs
+ * whose key names a secret; it cannot recognise an arbitrary secret, so it complements (never
+ * replaces) the trust model's rule that a remote device is a trusted one.
+ */
+const SECRET_PATTERNS: readonly [RegExp, string][] = [
+	[/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '[redacted private key]'],
+	[/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}/g, '[redacted key]'],
+	[/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}/g, '[redacted token]'],
+	[/\bxox[abprs]-[A-Za-z0-9-]{10,}/g, '[redacted token]'],
+	[/\bAKIA[0-9A-Z]{16}\b/g, '[redacted key]'],
+	[/\bAIza[0-9A-Za-z_-]{35}\b/g, '[redacted key]'],
+	[/\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[redacted jwt]'],
+	[/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{16,}/gi, '$1 [redacted]'],
+	[/\b((?:api[_-]?key|secret|token|passw(?:or)?d|authorization|private[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;&]{6,}/gi, '$1[redacted]'],
+];
+
+/** Masks the credential shapes in {@link SECRET_PATTERNS} inside `text`. */
+export function scrubSecrets(text: string): string {
+	let out = text;
+	for (const [pattern, replacement] of SECRET_PATTERNS) {
+		out = out.replace(pattern, replacement);
+	}
+	return out;
+}
+
+/** The deepest nesting {@link scrubValue} walks; past it a value is replaced rather than copied. */
+const SCRUB_MAX_DEPTH = 8;
+
+/** Scrubs and truncates every string inside `value`, recursively through arrays and plain objects. */
+function scrubValue(value: unknown, depth = 0): unknown {
+	if (typeof value === 'string') {
+		const scrubbed = scrubSecrets(value);
+		return truncateUtf8(scrubbed, REMOTE_TRUNCATE_BYTES) + (Buffer.byteLength(scrubbed, 'utf8') > REMOTE_TRUNCATE_BYTES ? TRUNCATION_SUFFIX : '');
+	}
+	if (typeof value !== 'object' || value === null) {
+		return value;
+	}
+	if (depth >= SCRUB_MAX_DEPTH) {
+		return '[nested too deep]';
+	}
+	if (Array.isArray(value)) {
+		return value.map(entry => scrubValue(entry, depth + 1));
+	}
+	const out: Record<string, unknown> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		out[key] = scrubValue(entry, depth + 1);
+	}
+	return out;
+}
+
 /** Truncates `text` to at most `maxChars` characters, marking the cut with an ellipsis. Chars, not bytes — push notification bodies are short by nature, so the byte-precision `truncateUtf8` below uses for large tool output would be overkill here. */
 function truncateForPush(text: string, maxChars: number): string {
 	return text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text;
@@ -54,24 +106,28 @@ function truncateForPush(text: string, maxChars: number): string {
  * `scripts/test-remote-policy.mjs`'s `case '<word>':` scan by accident. See that function's doc.
  */
 function composePush(message: Record<string, unknown> & { type: string }, eventType: PushableEventType): { title: string; body: string; tag: string } {
+	const short = (text: string) => truncateForPush(scrubSecrets(text.split('\n', 1)[0]), PUSH_BODY_TRUNCATE_CHARS);
 	if (eventType === 'approvalRequest') {
+		// A command's text is the one thing a notification (shown on a lock screen, relayed
+		// through a push service's tray) must not carry; the phone shows it after unlocking.
+		const isCommand = typeof message.kind === 'string' && /command|shell|run|exec/i.test(message.kind);
 		return {
 			title: 'Approval needed',
-			body: typeof message.title === 'string' ? message.title : 'A tool call needs your approval.',
+			body: !isCommand && typeof message.title === 'string' ? short(message.title) : 'A tool call needs your approval.',
 			tag: typeof message.id === 'string' ? message.id : message.type,
 		};
 	}
 	if (eventType === 'askRequest') {
 		return {
 			title: 'Question',
-			body: typeof message.question === 'string' ? message.question : 'The agent has a question.',
+			body: typeof message.question === 'string' ? short(message.question) : 'The agent has a question.',
 			tag: typeof message.id === 'string' ? message.id : message.type,
 		};
 	}
 	if (eventType === 'error') {
 		return {
 			title: 'Error',
-			body: truncateForPush(typeof message.message === 'string' ? message.message : 'An error occurred.', PUSH_BODY_TRUNCATE_CHARS),
+			body: short(typeof message.message === 'string' ? message.message : 'An error occurred.'),
 			tag: message.type,
 		};
 	}
@@ -131,6 +187,25 @@ export function redactForRemote(message: Record<string, unknown> & { type: strin
 		if (typeof value === 'string') {
 			clone[field] = truncateUtf8(value, REMOTE_TRUNCATE_BYTES) + (Buffer.byteLength(value, 'utf8') > REMOTE_TRUNCATE_BYTES ? TRUNCATION_SUFFIX : '');
 		}
+	}
+	// Tool traffic and prompts carry whatever the tool read or the model quoted: scrub known
+	// credential shapes and bound every string, however deeply nested in the arguments/result.
+	if (message.type === 'toolStart' && 'args' in clone) {
+		clone.args = scrubValue(clone.args);
+	}
+	if (message.type === 'toolEnd' && 'result' in clone) {
+		clone.result = scrubValue(clone.result);
+	}
+	for (const field of ['title', 'detail', 'question', 'preview', 'content'] as const) {
+		if (typeof clone[field] === 'string' && (field !== 'content' || message.type === 'toolEnd')) {
+			clone[field] = scrubValue(clone[field]);
+		}
+	}
+	if (Array.isArray(clone.options)) {
+		clone.options = scrubValue(clone.options);
+	}
+	if (message.type === 'error' && typeof clone.message === 'string') {
+		clone.message = scrubValue(clone.message);
 	}
 	// A `userTurn` carries the turn's attached images as base64 — hundreds of KB each, which a
 	// phone that only needs to show "1 image" would otherwise download over cellular on every

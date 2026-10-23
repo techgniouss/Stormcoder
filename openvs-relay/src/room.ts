@@ -14,14 +14,21 @@ import type { Env } from './index.ts';
 import { applyMigrations } from './schema.ts';
 import {
 	generateCode, hashCode, isExpired, recordAttempt, exceededAttempts, INITIAL_ATTEMPTS,
-	PAIRING_TTL_MS, type AttemptState,
+	PAIRING_TTL_MS, FailureLimiter, type AttemptState,
 } from './pairing.ts';
 import { mintToken, verifyToken, hashForStorage, timingSafeEqualHex } from './tokens.ts';
 import { buildVapidJwt, sendPayloadLessPush, type PushSubscriptionInfo } from './push.ts';
 import { isEnvelope, isControlFrame, type Envelope, type ControlFrame, type PushFrame } from './protocol.ts';
 
-/** Wrong pairing codes a room tolerates before its live codes are withdrawn; see `WorkspaceRoom.failedClaims`. */
+/** Wrong pairing codes one source address may present per {@link FAILED_CLAIM_WINDOW_MS}; see `WorkspaceRoom.failedClaims`. */
 const MAX_FAILED_CLAIMS = 10;
+/** How long a source that used up {@link MAX_FAILED_CLAIMS} is refused. */
+const FAILED_CLAIM_WINDOW_MS = 10 * 60_000;
+/** Push subscriptions kept per device; a later one past this replaces the oldest. */
+const MAX_PUSH_PER_DEVICE = 5;
+/** Longest device name stored, and the largest public-key JWK (serialised) accepted at pairing. */
+const MAX_DEVICE_NAME_CHARS = 80;
+const MAX_PUBKEY_JWK_CHARS = 2048;
 
 /** WebSocket tag identifying the single host connection for this room. */
 export const HOST_TAG = 'host';
@@ -133,12 +140,13 @@ export class WorkspaceRoom {
 	private readonly pairingAttempts = new Map<string, AttemptState>();
 
 	/**
-	 * Wrong codes presented since this room last minted one. The per-code counter above only
-	 * ever sees claims of a code that exists, so a wrong guess counted nowhere and guessing was
-	 * unlimited; past {@link MAX_FAILED_CLAIMS} every live code is withdrawn. In memory for the
-	 * same reason as that counter: an eviction resets a rate limit, it grants nothing.
+	 * Wrong codes presented, counted per source address. The per-code counter above only ever
+	 * sees claims of a code that exists, so a wrong guess counted nowhere and guessing was
+	 * unlimited. A source past {@link MAX_FAILED_CLAIMS} is refused for a while; live codes are
+	 * left alone, so one stranger's guessing cannot lock the owner's own phone out. In memory
+	 * for the same reason as that counter: an eviction resets a rate limit, it grants nothing.
 	 */
-	private failedClaims = 0;
+	private readonly failedClaims = new FailureLimiter(MAX_FAILED_CLAIMS, FAILED_CLAIM_WINDOW_MS);
 
 	constructor(state: DurableObjectState, env: Env) {
 		this.state = state;
@@ -240,14 +248,11 @@ export class WorkspaceRoom {
 			return new Response('missing device token', { status: 401 });
 		}
 		const roomId = url.searchParams.get('room') ?? '';
-		const verified = await verifyToken(token, roomId, this.env.RELAY_PEPPER, id => this.lookupDeviceTokenHash(id));
-		if (!verified) {
-			return new Response('invalid device token', { status: 403 });
+		const auth = await this.authenticateDevice(token, roomId);
+		if (!auth.ok) {
+			return new Response(auth.reason, { status: 403 });
 		}
-		const device = this.getDeviceRevocation(verified.deviceId);
-		if (!device || device.revokedAt !== null) {
-			return new Response('device revoked', { status: 403 });
-		}
+		const verified = auth;
 		// The signed-nonce challenge from the plan's Auth step 5 (binding the connection to the
 		// device's non-extractable ECDSA key, not just its bearer token) is deferred to Phase 7
 		// per the plan's own staging ("ECDSA challenge if deferred") — bearer-token verification
@@ -278,6 +283,17 @@ export class WorkspaceRoom {
 		if (typeof code !== 'string' || code.length === 0) {
 			return new Response('missing code', { status: 400 });
 		}
+		if (code.length > 64) {
+			return new Response('invalid or already-used code', { status: 403 });
+		}
+		const jwkText = JSON.stringify(pubkeyJwk ?? null);
+		if (jwkText.length > MAX_PUBKEY_JWK_CHARS) {
+			return new Response('public key too large', { status: 400 });
+		}
+		const source = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+		if (this.failedClaims.isBlocked(source, Date.now())) {
+			return new Response('too many wrong codes — try again later', { status: 429 });
+		}
 		const codeHash = await hashCode(code, this.env.RELAY_PEPPER);
 		const row = this.state.storage.sql
 			.exec<{ codeHash: string; expiresAt: number; usedAt: number | null }>(
@@ -285,10 +301,9 @@ export class WorkspaceRoom {
 			)
 			.toArray()[0];
 		if (!row || row.usedAt !== null) {
-			this.failedClaims++;
-			if (this.failedClaims >= MAX_FAILED_CLAIMS) {
-				this.state.storage.sql.exec('UPDATE pairing SET usedAt = ? WHERE usedAt IS NULL', Date.now());
-				return new Response('too many wrong codes — ask for a new pairing code', { status: 429 });
+			this.failedClaims.recordFailure(source, Date.now());
+			if (this.failedClaims.isBlocked(source, Date.now())) {
+				return new Response('too many wrong codes — try again later', { status: 429 });
 			}
 			return new Response('invalid or already-used code', { status: 403 });
 		}
@@ -320,9 +335,9 @@ export class WorkspaceRoom {
 		this.state.storage.sql.exec(
 			'INSERT INTO device (id, name, tokenHash, pubkeyJwk, createdAt, lastSeenAt, revokedAt) VALUES (?, ?, ?, ?, ?, NULL, NULL)',
 			deviceId,
-			typeof name === 'string' && name.length > 0 ? name : 'Unnamed device',
+			typeof name === 'string' && name.length > 0 ? name.slice(0, MAX_DEVICE_NAME_CHARS) : 'Unnamed device',
 			tokenHash,
-			JSON.stringify(pubkeyJwk ?? null),
+			jwkText,
 			issuedAt,
 		);
 		return new Response(JSON.stringify({ deviceId, token }), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -335,9 +350,9 @@ export class WorkspaceRoom {
 			return new Response('missing device token', { status: 401 });
 		}
 		const roomId = new URL(request.url).searchParams.get('room') ?? '';
-		const verified = await verifyToken(token, roomId, this.env.RELAY_PEPPER, id => this.lookupDeviceTokenHash(id));
-		if (!verified) {
-			return new Response('invalid device token', { status: 403 });
+		const verified = await this.authenticateDevice(token, roomId);
+		if (!verified.ok) {
+			return new Response(verified.reason, { status: 403 });
 		}
 		let body: unknown;
 		try {
@@ -349,6 +364,16 @@ export class WorkspaceRoom {
 		if (typeof sub.endpoint !== 'string' || typeof sub.keys?.p256dh !== 'string' || typeof sub.keys?.auth !== 'string') {
 			return new Response('malformed subscription', { status: 400 });
 		}
+		if (!isHttpsUrl(sub.endpoint) || sub.endpoint.length > 2048 || sub.keys.p256dh.length > 256 || sub.keys.auth.length > 256) {
+			return new Response('invalid subscription', { status: 400 });
+		}
+		// Re-subscribing the same endpoint replaces it, and a device keeps only a handful: an
+		// authenticated phone must not be able to make every push fan out to unbounded targets.
+		this.state.storage.sql.exec('DELETE FROM push WHERE deviceId = ? AND endpoint = ?', verified.deviceId, sub.endpoint);
+		this.state.storage.sql.exec(
+			'DELETE FROM push WHERE rowid IN (SELECT rowid FROM push WHERE deviceId = ? ORDER BY createdAt DESC LIMIT -1 OFFSET ?)',
+			verified.deviceId, MAX_PUSH_PER_DEVICE - 1,
+		);
 		this.state.storage.sql.exec(
 			'INSERT INTO push (deviceId, endpoint, p256dh, auth, createdAt, failureCount) VALUES (?, ?, ?, ?, ?, 0)',
 			verified.deviceId, sub.endpoint, sub.keys.p256dh, sub.keys.auth, Date.now(),
@@ -373,9 +398,9 @@ export class WorkspaceRoom {
 			return new Response('missing device token', { status: 401 });
 		}
 		const roomId = url.searchParams.get('room') ?? '';
-		const verified = await verifyToken(token, roomId, this.env.RELAY_PEPPER, id => this.lookupDeviceTokenHash(id));
-		if (!verified) {
-			return new Response('invalid device token', { status: 403 });
+		const verified = await this.authenticateDevice(token, roomId);
+		if (!verified.ok) {
+			return new Response(verified.reason, { status: 403 });
 		}
 		const rows = this.state.storage.sql
 			.exec<{ title: string; body: string; tag: string; sessionId: string }>(
@@ -383,6 +408,23 @@ export class WorkspaceRoom {
 			)
 			.toArray();
 		return new Response(JSON.stringify({ pending: rows }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+	}
+
+	/**
+	 * Verifies a device token for `roomId` and that its device has not been revoked. Every
+	 * endpoint a device token opens goes through here, so a revoked phone loses all of them,
+	 * not just the WebSocket.
+	 */
+	private async authenticateDevice(token: string, roomId: string): Promise<{ ok: true; deviceId: string } | { ok: false; reason: string }> {
+		const verified = await verifyToken(token, roomId, this.env.RELAY_PEPPER, id => this.lookupDeviceTokenHash(id));
+		if (!verified) {
+			return { ok: false, reason: 'invalid device token' };
+		}
+		const device = this.getDeviceRevocation(verified.deviceId);
+		if (!device || device.revokedAt !== null) {
+			return { ok: false, reason: 'device revoked' };
+		}
+		return { ok: true, deviceId: verified.deviceId };
 	}
 
 	private async lookupDeviceTokenHash(deviceId: string): Promise<string | undefined> {
@@ -511,7 +553,9 @@ export class WorkspaceRoom {
 	private async handleControlFrame(ws: WebSocket, tag: string, frame: ControlFrame): Promise<void> {
 		switch (frame.c) {
 			case 'hello': {
-				if (frame.role === 'host') {
+				// Only the socket that is actually the host may displace the host: a paired
+				// client claiming `role: 'host'` in its hello must not be able to evict it.
+				if (frame.role === 'host' && isHostTag(tag)) {
 					this.displaceOtherHosts(ws);
 				}
 				// Answers the hello per `WelcomeFrame`'s own doc ("Answers a hello, confirming the
@@ -606,7 +650,6 @@ export class WorkspaceRoom {
 		const expiresAt = Date.now() + PAIRING_TTL_MS;
 		this.state.storage.sql.exec('INSERT OR REPLACE INTO pairing (codeHash, expiresAt, usedAt) VALUES (?, ?, NULL)', codeHash, expiresAt);
 		this.pairingAttempts.set(codeHash, INITIAL_ATTEMPTS);
-		this.failedClaims = 0;
 		const paired: Envelope = { v: 1, t: 'c', seq: 0, p: { c: 'paired', code, expiresAt } };
 		ws.send(JSON.stringify(paired));
 	}
@@ -725,5 +768,14 @@ export class WorkspaceRoom {
 		this.pairingAttempts.clear();
 		this.state.storage.sql.exec('DELETE FROM push WHERE failureCount >= ?', DEAD_PUSH_FAILURE_THRESHOLD);
 		await this.state.storage.setAlarm(now + ALARM_INTERVAL_MS);
+	}
+}
+
+/** Whether `value` parses as an `https:` URL; push endpoints must be, or the relay would POST to arbitrary schemes. */
+function isHttpsUrl(value: string): boolean {
+	try {
+		return new URL(value).protocol === 'https:';
+	} catch {
+		return false;
 	}
 }

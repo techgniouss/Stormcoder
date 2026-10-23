@@ -3,6 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { normalizeRelayUrl } from './socket';
+
 /**
  * Phase 7c of "remote control": device enumeration and the two host-side sweep decisions that
  * only `openvs-relay` doesn't already make — the relay itself has no notion of
@@ -48,7 +50,11 @@ function isDeviceInfo(x: unknown): x is DeviceInfo {
  * malformed body — callers (`RemoteService`) decide how to report that.
  */
 export async function fetchDevices(relayUrl: string, publicRoomId: string, hostToken: string): Promise<DeviceInfo[]> {
-	const url = `${relayUrl.replace(/\/+$/, '')}/api/devices?room=${encodeURIComponent(publicRoomId)}`;
+	const base = normalizeRelayUrl(relayUrl);
+	if (!base) {
+		throw new Error('The relay URL must be https:// (the host token is sent to it).');
+	}
+	const url = `${base}/api/devices?room=${encodeURIComponent(publicRoomId)}`;
 	const response = await fetch(url, { headers: { Authorization: `Bearer ${hostToken}` } });
 	if (!response.ok) {
 		throw new Error(`Failed to fetch the device list (HTTP ${response.status}).`);
