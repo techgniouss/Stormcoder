@@ -66,6 +66,14 @@ const file = rel => path.join(ws, rel);
 	assert.equal(mem.addMemory(once, 'command', 'Build with npm run build.', '2026-10-25').saved, true);
 }
 
+// 3b. A refinement that says more than a saved fact is new; a restatement of part of one is not.
+{
+	const base = mem.addMemory('', 'command', 'Run the unit tests with npm test.', '2026-10-24').content;
+	assert.equal(mem.addMemory(base, 'command', 'Run the unit tests with npm test -- --watch while developing.', '2026-10-25').saved, true, 'a longer, more specific fact is kept');
+	const long = mem.addMemory('', 'decision', 'We chose sqlite for the local cache because it needs no server process.', '2026-10-24').content;
+	assert.equal(mem.addMemory(long, 'decision', 'chose sqlite for the local cache', '2026-10-25').saved, false, 'a fragment of a saved fact adds nothing');
+}
+
 // 4. Over budget: the oldest agent-written lines go, the user's own never do.
 {
 	let text = '- my own note: never touch the vendor folder\n';
@@ -131,7 +139,7 @@ const file = rel => path.join(ws, rel);
 	const saved = await memory.remember('command', 'Run the linter with npm run lint.', '2026-10-24');
 	assert.equal(saved.saved, true, saved.message);
 	assert.match(fs.readFileSync(file('.stormcoder/memory.md'), 'utf8'), /\[command\] Run the linter with npm run lint\. \(2026-10-24\)/);
-	assert.equal(fs.readFileSync(file('.stormcoder/.gitignore'), 'utf8'), 'memory.md\njournal.jsonl\nproposals.json\n', 'personal memory is not committed by default');
+	assert.equal(fs.readFileSync(file('.stormcoder/.gitignore'), 'utf8'), '.gitignore\nmemory.md\njournal.jsonl\nproposals.json\n', 'personal memory is not committed by default');
 	fs.writeFileSync(file('.stormcoder/.gitignore'), 'custom\n');
 	await memory.remember('gotcha', 'Windows needs cmd.exe for the build script.', '2026-10-24');
 	assert.equal(fs.readFileSync(file('.stormcoder/.gitignore'), 'utf8'), 'custom\n', 'a .gitignore the user edited is left alone');
@@ -168,10 +176,15 @@ const file = rel => path.join(ws, rel);
 	assert.equal(asks.length, 1);
 	assert.match(asks[0].preview, /\[gotcha\] Do the thing\./);
 
+	const autoEdits = { ...guard, approval: 'auto-edits' };
+	const askedBefore = asks.length;
+	const viaAutoEdits = await tools.executeTool(call({ type: 'gotcha', text: 'A fact saved under auto-edits.' }), approve, autoEdits);
+	assert.equal(viaAutoEdits.isError, false, viaAutoEdits.result);
+	assert.equal(asks.length, askedBefore + 1, 'auto-edits still asks before saving memory: it steers later sessions');
 	const dup = await tools.executeTool(call({ type: 'gotcha', text: 'do the thing' }), approve, yolo);
 	assert.equal(dup.isError, false, 'a repeat is not an error the model should retry');
 	assert.match(dup.result, /Already remembered/);
-	assert.equal(asks.length, 1, 'auto-approve does not prompt');
+	assert.equal(asks.length, askedBefore + 1, 'full auto-approve does not prompt');
 
 	const secret = await tools.executeTool(call({ type: 'gotcha', text: 'password = hunter2hunter2' }), approve, yolo);
 	assert.equal(secret.isError, true);
@@ -426,6 +439,39 @@ const file = rel => path.join(ws, rel);
 	assert.deepEqual(mem.searchTranscripts(chats, ['nonexistent'], 5), []);
 	assert.deepEqual(mem.searchTranscripts([], ['x'], 5), []);
 	assert.ok(mem.searchTranscripts([{ title: 'T', messages: [{ role: 'user', content: 'x'.repeat(5_000) + ' needle ' + 'y'.repeat(5_000) }] }], ['needle'], 1)[0].length < 320, 'an excerpt, not the message');
+}
+
+// 20. Other agents' names for these tools reach the same code.
+{
+	const norm = (name, args) => tools.normalizeToolCall({ id: '1', name, args });
+	const save = norm('save_memory', { content: 'Deploys need the VPN.', kind: 'gotcha' });
+	assert.equal(save.name, 'remember');
+	assert.deepEqual([save.args.text, save.args.type], ['Deploys need the VPN.', 'gotcha']);
+	const find = norm('search_memory', { q: 'deploy', top_k: 3 });
+	assert.equal(find.name, 'recall');
+	assert.deepEqual([find.args.query, find.args.limit], ['deploy', 3]);
+}
+
+// 21. In a real repository, journaling and saving leave `git status` clean; an earlier version's .gitignore is upgraded.
+{
+	const { execFileSync } = await import('node:child_process');
+	const repo = path.join(tmp, 'repo');
+	fs.mkdirSync(repo, { recursive: true });
+	const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' });
+	git('init', '-q');
+	fs.writeFileSync(path.join(repo, 'a.txt'), 'x');
+	git('add', '-A');
+	git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+	const store = mem.projectStore(vs.Uri.file(repo));
+	await store.appendJournal({ date: '2026-08-01', goal: 'Do a thing', files: ['a.txt'], verified: false });
+	await store.remember('gotcha', 'Something worth keeping around.', '2026-08-01');
+	await store.addProposals(mem.parseProposals('[{"type":"gotcha","text":"A queued suggestion for later."}]', [], 'g', '2026-08-01'));
+	assert.equal(git('status', '--porcelain').trim(), '', 'nothing appears in git status');
+	fs.writeFileSync(path.join(repo, '.stormcoder/.gitignore'), 'memory.md\njournal.jsonl\n');
+	await store.remember('gotcha', 'Another thing worth keeping.', '2026-08-01');
+	assert.equal(fs.readFileSync(path.join(repo, '.stormcoder/.gitignore'), 'utf8'), '.gitignore\nmemory.md\njournal.jsonl\nproposals.json\n', 'an older default is upgraded');
+	fs.writeFileSync(path.join(repo, '.stormcoder/rules.md'), 'a rule');
+	assert.match(git('status', '--porcelain', '-uall'), /\.stormcoder\/rules\.md/, 'other files in the folder (rules, skills, MCP config) are still visible to git');
 }
 
 console.log('test-memory: all assertions passed');

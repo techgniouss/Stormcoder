@@ -695,13 +695,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
 	/** Records a run that changed files in the project journal, so the next session knows what was done. */
 	private async journalRun(messages: ReadonlyArray<{ role: string; content: string }>, workLog: WorkLog): Promise<void> {
-		const files = workLog.changedFiles();
-		const goal = goalOf(messages);
-		const memory = this.projectMemory();
-		if (!memory || !files.length || !goal) {
-			return;
+		try {
+			const files = workLog.changedFiles();
+			const goal = goalOf(messages);
+			const memory = this.projectMemory();
+			if (!memory || !files.length || !goal) {
+				return;
+			}
+			await memory.appendJournal({ date: new Date().toISOString().slice(0, 10), goal, files, verified: workLog.verified() });
+		} catch {
+			// bookkeeping must never turn a finished run into an error
 		}
-		await memory.appendJournal({ date: new Date().toISOString().slice(0, 10), goal, files, verified: workLog.verified() });
 	}
 
 	/**
@@ -3185,10 +3189,14 @@ ${context.content}` }
 				this.sessionStore.attachWorkNotes(sessionId, autoWorkLog.render());
 				await this.journalRun(history, autoWorkLog);
 				// Suggestions are asked of the planning model: it is the one the user picked for judgement.
-				const planner = (await this.router.resolveRoleCandidates('plan', {}))[0];
-				const plannerProvider = planner?.ready ? this.registry.getProvider(planner.providerId) : undefined;
-				if (planner && plannerProvider) {
-					this.proposeMemory(plannerProvider, { model: planner.model, baseUrl: this.registry.getBaseUrl(planner.providerId) }, history, autoWorkLog, sessionId, post);
+				try {
+					const planner = (await this.router.resolveRoleCandidates('plan', {}))[0];
+					const plannerProvider = planner?.ready ? this.registry.getProvider(planner.providerId) : undefined;
+					if (planner && plannerProvider && !controller.signal.aborted) {
+						this.proposeMemory(plannerProvider, { model: planner.model, baseUrl: this.registry.getBaseUrl(planner.providerId) }, history, autoWorkLog, sessionId, post);
+					}
+				} catch {
+					// a suggestion not made is not an error
 				}
 			} else {
 				// Ask/Plan → planning/reasoning model; inline Edit → implementation model.

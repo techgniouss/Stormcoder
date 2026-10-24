@@ -96,7 +96,11 @@ function normalize(text: string): string {
 	return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
-/** Whether `text` repeats a fact already saved (equal, or one contains the other). */
+/**
+ * Whether `text` adds nothing to what is saved: it equals a saved fact, or is wholly inside a
+ * longer one. A refinement that contains a saved fact and says more is not a repeat, or the
+ * model would be told "already remembered" about the new detail and it would be lost.
+ */
 export function isDuplicate(entries: readonly MemoryEntry[], text: string): boolean {
 	const next = normalize(text);
 	return entries.some(e => {
@@ -104,7 +108,7 @@ export function isDuplicate(entries: readonly MemoryEntry[], text: string): bool
 		if (!have || !next) {
 			return false;
 		}
-		return have === next || (Math.min(have.length, next.length) >= 20 && (have.includes(next) || next.includes(have)));
+		return have === next || (next.length >= 20 && have.includes(next));
 	});
 }
 
@@ -236,7 +240,7 @@ export function parseJournal(text: string): JournalRecord[] {
 /** The last `count` runs as prompt lines, newest last, within the budget. */
 export function renderRecentWork(records: readonly JournalRecord[], count = DEFAULT_RECENT_RUNS, maxChars = MAX_BLOCK_JOURNAL_CHARS): string {
 	const lines = (count > 0 ? records.slice(-count) : []).map(r => {
-		const files = r.files.length ? ` Changed: ${r.files.join(', ')}.` : '';
+		const files = r.files.length ? ` Changed: ${r.files.map(cleanText).join(', ')}.` : '';
 		return `- ${r.date}: ${cleanText(r.goal)}.${files} ${r.verified ? 'Verified.' : 'Not verified.'}`;
 	});
 	const kept: string[] = [];
@@ -756,11 +760,13 @@ export class MemoryStore {
 			return;
 		}
 		const ignore = this.uri('.gitignore');
-		const wanted = `${MEMORY_FILE}\n${JOURNAL_FILE}\n${PROPOSALS_FILE}\n`;
+		// It lists itself, so a project that never commits `.stormcoder/` does not see an untracked
+		// folder appear in `git status` just because a run was journaled.
+		const wanted = `.gitignore\n${MEMORY_FILE}\n${JOURNAL_FILE}\n${PROPOSALS_FILE}\n`;
 		const current = await this.read(ignore);
 		// Written when absent, and upgraded when it is exactly what an earlier version wrote;
 		// a .gitignore the user edited is theirs.
-		if (current === '' || current === `${MEMORY_FILE}\n${JOURNAL_FILE}\n`) {
+		if (current === '' || current === `${MEMORY_FILE}\n${JOURNAL_FILE}\n` || current === `${MEMORY_FILE}\n${JOURNAL_FILE}\n${PROPOSALS_FILE}\n`) {
 			await vscode.workspace.fs.writeFile(ignore, new TextEncoder().encode(wanted));
 		}
 	}

@@ -11,6 +11,10 @@ import assert from 'node:assert/strict';
 // Write once per conversation: after that the agent's own completion gate may nudge the model to
 // verify, and a model that wrote again on every nudge would never finish.
 const mock = await startMock(req => {
+	// The memory suggestion request (stormcoder.memory.autoPropose): answer it with one fact.
+	if (String(req.messages.at(-1)?.content).includes('You maintain a short project memory')) {
+		return '[{"type":"gotcha","text":"Proposed by the model after the run."}]';
+	}
 	const alreadyWrote = req.messages.some(m => m.role === 'tool');
 	if (req.tools?.some(t => t.function?.name === 'write_file') && !alreadyWrote) {
 		return { text: 'Creating the file.', tool: { name: 'write_file', args: { path: 'hello.txt', content: 'hello from stormcoder\n' } } };
@@ -18,7 +22,7 @@ const mock = await startMock(req => {
 	return alreadyWrote ? 'Done: hello.txt written.' : 'Hello from the mock model.';
 });
 const seen = mock.seen;
-const host = await startHost({ mockPort: mock.port });
+const host = await startHost({ mockPort: mock.port, settings: { 'stormcoder.memory.autoPropose': true } });
 const project = host.project;
 fs.mkdirSync(path.join(project, '.stormcoder'), { recursive: true });
 fs.writeFileSync(path.join(project, '.stormcoder/memory.md'), '- [gotcha] The build needs the moon phase set. (2026-10-01)\n');
@@ -109,6 +113,13 @@ try {
 	await settings.locator('#memoryUser .mem-row', { hasText: 'small, focused commits' }).waitFor({ timeout: 10000 });
 	assert.ok(fs.readdirSync(path.join(host.data, 'storage', 'memory')).includes('memory.md'), 'personal notes live in the app data, not the project');
 	// Suggestions queued by a finished run: accept one (it becomes a saved fact), dismiss the other.
+	// The run in step 2 changed a file, so the model was asked once and its suggestion is waiting.
+	const proposed = settings.locator('#memorySuggestions .mem-row', { hasText: 'Proposed by the model after the run.' });
+	await proposed.waitFor({ timeout: 15000 });
+	assert.match(await proposed.textContent(), /After: create hello\.txt/, 'the suggestion says which request it followed');
+	assert.equal(seen.filter(r => String(r.messages.at(-1)?.content).includes('You maintain a short project memory')).length, 1, 'one extra request per run, not more');
+	await proposed.getByRole('button', { name: 'Dismiss' }).click();
+	await proposed.waitFor({ state: 'detached', timeout: 10000 });
 	const tide = settings.locator('#memorySuggestions .mem-row', { hasText: 'tide table' });
 	await tide.waitFor({ timeout: 10000 });
 	await tide.getByRole('button', { name: 'Accept' }).click();

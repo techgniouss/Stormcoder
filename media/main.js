@@ -1615,7 +1615,7 @@
 	function memoryFeedback(message, isError) {
 		if (!els.memoryNotice) { return; }
 		els.memoryNotice.textContent = message || '';
-		els.memoryNotice.style.color = isError ? 'var(--vscode-errorForeground, #f85149)' : '';
+		els.memoryNotice.classList.toggle('mem-error', !!isError);
 	}
 
 	/** Renders the skills section in the settings panel. */
@@ -2739,6 +2739,12 @@
 		}
 		generalConfig.maxRunMinutes = n;
 		vscode.postMessage({ type: 'setMaxRunMinutes', maxRunMinutes: n });
+	});
+	// Opening the Memory tab reloads it: the agent may have saved a fact, or a run queued a
+	// suggestion, since the list was last drawn.
+	document.addEventListener('click', ev => {
+		const target = /** @type {HTMLElement | null} */ (ev.target instanceof HTMLElement ? ev.target.closest('.area-nav button') : null);
+		if (target && target.dataset.area === 'memory') { memoryPost({ type: 'memoryList' }); }
 	});
 	els.memoryAutoPropose?.addEventListener('change', () => {
 		memoryPost({ type: 'setMemoryAutoPropose', memoryAutoPropose: els.memoryAutoPropose.checked });

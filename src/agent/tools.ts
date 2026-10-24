@@ -545,6 +545,8 @@ const TOOL_ALIASES: Record<string, string> = {
 	fetch: 'fetch_url', web_fetch: 'fetch_url', fetch_page: 'fetch_url', http_get: 'fetch_url',
 	read_url: 'fetch_url', open_url: 'fetch_url', browse: 'fetch_url',
 	search_web: 'web_search', websearch: 'web_search', internet_search: 'web_search',
+	save_memory: 'remember', memory_save: 'remember', add_memory: 'remember', memorize: 'remember', memory_write: 'remember', store_memory: 'remember',
+	search_memory: 'recall', memory_search: 'recall', recall_memory: 'recall', read_memory: 'recall', memory_read: 'recall', query_memory: 'recall',
 };
 
 /**
@@ -556,6 +558,8 @@ const ARG_ALIASES: Record<string, Record<string, string>> = {
 	read_file: { file_path: 'path', filepath: 'path', filename: 'path', file: 'path', target_file: 'path', start_line: 'offset', line_offset: 'offset', num_lines: 'limit', end_line: 'limit' },
 	list_dir: { file_path: 'path', directory: 'path', dir: 'path', target_directory: 'path', relative_workspace_path: 'path' },
 	write_file: { file_path: 'path', filepath: 'path', filename: 'path', file: 'path', target_file: 'path', text: 'content', contents: 'content', body: 'content', file_text: 'content' },
+	remember: { content: 'text', fact: 'text', memory: 'text', note: 'text', kind: 'type', category: 'type' },
+	recall: { q: 'query', search: 'query', keywords: 'query', text: 'query', max_results: 'limit', top_k: 'limit' },
 	edit_notebook: { file_path: 'path', notebook_path: 'path', cell_number: 'cell', cell_index: 'cell', cell_id: 'cell', new_source: 'source', edit_mode: 'op', cell_type: 'cellType' },
 	edit_file: { file_path: 'path', filepath: 'path', filename: 'path', file: 'path', target_file: 'path', old_str: 'oldText', new_str: 'newText', old_string: 'oldText', new_string: 'newText', old_text: 'oldText', new_text: 'newText', search: 'oldText', replace: 'newText', replace_all: 'replaceAll' },
 	search_files: { pattern: 'query', regex: 'query', search: 'query', q: 'query', text: 'query', include: 'glob', include_pattern: 'glob', is_regex: 'isRegex' },
@@ -801,9 +805,9 @@ async function recallFacts(root: vscode.Uri, query: string, limit?: number): Pro
 }
 
 /**
- * Saves a fact to the project's memory file. Goes through the same approval as any other
- * workspace write: what is saved is read back into every future prompt, so it is a way to
- * steer later sessions and the user gets the same say over it as over an edit.
+ * Saves a fact to the project's memory file. Asks for approval unless the policy is full
+ * auto-approve (`yolo`), even where file edits are auto-approved: what is saved is read back
+ * into every future prompt, so it is a way to steer later sessions.
  */
 async function rememberFact(root: vscode.Uri, type: string, text: string, scope: string, approver: ToolApprover, g: Guardrails): Promise<ToolResult> {
 	if (!memoryEnabled()) {
@@ -815,7 +819,10 @@ async function rememberFact(root: vscode.Uri, type: string, text: string, scope:
 	if (!store) {
 		return { result: 'Your personal memory is not available in this app, so nothing was saved. Save it as a project fact instead.', isError: true };
 	}
-	if (!autoApprovesWrites(g) && clean) {
+	// Stricter than an ordinary edit: what is saved here is read back into the model's prompt in
+	// every later session, so a page the agent fetched could otherwise plant standing
+	// instructions without the user ever seeing them. Only full auto-approve skips the question.
+	if (!autoApproves(g) && clean) {
 		const { approved, feedback } = await approver.confirm({
 			kind: 'write',
 			signature: toUser ? 'remember:user' : 'remember',
