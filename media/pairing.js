@@ -130,7 +130,10 @@
 		toggle.appendChild(el('span', 'remote-toggle-text', 'On'));
 		// Drawn first (`order` in main.css): the switch, then the state it controls.
 		statusRow.appendChild(toggle);
-		deps.container.appendChild(statusRow);
+		// The switch and the one action share a row: state on the left, what to do about it on the right.
+		const controls = el('div', 'remote-controls');
+		controls.appendChild(statusRow);
+		deps.container.appendChild(controls);
 
 		function renderStatus() {
 			statusDot.className = 'remote-status-dot ' + (
@@ -164,7 +167,7 @@
 		// Why the button is off, instead of letting it fail with an error on a fresh install.
 		const pairHint = el('span', 'hint remote-pair-hint', '');
 		actions.appendChild(pairHint);
-		deps.container.appendChild(actions);
+		controls.appendChild(actions);
 
 		const cardMount = el('div', 'remote-card-mount');
 		deps.container.appendChild(cardMount);
