@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Tests for media/qr.js, the hand-rolled byte-mode QR encoder (ECC level L, versions 1-6)
@@ -46,11 +46,11 @@ function loadQr() {
 	sandbox.globalThis = sandbox;
 	vm.createContext(sandbox);
 	vm.runInContext(source, sandbox, { filename: 'qr.js' });
-	assert.ok(sandbox.OpenVSQr, 'qr.js published its namespace');
-	return sandbox.OpenVSQr;
+	assert.ok(sandbox.StormQr, 'qr.js published its namespace');
+	return sandbox.StormQr;
 }
 
-const OpenVSQr = loadQr();
+const StormQr = loadQr();
 
 /** Published byte-mode capacity per version (1-6) at ECC level L — ISO/IEC 18004 Table 7-11. */
 const CAPACITY = { 1: 17, 2: 32, 3: 53, 4: 78, 5: 106, 6: 134 };
@@ -60,10 +60,10 @@ const CAPACITY = { 1: 17, 2: 32, 3: 53, 4: 78, 5: 106, 6: 134 };
 	for (const [version, capacity] of Object.entries(CAPACITY)) {
 		const v = Number(version);
 		const expectedSize = 4 * v + 17;
-		const atCapacity = OpenVSQr.encode('x'.repeat(capacity));
+		const atCapacity = StormQr.encode('x'.repeat(capacity));
 		assert.strictEqual(atCapacity.size, expectedSize, `version ${v}'s own capacity (${capacity} bytes) fits in version ${v}`);
 		if (v < 6) {
-			const oneMore = OpenVSQr.encode('x'.repeat(capacity + 1));
+			const oneMore = StormQr.encode('x'.repeat(capacity + 1));
 			assert.strictEqual(oneMore.size, 4 * (v + 1) + 17, `${capacity + 1} bytes overflows into version ${v + 1}`);
 		}
 	}
@@ -72,12 +72,12 @@ const CAPACITY = { 1: 17, 2: 32, 3: 53, 4: 78, 5: 106, 6: 134 };
 // 1b. One byte over the largest supported version's capacity is rejected outright, rather than
 // silently producing a corrupt (too-small) symbol.
 {
-	assert.throws(() => OpenVSQr.encode('x'.repeat(CAPACITY[6] + 1)), /too large/);
+	assert.throws(() => StormQr.encode('x'.repeat(CAPACITY[6] + 1)), /too large/);
 }
 
 // 2. Matrix shape: square, side length matches the version formula, every cell is a boolean.
 {
-	const { size, modules } = OpenVSQr.encode('HELLO');
+	const { size, modules } = StormQr.encode('HELLO');
 	assert.strictEqual(size, 21, "'HELLO' (5 bytes) fits version 1 (21x21)");
 	assert.strictEqual(modules.length, size);
 	for (const row of modules) {
@@ -108,7 +108,7 @@ function assertFinderPattern(modules, row0, col0, label) {
 // 3. All three finder patterns, at every version this encoder supports.
 {
 	for (const version of [1, 2, 3, 4, 5, 6]) {
-		const { size, modules } = OpenVSQr.encode('x'.repeat(CAPACITY[version]));
+		const { size, modules } = StormQr.encode('x'.repeat(CAPACITY[version]));
 		assertFinderPattern(modules, 0, 0, `v${version} top-left`);
 		assertFinderPattern(modules, 0, size - 7, `v${version} top-right`);
 		assertFinderPattern(modules, size - 7, 0, `v${version} bottom-left`);
@@ -117,7 +117,7 @@ function assertFinderPattern(modules, row0, col0, label) {
 
 // 4. Timing patterns alternate dark/light, starting dark, between the finder patterns.
 {
-	const { size, modules } = OpenVSQr.encode('x'.repeat(CAPACITY[3]));
+	const { size, modules } = StormQr.encode('x'.repeat(CAPACITY[3]));
 	for (let i = 8; i < size - 8; i++) {
 		const expectedDark = i % 2 === 0;
 		assert.strictEqual(modules[6][i], expectedDark, `horizontal timing module ${i}`);
@@ -128,15 +128,15 @@ function assertFinderPattern(modules, row0, col0, label) {
 // 5. The fixed dark module at (4*version+9, 8) is dark, for every version.
 {
 	for (const version of [1, 2, 3, 4, 5, 6]) {
-		const { modules } = OpenVSQr.encode('x'.repeat(CAPACITY[version]));
+		const { modules } = StormQr.encode('x'.repeat(CAPACITY[version]));
 		assert.strictEqual(modules[4 * version + 9][8], true, `v${version} fixed dark module`);
 	}
 }
 
 // 6. Determinism: encoding the same text twice yields byte-identical matrices.
 {
-	const a = OpenVSQr.encode('https://relay.example/p/ABCD1234#WXYZ5678');
-	const b = OpenVSQr.encode('https://relay.example/p/ABCD1234#WXYZ5678');
+	const a = StormQr.encode('https://relay.example/p/ABCD1234#WXYZ5678');
+	const b = StormQr.encode('https://relay.example/p/ABCD1234#WXYZ5678');
 	assert.deepStrictEqual(a, b);
 }
 
@@ -160,7 +160,7 @@ function assertFinderPattern(modules, row0, col0, label) {
 	}
 
 	for (const version of [1, 2, 3, 4, 5, 6]) {
-		const { size, modules } = OpenVSQr.encode('x'.repeat(CAPACITY[version]));
+		const { size, modules } = StormQr.encode('x'.repeat(CAPACITY[version]));
 		const bit = (row, col) => (modules[row][col] ? 1 : 0);
 
 		// Independently re-derived from ISO/IEC 18004's own format-info layout (bit i, LSB
@@ -185,7 +185,7 @@ function assertFinderPattern(modules, row0, col0, label) {
 // apply any mask (or applied the same one regardless of score) tends to produce a lopsided
 // dark/light ratio, especially on the more repetitive short inputs.
 {
-	const { modules } = OpenVSQr.encode('https://relay.example/p/ABCD1234EFGH#WXYZ56781234');
+	const { modules } = StormQr.encode('https://relay.example/p/ABCD1234EFGH#WXYZ56781234');
 	const total = modules.length * modules.length;
 	const dark = modules.flat().filter(Boolean).length;
 	const ratio = dark / total;

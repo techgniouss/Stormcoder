@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // src/remote/local/tunnel.ts against a fake `cloudflared` — a child process that prints what the
@@ -76,7 +76,7 @@ function fakeCloudflared(lines, { exitAfterMs } = {}) {
 	assert.equal(findCloudflared('', 'store', 'win32', () => false), undefined);
 }
 
-// Release assets exist for every platform OpenVS ships on.
+// Release assets exist for every platform Stormcoder ships on.
 assert.equal(releaseAsset('win32', 'x64'), 'cloudflared-windows-amd64.exe');
 assert.equal(releaseAsset('win32', 'arm64'), 'cloudflared-windows-amd64.exe');
 assert.equal(releaseAsset('darwin', 'arm64'), 'cloudflared-darwin-arm64.tgz');
@@ -95,7 +95,7 @@ assert.equal(releaseAsset('linux', 'arm64'), 'cloudflared-linux-arm64');
 		? new Response(JSON.stringify({ assets: [{ name: 'cloudflared-windows-amd64.exe', browser_download_url: url, digest }] }))
 		: new Response(body);
 
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openvs-cf-'));
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stormcoder-cf-'));
 	const installed = await installCloudflared(dir, stub(`sha256:${sha}`), 'win32', 'x64');
 	assert.ok(fs.existsSync(installed), 'a download matching the published checksum is installed');
 	fs.rmSync(installed);

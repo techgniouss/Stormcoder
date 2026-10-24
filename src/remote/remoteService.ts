@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -34,19 +34,19 @@ const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
  * `remoteSink.ts`, `pairing.ts` and `snapshot.ts` together into one running (or not-running)
  * connection to a relay. Constructed in `extension.ts` beside `McpManager`, and — per the
  * plan's own framing of the choice — **owns the reference to {@link ChatViewProvider}, not the
- * other way around**: remote control is optional (off unless `openvsChat.remote.enabled` is
+ * other way around**: remote control is optional (off unless `stormcoder.remote.enabled` is
  * set), the chat panel is not, and `ChatViewProvider` is already
  * this extension's largest file. `ChatViewProvider` exposes a small public seam
  * (`attachRemoteSink`/`detachRemoteSink`/`dispatchRemoteMessage`/`postToSink`/
  * `getSessionStore`) instead of growing a dependency on the transport layer itself.
  *
- * Two ways to reach a relay (`openvsChat.remote.relayMode`): *hosted* dials the Cloudflare
+ * Two ways to reach a relay (`stormcoder.remote.relayMode`): *hosted* dials the Cloudflare
  * Worker at `relayUrl`; *local* runs the relay inside this extension (`local/relayServer.ts`),
  * dials it on loopback, and publishes it through Cloudflare Tunnel (`local/tunnel.ts`) for the
  * phone — see {@link LocalHosting}.
  *
- * Watches `openvsChat.remote.enabled`/`relayUrl` and starts or stops the connection to match —
- * so flipping the setting (including via the `openvsChat.remoteEnable` command) takes effect
+ * Watches `stormcoder.remote.enabled`/`relayUrl` and starts or stops the connection to match —
+ * so flipping the setting (including via the `stormcoder.remoteEnable` command) takes effect
  * without a reload.
  */
 export class RemoteService implements vscode.Disposable {
@@ -72,7 +72,7 @@ export class RemoteService implements vscode.Disposable {
 	 * activity has been recorded yet.
 	 */
 	private lastHostActivityAt = Date.now();
-	/** Set while running in local-hosting mode (`openvsChat.remote.relayMode`): the relay and tunnel this machine runs itself. */
+	/** Set while running in local-hosting mode (`stormcoder.remote.relayMode`): the relay and tunnel this machine runs itself. */
 	private local?: LocalHosting;
 	/**
 	 * Whether the next {@link start} may install `cloudflared` without asking — true only right
@@ -87,9 +87,9 @@ export class RemoteService implements vscode.Disposable {
 		private readonly view: ChatViewProvider,
 	) {
 		this.configListener = vscode.workspace.onDidChangeConfiguration(e => {
-			if (e.affectsConfiguration('openvsChat.remote.enabled') || e.affectsConfiguration('openvsChat.remote.relayUrl')) {
+			if (e.affectsConfiguration('stormcoder.remote.enabled') || e.affectsConfiguration('stormcoder.remote.relayUrl')) {
 				void this.sync();
-			} else if (['relayMode', 'tunnelHostname', 'localPort', 'cloudflaredPath'].some(key => e.affectsConfiguration(`openvsChat.remote.${key}`))) {
+			} else if (['relayMode', 'tunnelHostname', 'localPort', 'cloudflaredPath'].some(key => e.affectsConfiguration(`stormcoder.remote.${key}`))) {
 				// How the relay is hosted changed: rebuild the connection (or start one, when the
 				// switch to local hosting is what makes it runnable at all).
 				this.restart();
@@ -122,7 +122,7 @@ export class RemoteService implements vscode.Disposable {
 	 */
 	async pair(): Promise<PairingResult> {
 		if (!this.socket || !this.relayUrl || !this.publicRoomId) {
-			throw new Error('Remote control is not connected yet. Enable it (openvsChat.remoteEnable) and wait for a connection first.');
+			throw new Error('Remote control is not connected yet. Enable it (stormcoder.remoteEnable) and wait for a connection first.');
 		}
 		const socket = this.socket;
 		const publicRoomId = this.publicRoomId;
@@ -151,7 +151,7 @@ export class RemoteService implements vscode.Disposable {
 	}
 
 	/**
-	 * Called by `openvsChat.remoteEnable` right before it turns the setting on: the user asked
+	 * Called by `stormcoder.remoteEnable` right before it turns the setting on: the user asked
 	 * for remote, so local hosting may install `cloudflared` without a second prompt.
 	 */
 	enableRequested(): void {
@@ -169,13 +169,13 @@ export class RemoteService implements vscode.Disposable {
 		void this.sync();
 	}
 
-	/** Human-readable connection status — `openvsChat.remoteStatus`'s implementation. */
+	/** Human-readable connection status — `stormcoder.remoteStatus`'s implementation. */
 	status(): string {
 		if (!isRemoteEnabled()) {
 			return 'disabled';
 		}
 		if (getRelayMode() === 'hosted' && !getRelayUrl()) {
-			return 'enabled, but no relay URL is configured (set openvsChat.remote.relayUrl)';
+			return 'enabled, but no relay URL is configured (set stormcoder.remote.relayUrl)';
 		}
 		const connection = this.socket?.getStatus() ?? 'not connected';
 		return this.local ? `${connection} — ${this.local.status()}` : connection;
@@ -214,7 +214,7 @@ export class RemoteService implements vscode.Disposable {
 	private async startConnection(): Promise<void> {
 		const workspaceKey = getWorkspaceKey();
 		if (!workspaceKey) {
-			vscode.window.showWarningMessage('OpenVS remote control needs an open folder or workspace to pair a room to — open one first.');
+			vscode.window.showWarningMessage('Stormcoder remote control needs an open folder or workspace to pair a room to — open one first.');
 			return;
 		}
 		const roomSecret = await getOrCreateRoomSecret(this.context, workspaceKey);
@@ -224,10 +224,10 @@ export class RemoteService implements vscode.Disposable {
 		if (getRelayMode() === 'local') {
 			const local = new LocalHosting(this.context, () => {
 				void vscode.window.showWarningMessage(
-					'The OpenVS Remote public address changed (the Cloudflare quick tunnel restarted), so paired phones need to pair again. Set up a named tunnel ("Remote: Use My Cloudflare Tunnel") for an address that never changes.',
+					'The Stormcoder Remote public address changed (the Cloudflare quick tunnel restarted), so paired phones need to pair again. Set up a named tunnel ("Remote: Use My Cloudflare Tunnel") for an address that never changes.',
 					'Pair a Device').then(choice => {
 					if (choice) {
-						void vscode.commands.executeCommand('openvsChat.openSettings');
+						void vscode.commands.executeCommand('stormcoder.openSettings');
 					}
 				});
 			});
@@ -237,7 +237,7 @@ export class RemoteService implements vscode.Disposable {
 				await local.start(publicRoomId, hostToken, askFirst);
 			} catch (err) {
 				local.dispose();
-				void vscode.window.showErrorMessage(`OpenVS Remote couldn't start its local relay: ${err instanceof Error ? err.message : String(err)}`);
+				void vscode.window.showErrorMessage(`Stormcoder Remote couldn't start its local relay: ${err instanceof Error ? err.message : String(err)}`);
 				return;
 			}
 			if (this.socket || !this.canRun()) {
@@ -317,7 +317,7 @@ export class RemoteService implements vscode.Disposable {
 
 	/**
 	 * Phase 7c's `idleDisableHours` enforcement: tears down the live connection without
-	 * flipping `openvsChat.remote.enabled` — that setting is the user's own toggle, and per the
+	 * flipping `stormcoder.remote.enabled` — that setting is the user's own toggle, and per the
 	 * plan a later resume should not require them to re-discover a setting they never touched
 	 * (see `onLocalActivity`, which is what actually resumes it). Reports `enabled: true`
 	 * (unlike {@link stop}, which reports `false`) with `idleDisabled: true` so the status
@@ -331,7 +331,7 @@ export class RemoteService implements vscode.Disposable {
 	 */
 	private disconnectForIdle(): void {
 		const hours = getIdleDisableHours();
-		console.log(`OpenVS remote: auto-disconnecting — no local host activity for over ${hours}h.`);
+		console.log(`Stormcoder remote: auto-disconnecting — no local host activity for over ${hours}h.`);
 		this.teardownConnection();
 		this.view.setRemoteStatus(true, false, true);
 	}
@@ -357,11 +357,11 @@ export class RemoteService implements vscode.Disposable {
 			if (!this.reportedUnavailable) {
 				this.reportedUnavailable = true;
 				vscode.window.showErrorMessage(
-					'OpenVS remote control isn\'t available in this VS Code build: no WebSocket implementation was found in the extension host.');
+					'Stormcoder remote control isn\'t available in this VS Code build: no WebSocket implementation was found in the extension host.');
 			}
 		} else if (status === 'displaced') {
 			vscode.window.showWarningMessage(
-				'OpenVS remote control was disconnected: another VS Code window took over this workspace\'s room.');
+				'Stormcoder remote control was disconnected: another VS Code window took over this workspace\'s room.');
 		}
 		// 'connecting' / 'disconnected': nothing to do beyond what the status getter already reports.
 	}
@@ -443,7 +443,7 @@ export class RemoteService implements vscode.Disposable {
 		this.sweepIdle();
 	}
 
-	/** Revokes every device whose token has aged past `openvsChat.remote.deviceTokenDays`. Errors fetching the list are logged and otherwise swallowed — a background hygiene pass failing once must not surface as a user-facing error on an unrelated action. */
+	/** Revokes every device whose token has aged past `stormcoder.remote.deviceTokenDays`. Errors fetching the list are logged and otherwise swallowed — a background hygiene pass failing once must not surface as a user-facing error on an unrelated action. */
 	private async sweepDeviceAge(): Promise<void> {
 		if (!this.socket || !this.relayUrl || !this.publicRoomId || !this.hostToken) {
 			return;
@@ -453,7 +453,7 @@ export class RemoteService implements vscode.Disposable {
 		try {
 			devices = await fetchDevices(this.relayUrl, this.publicRoomId, this.hostToken);
 		} catch (err) {
-			console.warn('OpenVS remote: device sweep could not fetch the device list.', err);
+			console.warn('Stormcoder remote: device sweep could not fetch the device list.', err);
 			return;
 		}
 		const deviceTokenDays = getDeviceTokenDays();
@@ -463,14 +463,14 @@ export class RemoteService implements vscode.Disposable {
 				continue;
 			}
 			if (shouldRevokeForTokenAge(device.createdAt, deviceTokenDays, now)) {
-				console.log(`OpenVS remote: revoking device "${device.name}" (${device.id}) — its token is older than ${deviceTokenDays}d.`);
+				console.log(`Stormcoder remote: revoking device "${device.name}" (${device.id}) — its token is older than ${deviceTokenDays}d.`);
 				// The next sweep retries whatever this one could not revoke.
-				revokeDevice(socket, device.id).catch(err => console.warn(`OpenVS remote: could not revoke "${device.name}".`, err));
+				revokeDevice(socket, device.id).catch(err => console.warn(`Stormcoder remote: could not revoke "${device.name}".`, err));
 			}
 		}
 	}
 
-	/** Disconnects (see {@link disconnectForIdle}) once no local host activity has been seen for over `openvsChat.remote.idleDisableHours`. */
+	/** Disconnects (see {@link disconnectForIdle}) once no local host activity has been seen for over `stormcoder.remote.idleDisableHours`. */
 	private sweepIdle(): void {
 		if (!this.socket) {
 			return;

@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -8,7 +8,7 @@ import { normalizeRelayUrl } from './socket';
 /**
  * Phase 7c of "remote control": device enumeration and the two host-side sweep decisions that
  * only `openvs-relay` doesn't already make — the relay itself has no notion of
- * `openvsChat.remote.deviceTokenDays`/`idleDisableHours`, so this module reads `GET
+ * `stormcoder.remote.deviceTokenDays`/`idleDisableHours`, so this module reads `GET
  * /api/devices` and decides, from settings the host alone knows, which devices have outlived
  * their token and whether the whole connection has gone idle. `vscode`-free, like `socket.ts`:
  * {@link fetchDevices} needs only the global `fetch` this extension already uses for provider

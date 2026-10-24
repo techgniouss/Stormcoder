@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -16,7 +16,7 @@ export const CLOUDFLARE_ACCOUNT_PLACEHOLDER = '{account_id}';
 
 /** Raised (as a normal Error) when the account id setting is still empty. */
 const MISSING_ACCOUNT =
-	'Cloudflare Workers AI: set "openvsChat.cloudflare.accountId" to your Cloudflare account ID. ' +
+	'Cloudflare Workers AI: set "stormcoder.cloudflare.accountId" to your Cloudflare account ID. ' +
 	'It is part of the request URL, so an API token alone is not enough — find it on the ' +
 	'Workers & Pages overview page in the Cloudflare dashboard.';
 

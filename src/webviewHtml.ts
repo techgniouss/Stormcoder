@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -24,7 +24,7 @@ export const CHAT_APP_HTML = `
 <div class="area" data-area="providers">
 						<div class="settings-header"><h2>Providers</h2></div>
 			<div id="providerList"></div>
-			<p class="hint">Keys are stored in the OS secret store. Anthropic and OpenAI support signing in with your <strong>Claude</strong> or <strong>ChatGPT</strong> subscription account, and <strong>OpenRouter</strong> offers a one-click browser sign-in that creates a key for you — no pasting needed. You can also set <code>OPENAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, <code>NVIDIA_API_KEY</code>, <code>OPENROUTER_API_KEY</code>, <code>MOONSHOT_API_KEY</code> or <code>DASHSCOPE_API_KEY</code>, or configure a web sign-in URL via <code>openvsChat.&lt;provider&gt;.authUrl</code>.</p>
+			<p class="hint">Keys are stored in the OS secret store. Anthropic and OpenAI support signing in with your <strong>Claude</strong> or <strong>ChatGPT</strong> subscription account, and <strong>OpenRouter</strong> offers a one-click browser sign-in that creates a key for you — no pasting needed. You can also set <code>OPENAI_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, <code>NVIDIA_API_KEY</code>, <code>OPENROUTER_API_KEY</code>, <code>MOONSHOT_API_KEY</code> or <code>DASHSCOPE_API_KEY</code>, or configure a web sign-in URL via <code>stormcoder.&lt;provider&gt;.authUrl</code>.</p>
 			</div>
 
 			<div class="area" data-area="general">
@@ -41,7 +41,7 @@ export const CHAT_APP_HTML = `
 					<button id="saveMaxTokens" class="mini-button">Save</button>
 				</div>
 				<label class="field-label" for="rulesInput">Rules</label>
-				<p class="hint">Always-on steering combined with any rule files found in the workspace (<code>AGENTS.md</code>, <code>.openvs/rules.md</code>, …) — soft guidance the model can weigh, unlike the hard guardrails below.</p>
+				<p class="hint">Always-on steering combined with any rule files found in the workspace (<code>AGENTS.md</code>, <code>.stormcoder/rules.md</code>, …) — soft guidance the model can weigh, unlike the hard guardrails below.</p>
 				<textarea id="rulesInput" rows="3" class="settings-textarea"
 					placeholder="e.g. Always write tests first. Prefer named exports."></textarea>
 				<div class="settings-row"><button id="saveRules" class="mini-button">Save</button></div>
@@ -66,7 +66,7 @@ export const CHAT_APP_HTML = `
 
 			<div class="area" data-area="skills">
 						<div class="settings-header"><h2>Skills</h2>
-				<button id="newSkill" class="mini-button" title="Create a new skill file in this workspace (.openvs/skills)">＋ New Skill</button>
+				<button id="newSkill" class="mini-button" title="Create a new skill file in this workspace (.stormcoder/skills)">＋ New Skill</button>
 			</div>
 			<p class="hint">Skills are named instruction packs that steer every message while active. Activate as many as you like — they combine. Create your own — it opens as a Markdown file you can edit any time.</p>
 			<div id="skillList"></div>
@@ -77,7 +77,7 @@ export const CHAT_APP_HTML = `
 				<span class="header-actions">
 					<button id="mcpAdd" class="mini-button" title="Register a new MCP server">＋ Add Server</button>
 					<button id="mcpReconnectBtn" class="mini-button" title="Restart all MCP connections">Reconnect</button>
-					<button id="mcpOpenConfig" class="mini-button" title="Open .openvs/mcp.json">Open Config</button>
+					<button id="mcpOpenConfig" class="mini-button" title="Open .stormcoder/mcp.json">Open Config</button>
 				</span>
 			</div>
 			<p class="hint">MCP (Model Context Protocol) servers add extra tools the agent can call (databases, browsers, APIs…). Tools appear to the agent as <code>mcp__&lt;server&gt;__&lt;tool&gt;</code>.</p>
@@ -95,7 +95,7 @@ export const CHAT_APP_HTML = `
 
 			<div class="area" data-area="remote">
 						<div class="settings-header"><h2>Remote control</h2></div>
-			<p class="hint">Pair a phone to drive this chat panel from anywhere: send messages, switch and create chats, steer runs, and answer approval prompts. Turn it on below. By default OpenVS runs the relay on this computer and reaches your phone through Cloudflare Tunnel (installed for you if needed), so there is nothing to deploy. To use a relay you deployed to Cloudflare instead, set <code>openvsChat.remote.relayUrl</code>.</p>
+			<p class="hint">Pair a phone to drive this chat panel from anywhere: send messages, switch and create chats, steer runs, and answer approval prompts. Turn it on below. By default Stormcoder runs the relay on this computer and reaches your phone through Cloudflare Tunnel (installed for you if needed), so there is nothing to deploy. To use a relay you deployed to Cloudflare instead, set <code>stormcoder.remote.relayUrl</code>.</p>
 			<div id="remotePanel"></div>
 			</div>
 		</section>

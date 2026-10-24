@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -17,8 +17,8 @@ export interface Skill {
 /**
  * Built-in skills shipped by default. Their instructions are the upstream `SKILL.md`
  * contents, bundled verbatim under `skills/<file>` (see README for sources/attribution).
- * Any of them can be overridden via the `openvsChat.skills` setting or a project
- * `.openvs/skills/<id>.md` file.
+ * Any of them can be overridden via the `stormcoder.skills` setting or a project
+ * `.stormcoder/skills/<id>.md` file.
  */
 const BUILTIN_SKILLS: Array<{ id: string; name: string; description: string; file: string }> = [
 	{
@@ -47,11 +47,12 @@ const BUILTIN_SKILLS: Array<{ id: string; name: string; description: string; fil
 	},
 ];
 
-const SKILLS_DIR = '.openvs/skills';
+/** Where workspace skills live. The pre-rename folder is still read (listed first, so `.stormcoder` wins on an id clash). */
+const SKILLS_DIRS = ['.openvs/skills', '.stormcoder/skills'];
 
 /**
  * Resolves the available skills, merging built-ins (bundled `SKILL.md` content) with
- * user-defined ones from the `openvsChat.skills` setting and `.openvs/skills/*.md` files
+ * user-defined ones from the `stormcoder.skills` setting and `.stormcoder/skills/*.md` files
  * (later sources win on id).
  */
 export class SkillRegistry {
@@ -71,7 +72,7 @@ export class SkillRegistry {
 			});
 		}
 
-		const fromSettings = vscode.workspace.getConfiguration('openvsChat').get<Array<Partial<Skill>>>('skills') ?? [];
+		const fromSettings = vscode.workspace.getConfiguration('stormcoder').get<Array<Partial<Skill>>>('skills') ?? [];
 		for (const raw of fromSettings) {
 			if (raw && raw.id) {
 				byId.set(raw.id, {
@@ -86,8 +87,10 @@ export class SkillRegistry {
 
 		const root = vscode.workspace.workspaceFolders?.[0]?.uri;
 		if (root) {
-			for (const skill of await this.readSkillFiles(root)) {
-				byId.set(skill.id, skill);
+			for (const dir of SKILLS_DIRS) {
+				for (const skill of await this.readSkillFiles(root, dir)) {
+					byId.set(skill.id, skill);
+				}
 			}
 		}
 
@@ -110,8 +113,8 @@ export class SkillRegistry {
 		}
 	}
 
-	private async readSkillFiles(root: vscode.Uri): Promise<Skill[]> {
-		const dir = vscode.Uri.joinPath(root, SKILLS_DIR);
+	private async readSkillFiles(root: vscode.Uri, folder: string): Promise<Skill[]> {
+		const dir = vscode.Uri.joinPath(root, folder);
 		let entries: [string, vscode.FileType][];
 		try {
 			entries = await vscode.workspace.fs.readDirectory(dir);

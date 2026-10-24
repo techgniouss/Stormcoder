@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -52,7 +52,7 @@ function sanitize(text: string): string {
 
 /** Describes the shell `run_command` will use, so the model writes compatible syntax. */
 function agentShell(): string {
-	const configured = vscode.workspace.getConfiguration('openvsChat').get<string>('agent.shell') ?? '';
+	const configured = vscode.workspace.getConfiguration('stormcoder').get<string>('agent.shell') ?? '';
 	return resolveAgentShell(configured).description;
 }
 

@@ -155,7 +155,7 @@ try {
 	await page.keyboard.press('Enter');
 	await page.locator('#editor:not(.hidden)').waitFor();
 	assert.match(await page.inputValue('#editorText'), /Reviews API changes/);
-	assert.ok(fs.existsSync(path.join(project, '.openvs/skills/api-reviewer.md')));
+	assert.ok(fs.existsSync(path.join(project, '.stormcoder/skills/api-reviewer.md')));
 	await page.keyboard.press('Escape');
 	await page.click('[data-view=skills]');
 	await settings.locator('.area.active[data-area=skills]').getByText('Api Reviewer').first().waitFor({ timeout: 10000 });

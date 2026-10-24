@@ -1,86 +1,86 @@
 [
 	{
-		"id": "openvsChat.configureProvider",
+		"id": "stormcoder.configureProvider",
 		"title": "Configure Provider / API Key",
 		"group": "Command"
 	},
 	{
-		"id": "openvsChat.signIn",
+		"id": "stormcoder.signIn",
 		"title": "Sign in to Provider (Web)",
 		"group": "Command"
 	},
 	{
-		"id": "openvsChat.clearKey",
+		"id": "stormcoder.clearKey",
 		"title": "Clear Stored API Key",
 		"group": "Command"
 	},
 	{
-		"id": "openvsChat.selectProvider",
+		"id": "stormcoder.selectProvider",
 		"title": "Select AI Provider",
 		"group": "Command"
 	},
 	{
-		"id": "openvsChat.mcpReconnect",
+		"id": "stormcoder.mcpReconnect",
 		"title": "MCP: Reconnect Servers",
 		"group": "Command"
 	},
 	{
-		"id": "openvsChat.mcpStatus",
+		"id": "stormcoder.mcpStatus",
 		"title": "MCP: Show Server Status",
 		"group": "Command"
 	},
 	{
-		"id": "openvsChat.mcpAdd",
+		"id": "stormcoder.mcpAdd",
 		"title": "MCP: Add Server",
 		"group": "Command"
 	},
 	{
-		"id": "openvsChat.mcpOpenConfig",
+		"id": "stormcoder.mcpOpenConfig",
 		"title": "MCP: Open Project Config",
 		"group": "Command"
 	},
 	{
-		"id": "openvsChat.remoteEnable",
+		"id": "stormcoder.remoteEnable",
 		"title": "Remote: Enable Remote Control",
 		"group": "Command"
 	},
 	{
-		"id": "openvsChat.remoteStatus",
+		"id": "stormcoder.remoteStatus",
 		"title": "Remote: Show Connection Status",
 		"group": "Command"
 	},
 	{
-		"id": "openvsChat.remoteDeployRelay",
+		"id": "stormcoder.remoteDeployRelay",
 		"title": "Remote: Deploy Your Own Relay",
 		"group": "Command"
 	},
 	{
-		"id": "openvsChat.remoteInstallCloudflared",
+		"id": "stormcoder.remoteInstallCloudflared",
 		"title": "Remote: Install Cloudflare Tunnel",
 		"group": "Command"
 	},
 	{
-		"id": "openvsChat.remoteSetTunnel",
+		"id": "stormcoder.remoteSetTunnel",
 		"title": "Remote: Use My Cloudflare Tunnel",
 		"group": "Command"
 	},
 	{
-		"id": "openvsChat.newChat",
+		"id": "stormcoder.newChat",
 		"title": "New Chat",
 		"group": "Chat"
 	},
 	{
-		"id": "openvsChat.generateCommitMessage",
+		"id": "stormcoder.generateCommitMessage",
 		"title": "Write Commit Message for Staged Changes…",
 		"group": "Git"
 	},
 	{
-		"id": "openvsChat.selectSkill",
+		"id": "stormcoder.selectSkill",
 		"title": "Choose Active Skills…",
 		"group": "Skills"
 	},
 	{
-		"id": "openvsChat.createSkill",
+		"id": "stormcoder.createSkill",
 		"title": "New Skill…",
 		"group": "Skills"
 	}

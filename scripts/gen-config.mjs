@@ -10,7 +10,7 @@ const defaults = {};
 const schema = {};
 for (const g of groups) {
 	for (const [key, def] of Object.entries(g.properties ?? {})) {
-		if (key.startsWith('openvsChat.completions.')) {
+		if (key.startsWith('stormcoder.completions.')) {
 			continue; // inline completions need an editor; this app has none
 		}
 		if ('default' in def) {
@@ -33,19 +33,19 @@ console.log(`config: ${Object.keys(defaults).length} defaults, ${Object.keys(sch
 const nls = JSON.parse(fs.readFileSync(new URL('../ext-package.nls.reference.json', import.meta.url), 'utf8'));
 const resolve = t => typeof t === 'string' && /^%.+%$/.test(t) ? (nls[t.slice(1, -1)] ?? t) : t;
 const HIDDEN = new Set([
-	'openvsChat.focus', 'openvsChat.openSettings', 'openvsChat.explainSelection', 'openvsChat.fixSelection', 'openvsChat.docSelection',
-	'openvsChat.optimizeSelection', 'openvsChat.generateTests', 'openvsChat.editSelection', 'openvsChat.completions.toggle',
-	'openvsChat.completions.trigger', 'openvsChat.completions.showStats', 'openvsChat.newChat', 'openvsChat.generateCommitMessage',
-	'openvsChat.selectSkill', 'openvsChat.createSkill',
+	'stormcoder.focus', 'stormcoder.openSettings', 'stormcoder.explainSelection', 'stormcoder.fixSelection', 'stormcoder.docSelection',
+	'stormcoder.optimizeSelection', 'stormcoder.generateTests', 'stormcoder.editSelection', 'stormcoder.completions.toggle',
+	'stormcoder.completions.trigger', 'stormcoder.completions.showStats', 'stormcoder.newChat', 'stormcoder.generateCommitMessage',
+	'stormcoder.selectSkill', 'stormcoder.createSkill',
 ]);
 const commandList = (manifest.contributes.commands ?? [])
 	.filter(c => !HIDDEN.has(c.command))
-	.map(c => ({ id: c.command, title: String(resolve(c.title)).replace(/^OpenVS Thor:\s*/i, ''), group: 'Command' }));
+	.map(c => ({ id: c.command, title: String(resolve(c.title)).replace(/^Stormcoder:\s*/i, ''), group: 'Command' }));
 commandList.push(
-	{ id: 'openvsChat.newChat', title: 'New Chat', group: 'Chat' },
-	{ id: 'openvsChat.generateCommitMessage', title: 'Write Commit Message for Staged Changes…', group: 'Git' },
-	{ id: 'openvsChat.selectSkill', title: 'Choose Active Skills…', group: 'Skills' },
-	{ id: 'openvsChat.createSkill', title: 'New Skill…', group: 'Skills' },
+	{ id: 'stormcoder.newChat', title: 'New Chat', group: 'Chat' },
+	{ id: 'stormcoder.generateCommitMessage', title: 'Write Commit Message for Staged Changes…', group: 'Git' },
+	{ id: 'stormcoder.selectSkill', title: 'Choose Active Skills…', group: 'Skills' },
+	{ id: 'stormcoder.createSkill', title: 'New Skill…', group: 'Skills' },
 );
 fs.writeFileSync(new URL('../host/command-list.json', import.meta.url), JSON.stringify(commandList, null, '\t'));
 console.log(`commands: ${commandList.length}`);

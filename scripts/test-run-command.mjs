@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Standalone unit test for run_command in src/agent/tools.ts, against the real OS. Run:
@@ -16,7 +16,7 @@ import Module from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 
-const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openvs-cmd-'));
+const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'stormcoder-cmd-'));
 const settings = { 'agent.commandTimeoutMs': 60_000, 'guardrails.approval': 'yolo' };
 const vscodeStub = {
 	workspace: {

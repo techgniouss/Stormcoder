@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -9,7 +9,7 @@ import * as vscode from 'vscode';
 /** When a hook runs. */
 export type HookEvent = 'PreToolUse' | 'PostToolUse';
 
-/** One user-configured hook (`openvsChat.hooks`). */
+/** One user-configured hook (`stormcoder.hooks`). */
 export interface HookSpec {
 	readonly event: HookEvent;
 	/** Regular expression matched against the tool name; absent matches every tool. */
@@ -31,9 +31,9 @@ export interface HookOutcome {
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_FEEDBACK_CHARS = 4_000;
 
-/** Reads `openvsChat.hooks`, dropping anything malformed instead of failing the run. */
+/** Reads `stormcoder.hooks`, dropping anything malformed instead of failing the run. */
 export function loadHooks(): HookSpec[] {
-	const raw = vscode.workspace.getConfiguration('openvsChat').get<unknown>('hooks');
+	const raw = vscode.workspace.getConfiguration('stormcoder').get<unknown>('hooks');
 	if (!Array.isArray(raw)) {
 		return [];
 	}

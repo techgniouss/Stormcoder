@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -8,7 +8,7 @@ import { homedir, tmpdir } from 'os';
 import { delimiter, join } from 'path';
 
 /**
- * What `openvsChat.agent.sandbox` asks for.
+ * What `stormcoder.agent.sandbox` asks for.
  *  - `off`: commands run as the user, with only the deny-list in front of them.
  *  - `workspace`: the whole filesystem is read-only except the workspace folders, the
  *    temp folder and the usual tool caches (`~/.npm`, `~/.cache`, `~/.cargo`, …).
@@ -32,7 +32,7 @@ export interface SandboxRequest {
 	readonly cwd: string;
 	/** Workspace folders: the places a command may write. */
 	readonly writable: readonly string[];
-	/** Extra writable folders from `openvsChat.agent.sandboxWritablePaths`. */
+	/** Extra writable folders from `stormcoder.agent.sandboxWritablePaths`. */
 	readonly extraWritable: readonly string[];
 	/** Names inside a workspace folder that stay read-only (`.env`, key files). Globs are skipped. */
 	readonly protectedNames: readonly string[];
@@ -83,7 +83,7 @@ export function sandboxedSpawn(req: SandboxRequest): SandboxLaunch {
 	if (platform === 'linux') {
 		const bwrap = which('bwrap');
 		if (!bwrap) {
-			return { ok: false, error: 'openvsChat.agent.sandbox is on, but bubblewrap (bwrap) is not installed. Install it (for example "apt install bubblewrap"), or set the sandbox to "off".' };
+			return { ok: false, error: 'stormcoder.agent.sandbox is on, but bubblewrap (bwrap) is not installed. Install it (for example "apt install bubblewrap"), or set the sandbox to "off".' };
 		}
 		const args = ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--die-with-parent', '--unshare-pid'];
 		if (offline) {
@@ -108,7 +108,7 @@ export function sandboxedSpawn(req: SandboxRequest): SandboxLaunch {
 	if (platform === 'darwin') {
 		const exec = which('sandbox-exec');
 		if (!exec) {
-			return { ok: false, error: 'openvsChat.agent.sandbox is on, but sandbox-exec was not found. Set the sandbox to "off".' };
+			return { ok: false, error: 'stormcoder.agent.sandbox is on, but sandbox-exec was not found. Set the sandbox to "off".' };
 		}
 		const quote = (p: string) => JSON.stringify(p);
 		const roots = [...writable, tmp, '/private/tmp', '/private/var/folders'];
@@ -125,5 +125,5 @@ export function sandboxedSpawn(req: SandboxRequest): SandboxLaunch {
 		return { ok: true, file: exec, args: ['-p', profile, shell, '-c', req.command] };
 	}
 
-	return { ok: false, error: `openvsChat.agent.sandbox is not supported on ${platform}. Set it to "off".` };
+	return { ok: false, error: `stormcoder.agent.sandbox is not supported on ${platform}. Set it to "off".` };
 }

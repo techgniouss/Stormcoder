@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // @ts-check
@@ -7,7 +7,7 @@
  * The "Remote control" panel in Settings: a persistent connection-status indicator plus a
  * "Pair a device" card (QR code + manually-typeable code + expiry countdown). Phase 5b of
  * "remote control" — see `i-need-your-help-unified-scott.md`'s "Auth" section — replacing the
- * `openvsChat.remotePair` command-palette stopgap.
+ * `stormcoder.remotePair` command-palette stopgap.
  *
  * Follows `media/prompts.js`'s house rules exactly, for the same reasons that file states:
  * every node is built with createElement/createElementNS + textContent — no `innerHTML`, no
@@ -48,7 +48,7 @@
 	 * @param {string} text
 	 */
 	function buildQrSvg(text) {
-		const { size, modules } = OpenVSQr.encode(text);
+		const { size, modules } = StormQr.encode(text);
 		const MODULE_PX = 4;
 		const QUIET_ZONE_MODULES = 4; // the spec's minimum quiet zone, so a phone camera can find the finder patterns
 		const dim = (size + QUIET_ZONE_MODULES * 2) * MODULE_PX;
@@ -109,7 +109,7 @@
 		const statusLabel = el('span', 'remote-status-label', 'Remote: off');
 		statusRow.appendChild(statusDot);
 		statusRow.appendChild(statusLabel);
-		// The on/off switch for `openvsChat.remote.enabled` — so turning remote on doesn't mean
+		// The on/off switch for `stormcoder.remote.enabled` — so turning remote on doesn't mean
 		// finding a Command Palette entry. The host answers with the real state (see
 		// `setRemoteEnabled` in chatViewProvider.ts), which is what finally sets `checked`: a
 		// switch that couldn't turn on flips back rather than claiming to be on.
@@ -130,7 +130,7 @@
 				!status.enabled ? 'remote-status-off' : status.connected ? 'remote-status-connected' : 'remote-status-connecting');
 			statusLabel.textContent = !status.enabled ? 'Remote: off'
 				: status.connected ? 'Remote: connected'
-				// Phase 7c: `openvsChat.remote.idleDisableHours` tore the connection down without
+				// Phase 7c: `stormcoder.remote.idleDisableHours` tore the connection down without
 				// touching the `enabled` setting — say so, rather than looking like an ordinary drop.
 				: status.idleDisabled ? 'Remote: paused (idle)'
 				: 'Remote: connecting…';
@@ -223,7 +223,7 @@
 
 			const card = el('div', 'remote-pairing-card');
 			card.appendChild(el('div', 'remote-pairing-title', 'Pair a device'));
-			card.appendChild(el('div', 'hint', 'Scan with the OpenVS PWA, or enter the code by hand.'));
+			card.appendChild(el('div', 'hint', 'Scan with the Stormcoder PWA, or enter the code by hand.'));
 			card.appendChild(buildQrSvg(pairing.url));
 
 			const codeRow = el('div', 'remote-pairing-code', pairing.code);
@@ -287,5 +287,5 @@
 	}
 
 	// @ts-ignore — the webview's own namespace, consumed by main.js and the pairing-card tests.
-	globalThis.OpenVSPairing = { create };
+	globalThis.StormPairing = { create };
 }());

@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -160,7 +160,7 @@ export interface DeployRelayOptions {
 	skipInstall: boolean;
 	/**
 	 * `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` — the same credential this extension's
-	 * Cloudflare Workers AI provider already asks for (`openvsChat.cloudflare.accountId` +
+	 * Cloudflare Workers AI provider already asks for (`stormcoder.cloudflare.accountId` +
 	 * its stored API key), reused here so `wrangler` authenticates non-interactively instead
 	 * of needing a `wrangler login` browser flow. Applied to every `wrangler` step, not
 	 * `npm install` (which needs no Cloudflare credentials). The caller is responsible for

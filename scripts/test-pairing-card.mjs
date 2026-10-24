@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Behavioural tests for media/pairing.js (status indicator + "Pair a device" card), mirroring
@@ -68,7 +68,7 @@ class El {
 	}
 }
 
-/** Loads media/qr.js then media/pairing.js into one shared sandbox, so pairing.js's `OpenVSQr` reference resolves. */
+/** Loads media/qr.js then media/pairing.js into one shared sandbox, so pairing.js's `StormQr` reference resolves. */
 function loadPairing() {
 	const qrSource = fs.readFileSync(new URL('../media/qr.js', import.meta.url), 'utf8');
 	const pairingSource = fs.readFileSync(new URL('../media/pairing.js', import.meta.url), 'utf8');
@@ -85,17 +85,17 @@ function loadPairing() {
 	vm.createContext(sandbox);
 	vm.runInContext(qrSource, sandbox, { filename: 'qr.js' });
 	vm.runInContext(pairingSource, sandbox, { filename: 'pairing.js' });
-	assert.ok(sandbox.OpenVSPairing, 'pairing.js published its namespace');
-	return sandbox.OpenVSPairing;
+	assert.ok(sandbox.StormPairing, 'pairing.js published its namespace');
+	return sandbox.StormPairing;
 }
 
-const OpenVSPairing = loadPairing();
+const StormPairing = loadPairing();
 
 /** A controller plus the container and the messages it posted. Payloads round-trip through JSON, matching test-prompt-cards.mjs's harness (and real postMessage's structured clone). */
 function harness(extraDeps = {}) {
 	const container = new El('div');
 	const posted = [];
-	const api = OpenVSPairing.create({
+	const api = StormPairing.create({
 		container,
 		post: m => posted.push(JSON.parse(JSON.stringify(m))),
 		...extraDeps,
@@ -150,7 +150,7 @@ const pairing = {
 }
 
 // 4. A `remote` message carrying `pairing` renders the card: QR (as an inline SVG built from
-// OpenVSQr, not an <img>/data-URI), the raw code as plain selectable text, and an expiry note.
+// StormQr, not an <img>/data-URI), the raw code as plain selectable text, and an expiry note.
 {
 	const h = harness();
 	h.api.update({ enabled: true, connected: true, pairing });

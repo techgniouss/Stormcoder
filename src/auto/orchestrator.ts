@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -46,9 +46,9 @@ export interface AutoRunParams {
 	 * model's request budget cannot carry it (see `needsCompactPrompt`).
 	 */
 	readonly compactBaseSystemPrompt?: string;
-	/** `openvsChat.persona.thinking`: whether the implementer gets the <thinking> scaffold. */
+	/** `stormcoder.persona.thinking`: whether the implementer gets the <thinking> scaffold. */
 	readonly thinking?: boolean;
-	/** `openvsChat.persona.compactPrompt` is `always`: the implementer starts on the compact prompt and condensed schemas. */
+	/** `stormcoder.persona.compactPrompt` is `always`: the implementer starts on the compact prompt and condensed schemas. */
 	readonly forceCompactPrompt?: boolean;
 	readonly signal: AbortSignal;
 	/**
@@ -430,7 +430,7 @@ export class AutoOrchestrator {
 		if (truncated) {
 			// A cut-off plan or review feeds the next phase; say so rather than passing a
 			// half-finished document downstream silently.
-			cb.note(`The ${assignment.roleLabel} output is still incomplete after several continuations — raise "openvsChat.maxTokens" for a fuller result.`);
+			cb.note(`The ${assignment.roleLabel} output is still incomplete after several continuations — raise "stormcoder.maxTokens" for a fuller result.`);
 		}
 		return text;
 	}

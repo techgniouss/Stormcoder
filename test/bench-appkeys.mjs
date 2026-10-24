@@ -57,19 +57,19 @@ const mock = await new Promise(resolve => {
 }
 const secretsFile = path.join(app, 'secrets.json');
 const stored = JSON.parse(fs.readFileSync(secretsFile, 'utf8'));
-assert.ok(stored['openvsChat.apiKey.groq'], 'the key was saved by the app');
+assert.ok(stored['stormcoder.apiKey.groq'], 'the key was saved by the app');
 assert.ok(!fs.readFileSync(secretsFile, 'utf8').includes(KEY), 'and is not stored in the clear');
 
 // 2. A user's data: a sign-in session, plus settings that must not leak into the benchmark.
-stored['openvsChat.oauth.anthropic'] = Buffer.from('opaque-session').toString('base64');
+stored['stormcoder.oauth.anthropic'] = Buffer.from('opaque-session').toString('base64');
 fs.writeFileSync(secretsFile, JSON.stringify(stored));
 fs.writeFileSync(path.join(app, 'settings.json'), JSON.stringify({
-	'openvsChat.defaultProvider': 'groq',
-	'openvsChat.groq.baseUrl': `http://127.0.0.1:${mock.port}/v1`,
-	'openvsChat.groq.model': 'my-groq-model',
-	'openvsChat.mcp.servers': { evil: { command: 'touch', args: [path.join(os.tmpdir(), 'mcp-ran-' + KEY)] } },
-	'openvsChat.hooks': [{ event: 'PreToolUse', command: `touch ${path.join(os.tmpdir(), 'hook-ran-' + KEY)}` }],
-	'openvsChat.systemPrompt': 'ALWAYS ANSWER IN FRENCH',
+	'stormcoder.defaultProvider': 'groq',
+	'stormcoder.groq.baseUrl': `http://127.0.0.1:${mock.port}/v1`,
+	'stormcoder.groq.model': 'my-groq-model',
+	'stormcoder.mcp.servers': { evil: { command: 'touch', args: [path.join(os.tmpdir(), 'mcp-ran-' + KEY)] } },
+	'stormcoder.hooks': [{ event: 'PreToolUse', command: `touch ${path.join(os.tmpdir(), 'hook-ran-' + KEY)}` }],
+	'stormcoder.systemPrompt': 'ALWAYS ANSWER IN FRENCH',
 }));
 const sha = f => crypto.createHash('sha1').update(fs.readFileSync(f)).digest('hex');
 const before = ['secrets.json', 'settings.json'].map(f => sha(path.join(app, f)));
@@ -117,7 +117,7 @@ const run = (...args) => new Promise(resolve => {
 	const after = ['secrets.json', 'settings.json'].map(f => sha(path.join(app, f)));
 	if (fs.existsSync(path.join(app, 'secret.key'))) { after.push(sha(path.join(app, 'secret.key'))); }
 	assert.deepEqual(after, before, 'the app data was not modified');
-	assert.ok(JSON.parse(fs.readFileSync(secretsFile, 'utf8'))['openvsChat.oauth.anthropic'], 'the sign-in session is still there');
+	assert.ok(JSON.parse(fs.readFileSync(secretsFile, 'utf8'))['stormcoder.oauth.anthropic'], 'the sign-in session is still there');
 }
 
 mock.close();

@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -56,7 +56,7 @@ interface McpClient {
  * Expands `${env:NAME}` in a configured header or environment value (user-level config only; see `startServer`).
  *
  * A hosted MCP server needs a token, and the alternative to this is the token itself
- * sitting in `settings.json` or, worse, in a `.openvs/mcp.json` that gets committed.
+ * sitting in `settings.json` or, worse, in a `.stormcoder/mcp.json` that gets committed.
  * Only environment variables are read: no file access, no secret store lookup, nothing
  * that a project-supplied config could aim at something it should not reach.
  */
@@ -65,7 +65,8 @@ function expandEnv(value: string): string {
 }
 
 const NAMESPACE = 'mcp__';
-const PROJECT_FILES = ['.openvs/mcp.json', '.vscode/mcp.json'];
+/** `.openvs/mcp.json` is the pre-rename location, still read so existing projects keep their servers. */
+const PROJECT_FILES = ['.stormcoder/mcp.json', '.openvs/mcp.json', '.vscode/mcp.json'];
 
 /**
  * Both OpenAI and Anthropic constrain a tool name to `^[a-zA-Z0-9_-]{1,64}$` and reject
@@ -212,13 +213,13 @@ export function promptingConsent(memento: vscode.Memento): ProjectServerConsent 
 }
 
 /**
- * Discovers MCP servers from global settings (`openvsChat.mcp.servers`) and a project file
- * (`.openvs/mcp.json` or `.vscode/mcp.json`), connects to them, and exposes their tools to
+ * Discovers MCP servers from global settings (`stormcoder.mcp.servers`) and a project file
+ * (`.stormcoder/mcp.json` or `.vscode/mcp.json`), connects to them, and exposes their tools to
  * the agent under namespaced names. Servers only start in a trusted workspace, and a project's own servers only once allowed.
  */
 /** The workspace-state key a project server's consent is remembered under: its id and exact config. */
 function consentKey(id: string, config: unknown): string {
-	return `openvsChat.mcpConsent.${createHash('sha256').update(JSON.stringify({ id, config })).digest('hex')}`;
+	return `stormcoder.mcpConsent.${createHash('sha256').update(JSON.stringify({ id, config })).digest('hex')}`;
 }
 
 /**
@@ -233,7 +234,7 @@ export async function rememberProjectConsent(memento: vscode.Memento, id: string
 export class McpManager implements McpToolset, vscode.Disposable {
 	/**
 	 * @param projectConsent Asked before starting any server defined by the workspace's own
-	 * `.openvs/mcp.json` / `.vscode/mcp.json`. Workspace trust alone let cloning a repository
+	 * `.stormcoder/mcp.json` / `.vscode/mcp.json`. Workspace trust alone let cloning a repository
 	 * and opening the chat spawn whatever command its config named — VS Code's own MCP support
 	 * asks first. Servers from the user's own settings are never asked about. Defaults to
 	 * refusing, so a caller that wires nothing gets the safe behavior.
@@ -466,7 +467,7 @@ export class McpManager implements McpToolset, vscode.Disposable {
 		const add = (map: Record<string, unknown>, file?: string): void => {
 			for (const id of Object.keys(map)) {
 				if (id === '__proto__') {
-					problems.push(`${file ?? 'openvsChat.mcp.servers'}: ignored a server named "__proto__".`);
+					problems.push(`${file ?? 'stormcoder.mcp.servers'}: ignored a server named "__proto__".`);
 					continue;
 				}
 				merged.set(id, map[id]);
@@ -477,11 +478,11 @@ export class McpManager implements McpToolset, vscode.Disposable {
 				}
 			}
 		};
-		const global = vscode.workspace.getConfiguration('openvsChat').get<unknown>('mcp.servers');
+		const global = vscode.workspace.getConfiguration('stormcoder').get<unknown>('mcp.servers');
 		if (isPlainObject(global)) {
 			add(global);
 		} else if (global !== undefined && global !== null) {
-			problems.push('openvsChat.mcp.servers: ignored (it must be an object keyed by server id).');
+			problems.push('stormcoder.mcp.servers: ignored (it must be an object keyed by server id).');
 		}
 
 		const root = vscode.workspace.workspaceFolders?.[0]?.uri;

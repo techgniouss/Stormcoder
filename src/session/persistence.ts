@@ -1,12 +1,12 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 import { ChatMode, HistoryEntry, SessionDeps, SessionMemento, SessionState, TranscriptEntry, Thenable } from './types';
 
 /** Workspace-state key this store's persisted payload is saved under. */
-export const PERSISTENCE_KEY = 'openvsChat.sessions';
+export const PERSISTENCE_KEY = 'stormcoder.sessions';
 
 /**
  * Total base64 image data kept in a persisted payload, newest message first, across every

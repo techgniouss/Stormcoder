@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -724,7 +724,7 @@ export class AgentRunner {
 				// just noise, it is wrong: forcing earlier compaction on 5k prompts buys a
 				// summarizer request to save nothing.
 				? 'Each step re-sends the whole conversation, so the total grows with the square of a long run — '
-				+ 'lower "openvsChat.agent.maxContextTokens" to force earlier compaction.'
+				+ 'lower "stormcoder.agent.maxContextTokens" to force earlier compaction.'
 				: '')).trim();
 	}
 
@@ -769,7 +769,7 @@ export class AgentRunner {
 				return {
 					reason: 'limit',
 					detail: `The run hit its ${Math.round(this.maxRunMs / 60_000)}-minute ceiling after ${step} steps with the task unfinished. `
-						+ 'Send "continue" to keep going, or raise "openvsChat.agent.maxRunMinutes".',
+						+ 'Send "continue" to keep going, or raise "stormcoder.agent.maxRunMinutes".',
 				};
 			}
 			// Extending silently would leave a run that looks stuck at 100 steps indistinguishable
@@ -941,7 +941,7 @@ export class AgentRunner {
 				if (truncationRounds >= MAX_TRUNCATION_ROUNDS) {
 					return {
 						reason: 'truncated',
-						detail: `The model kept hitting its output limit after ${MAX_TRUNCATION_ROUNDS} continuations — it is writing one very long answer instead of working in steps. Raise "openvsChat.maxTokens", ask for a smaller piece of work, or switch to a model that uses tools.`,
+						detail: `The model kept hitting its output limit after ${MAX_TRUNCATION_ROUNDS} continuations — it is writing one very long answer instead of working in steps. Raise "stormcoder.maxTokens", ask for a smaller piece of work, or switch to a model that uses tools.`,
 					};
 				}
 				truncationRounds++;
@@ -1067,8 +1067,8 @@ export class AgentRunner {
 		return {
 			reason: 'limit',
 			detail: extends_
-				? `Reached the hard ceiling of ${stepCeiling} steps — Full Auto already extended the ${this.maxSteps}-step limit ${AUTO_EXTEND_FACTOR}× on its own. Send "continue" to keep going, or raise "openvsChat.agent.maxSteps".`
-				: `Reached the ${this.maxSteps}-step limit. Send "continue" to keep going, or raise "openvsChat.agent.maxSteps".`,
+				? `Reached the hard ceiling of ${stepCeiling} steps — Full Auto already extended the ${this.maxSteps}-step limit ${AUTO_EXTEND_FACTOR}× on its own. Send "continue" to keep going, or raise "stormcoder.agent.maxSteps".`
+				: `Reached the ${this.maxSteps}-step limit. Send "continue" to keep going, or raise "stormcoder.agent.maxSteps".`,
 		};
 	}
 

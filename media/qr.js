@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // @ts-check
@@ -142,7 +142,7 @@
 				return v;
 			}
 		}
-		throw new Error(`OpenVSQr: ${byteLen} bytes is too large for a version 1-6 QR code (max ${byteCapacity(6)} bytes).`);
+		throw new Error(`StormQr: ${byteLen} bytes is too large for a version 1-6 QR code (max ${byteCapacity(6)} bytes).`);
 	}
 
 	// ---- Bit stream -----------------------------------------------------------------
@@ -614,5 +614,5 @@
 	}
 
 	// @ts-ignore — the webview's own namespace, consumed by pairing.js and the QR tests.
-	globalThis.OpenVSQr = { encode };
+	globalThis.StormQr = { encode };
 }());

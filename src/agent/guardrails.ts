@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -28,7 +28,7 @@ export type ApprovalPolicy = 'always' | 'auto-edits' | 'yolo';
  * Nothing here is unguarded: the deny-list, the protected paths,
  * workspace-root confinement and the untrusted-workspace block are all enforced in code
  * regardless of policy, and the agent still has `ask_user` for decisions that are genuinely
- * the user's. Tighten it with `openvsChat.guardrails.approval`.
+ * the user's. Tighten it with `stormcoder.guardrails.approval`.
  */
 export const DEFAULT_APPROVAL: ApprovalPolicy = 'auto-edits';
 
@@ -58,7 +58,7 @@ const APPROVAL_STRICTNESS: readonly ApprovalPolicy[] = ['always', 'auto-edits', 
  * origin this is always exactly `configured` — the desktop user's own setting, unchanged,
  * because a local run must never regress. For a `remote` origin, the stricter of
  * `configured` and `floor` wins, so a remotely-initiated run can never end up looser than
- * `openvsChat.remote.approvalFloor` even when the desktop's own `guardrails.approval` is
+ * `stormcoder.remote.approvalFloor` even when the desktop's own `guardrails.approval` is
  * `yolo` — see this file's header on why `yolo` is defensible only when the person who can
  * see and veto every action is the one who triggered it.
  */
@@ -110,11 +110,11 @@ export interface Guardrails {
 	readonly parallelReads: boolean;
 	/** Shell `run_command` executes through; empty means the platform default. */
 	readonly shell: string;
-	/** `openvsChat.hooks`: commands run before and after tool calls. Absent means none. */
+	/** `stormcoder.hooks`: commands run before and after tool calls. Absent means none. */
 	readonly hooks?: readonly HookSpec[];
-	/** `openvsChat.agent.sandbox`: run commands inside an OS sandbox. Absent means off. */
+	/** `stormcoder.agent.sandbox`: run commands inside an OS sandbox. Absent means off. */
 	readonly sandbox?: SandboxMode;
-	/** `openvsChat.agent.sandboxWritablePaths`: extra folders a sandboxed command may write. */
+	/** `stormcoder.agent.sandboxWritablePaths`: extra folders a sandboxed command may write. */
 	readonly sandboxWritablePaths?: readonly string[];
 }
 
@@ -187,7 +187,7 @@ function sanitizeTimeout(value: unknown): number {
 
 /** Reads the guardrail configuration from settings. */
 export function loadGuardrails(): Guardrails {
-	const cfg = vscode.workspace.getConfiguration('openvsChat');
+	const cfg = vscode.workspace.getConfiguration('stormcoder');
 	return {
 		approval: parseApprovalPolicy(cfg.get<string>('guardrails.approval')),
 		deniedCommands: compile(cfg.get<string[]>('guardrails.deniedCommands') ?? [...DEFAULT_DENIED_COMMANDS]),
@@ -223,11 +223,11 @@ export function checkCommand(command: string, g: Guardrails): GuardrailCheck {
 	const bare = cmd.replace(/["'\\]/g, '');
 	for (const re of g.deniedCommands) {
 		if (re.test(cmd) || re.test(bare)) {
-			return { ok: false, reason: `Command blocked by a guardrail (matches /${re.source}/). Adjust openvsChat.guardrails.deniedCommands to allow it.` };
+			return { ok: false, reason: `Command blocked by a guardrail (matches /${re.source}/). Adjust stormcoder.guardrails.deniedCommands to allow it.` };
 		}
 	}
 	if (g.allowedCommands.length && !g.allowedCommands.some(re => re.test(cmd))) {
-		return { ok: false, reason: 'Command blocked: an allow-list is configured (openvsChat.guardrails.allowedCommands) and this command does not match it.' };
+		return { ok: false, reason: 'Command blocked: an allow-list is configured (stormcoder.guardrails.allowedCommands) and this command does not match it.' };
 	}
 	return { ok: true };
 }

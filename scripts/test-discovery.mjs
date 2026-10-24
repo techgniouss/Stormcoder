@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Code discovery and the tool additions that came out of the effectiveness audit, run through
@@ -298,7 +298,7 @@ const run = async (name, args) => tools.executeTool({ id: '1', name, args }, app
 // 12. Settings reach the engine: hooks and the sandbox are read by loadGuardrails (the hook test
 //     above injects its own, which would pass even if the setting were never read).
 {
-	const cfg = vs.workspace.getConfiguration('openvsChat');
+	const cfg = vs.workspace.getConfiguration('stormcoder');
 	assert.deepStrictEqual([loadGuardrails().hooks, loadGuardrails().sandbox], [[], 'off'], 'defaults');
 	await cfg.update('hooks', [{ event: 'PreToolUse', matcher: 'run_command', command: 'true' }, { event: 'Bogus', command: 'x' }, 'junk']);
 	await cfg.update('agent.sandbox', 'workspace-offline');
@@ -343,7 +343,7 @@ const run = async (name, args) => tools.executeTool({ id: '1', name, args }, app
 //     elsewhere; a protected file stays read-only; offline mode has no network; and the sandbox
 //     fails closed when it is requested but cannot start.
 if (fs.existsSync('/usr/bin/bwrap') && process.platform === 'linux') {
-	const cfg = vs.workspace.getConfiguration('openvsChat');
+	const cfg = vs.workspace.getConfiguration('stormcoder');
 	await cfg.update('agent.sandbox', 'workspace');
 	// The deny-list would stop the .env write before the sandbox saw it; this tests the sandbox alone.
 	await cfg.update('guardrails.deniedCommands', []);

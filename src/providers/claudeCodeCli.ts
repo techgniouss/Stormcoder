@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -7,7 +7,7 @@ import { spawn } from 'child_process';
 import * as vscode from 'vscode';
 import { ChatMessage, ChatProvider, ChatRequest, ModelEntry, ProviderInfo, StreamChatResult } from './types';
 
-/** Binary name resolved from PATH when `openvsChat.claude-code-cli.cliPath` is unset. */
+/** Binary name resolved from PATH when `stormcoder.claude-code-cli.cliPath` is unset. */
 const DEFAULT_BINARY = 'claude';
 
 /** Grace period after SIGTERM before an aborted child is force-killed with SIGKILL. */
@@ -54,7 +54,7 @@ const SAFE_MODEL = /^[\w.:@\[\]-]+$/;
  * instead of calling `fetch`, a deliberate, narrow exception to the "self-contained, fetch-only"
  * rule on {@link ChatProvider} — see that interface's doc comment.
  *
- * The binary is looked up on PATH (`claude`) unless `openvsChat.claude-code-cli.cliPath` names
+ * The binary is looked up on PATH (`claude`) unless `stormcoder.claude-code-cli.cliPath` names
  * a specific location — read directly via the `vscode` config API (the same way
  * `GeminiWebProvider`'s private `enabled()` reads `webGemini.enabled`) rather than threaded
  * through {@link ChatRequest.baseUrl}, which this provider leaves unused: there is no HTTP
@@ -83,7 +83,7 @@ export class ClaudeCodeCliProvider implements ChatProvider {
 		if (request.signal.aborted) {
 			throw new DOMException('Aborted', 'AbortError');
 		}
-		const cliPath = vscode.workspace.getConfiguration('openvsChat').get<string>('claude-code-cli.cliPath')?.trim();
+		const cliPath = vscode.workspace.getConfiguration('stormcoder').get<string>('claude-code-cli.cliPath')?.trim();
 		const binary = cliPath || DEFAULT_BINARY;
 		const model = request.model.trim();
 		// The model becomes part of a command line (through a shell on Windows, below), so only
@@ -206,7 +206,7 @@ export class ClaudeCodeCliProvider implements ChatProvider {
 /** Friendly install/PATH guidance shown when the CLI binary can't be found or spawned. */
 function installHint(binary: string, detail?: string): string {
 	return `Claude Code CLI ('${binary}') was not found${detail ? ` (${detail})` : ''}. Install the Claude Code ` +
-		'CLI and make sure \'claude\' is on your PATH, or set "openvsChat.claude-code-cli.cliPath" to its full path.';
+		'CLI and make sure \'claude\' is on your PATH, or set "stormcoder.claude-code-cli.cliPath" to its full path.';
 }
 
 /**

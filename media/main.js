@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // @ts-check
@@ -11,20 +11,20 @@
 	 * in chatViewProvider). The same UI serves both surfaces; this flag hides the chat
 	 * chrome and pins the settings panel open so it fills the editor column.
 	 */
-	const SETTINGS_ONLY = !!(/** @type {any} */ (window).__OPENVS_SETTINGS_ONLY__);
+	const SETTINGS_ONLY = !!(/** @type {any} */ (window).__STORM_SETTINGS_ONLY__);
 
 	/**
 	 * URI of the brand mark shown on a fresh chat, handed over by the host because a
 	 * relative path here would resolve against the webview document, not `media/`.
 	 * Always set by `getHtml`; `test-webview` fails if that ever stops being true.
 	 */
-	const HERO_URI = /** @type {string} */ (window.__OPENVS_HERO_URI__ || '');
+	const HERO_URI = /** @type {string} */ (window.__STORM_HERO_URI__ || '');
 
 	/** Sentinel provider id for the role-routed Auto pipeline (mirrors chatViewProvider). */
 	const AUTO_PROVIDER = '__auto__';
 	const ROLE_LABELS = { plan: 'Planning', code: 'Implementation', review: 'Review' };
 
-	/** Agent approval levels (mirrors `openvsChat.guardrails.approval`), most permissive first. */
+	/** Agent approval levels (mirrors `stormcoder.guardrails.approval`), most permissive first. */
 	const APPROVAL_OPTIONS = [
 		{ value: 'yolo', label: 'Full Auto', desc: 'Never asks — the agent edits files and runs commands on its own. Hard guardrails (protected paths, denied commands, workspace confinement) still apply.' },
 		{ value: 'auto-edits', label: 'Default', desc: 'Auto-approves file edits inside the workspace; asks before running commands.' },
@@ -69,9 +69,9 @@
 	let slashCommands = [];
 	/** @type {{ roles: any[], reviewEnabled: boolean, decompose?: boolean }} */
 	let autoConfig = { roles: [], reviewEnabled: true };
-	/** Current agent approval level (synced from `openvsChat.guardrails.approval`). */
+	/** Current agent approval level (synced from `stormcoder.guardrails.approval`). */
 	let approval = 'auto-edits';
-	/** Mirrors `openvsChat.systemPrompt` / `maxTokens` / `rules` / `agent.max*`, synced on every 'config'. */
+	/** Mirrors `stormcoder.systemPrompt` / `maxTokens` / `rules` / `agent.max*`, synced on every 'config'. */
 	let generalConfig = { systemPrompt: '', maxTokens: 8192, rules: '', maxSteps: 100, maxRunMinutes: 30 };
 	/** @type {{ label: string, content: string } | null} */
 	let currentContext = null;
@@ -254,7 +254,7 @@
 
 	// The renderer itself lives in media/markdown.js — pure string → HTML, so it can be
 	// driven directly by scripts/test-markdown.mjs, which nothing inside this IIFE can be.
-	const { render: renderMarkdown, escapeHtml } = OpenVSMarkdown;
+	const { render: renderMarkdown, escapeHtml } = StormMarkdown;
 
 	/**
 	 * Renders markdown into a message body, preserving which reasoning blocks the user had
@@ -749,7 +749,7 @@
 	// tested against a DOM stand-in: this file is one big IIFE that needs a live workbench
 	// to load, and these cards are the one place where a silent rendering failure strands
 	// an agent run rather than merely looking wrong.
-	const prompts = OpenVSPrompts.create({
+	const prompts = StormPrompts.create({
 		// Cards append straight into the transcript, which would leave them below the
 		// working strip — the run is still going, so the strip has to stay at the foot.
 		container: { appendChild: node => { els.messages.appendChild(node); keepWorkingLast(); } },
@@ -768,7 +768,7 @@
 	 * the same testability reasons as `prompts` above. Lives in the Settings panel
 	 * (`#remotePanel`), not the transcript.
 	 */
-	const pairing = OpenVSPairing.create({ container: els.remotePanel, post: m => vscode.postMessage(m) });
+	const pairing = StormPairing.create({ container: els.remotePanel, post: m => vscode.postMessage(m) });
 
 	/** Re-attaches every unanswered card for the active tab after a transcript rebuild. */
 	function renderOpenPrompts() {

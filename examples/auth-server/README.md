@@ -1,7 +1,7 @@
 # Reference web sign-in server
 
 This is a **concrete example** of the backend the chat's **“Sign in with web”** button
-talks to. Out of the box, `openvsChat.<provider>.authUrl` is blank and the button has
+talks to. Out of the box, `stormcoder.<provider>.authUrl` is blank and the button has
 nothing to call — this server fills that gap so you can see the whole login loop work,
 and gives you a starting point for a real one.
 
@@ -36,7 +36,7 @@ Then set the provider's auth URL in your settings:
 
 ```jsonc
 // settings.json
-"openvsChat.nvidia.authUrl": "http://localhost:7345/login"
+"stormcoder.nvidia.authUrl": "http://localhost:7345/login"
 ```
 
 Open the chat → ⚙ Providers → **Sign in with web** next to NVIDIA. The browser opens the
@@ -81,8 +81,8 @@ Then configure the extension to use the proxy for **both** sign-in and API calls
 
 ```jsonc
 // settings.json
-"openvsChat.nvidia.authUrl": "http://localhost:7345/login",
-"openvsChat.nvidia.baseUrl": "http://localhost:7345/v1"
+"stormcoder.nvidia.authUrl": "http://localhost:7345/login",
+"stormcoder.nvidia.baseUrl": "http://localhost:7345/v1"
 ```
 
 Now the flow is fully keyless for the user:
@@ -101,6 +101,6 @@ Now the flow is fully keyless for the user:
 
 - Swap the demo page for the provider's OAuth authorize/redirect, or your own SSO.
 - Mint per-user, short-lived tokens (and, ideally, proxy provider calls so the real
-  provider key never reaches the client). You can then point `openvsChat.<provider>.baseUrl`
+  provider key never reaches the client). You can then point `stormcoder.<provider>.baseUrl`
   at your proxy too.
 - Serve over HTTPS and validate `state` to protect the redirect.

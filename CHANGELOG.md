@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Renamed the remaining OpenVS wording to Stormcoder: product name in menus and messages, the settings namespace (`openvsChat.*` is now `stormcoder.*`) and the project folder (`.openvs/` is now `.stormcoder/`). Existing installs are migrated: saved settings are moved to the new keys on first start, and skills, MCP config, rules and memory in a legacy `.openvs/` folder are still read. The pre-rename relay, extension id and sign-in callback names are unchanged because deployed services depend on them.
 - Auto Routing pickers (plan, code, review) list only the models the provider reports, loaded live like the chat model picker. The hardcoded suggestions are no longer shown, and switching provider pins the first live model once the catalog arrives.
 Agent effectiveness audit.
 

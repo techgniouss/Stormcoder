@@ -26,7 +26,7 @@ Opening a folder asks once whether to trust it. A trusted folder lets the agent 
 
 - Secrets use `safeStorage` (OS keychain). Without one, AES-256-GCM with a random key in a `0600` file: protection against copying the file, not against another process running as you.
 - The asset protocol serves only `media/`, `shell/`, `skills/`, `relay-pwa/` and generated view HTML, with path traversal refused.
-- The built-in file editor only opens files inside the user data directory and the project's `.openvs/` and `.vscode/` folders.
+- The built-in file editor only opens files inside the user data directory and the project's `.stormcoder/` and `.vscode/` folders.
 - Windows, navigation and `window.open` from the page are blocked; links open in the system browser.
 - The agent's guardrails (`src/agent/guardrails.ts`) are enforced in code and are unchanged.
 

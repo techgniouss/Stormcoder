@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -31,7 +31,7 @@ export const ROLE_LABELS: Record<RoutedRole, string> = {
 	complete: 'Inline Completions',
 };
 
-/** The settings key (under `openvsChat.auto`) that stores each role's `provider:model`. */
+/** The settings key (under `stormcoder.auto`) that stores each role's `provider:model`. */
 const ROLE_SETTING: Record<RoutedRole, string> = {
 	plan: 'auto.planModel',
 	code: 'auto.codeModel',
@@ -199,7 +199,7 @@ export class RoleRouter {
 
 	/** Reads the raw `provider:model` setting for a role (empty string if unset). */
 	getConfigured(role: RoutedRole): { providerId: string; model: string } | undefined {
-		const raw = vscode.workspace.getConfiguration('openvsChat').get<string>(ROLE_SETTING[role])?.trim();
+		const raw = vscode.workspace.getConfiguration('stormcoder').get<string>(ROLE_SETTING[role])?.trim();
 		if (!raw) {
 			return undefined;
 		}
@@ -214,17 +214,17 @@ export class RoleRouter {
 	/** Persists a role assignment, or clears it (revert to auto-infer) when providerId is empty. */
 	async setConfigured(role: RoutedRole, providerId: string, model: string): Promise<void> {
 		const value = providerId && model ? `${providerId}:${model}` : '';
-		await vscode.workspace.getConfiguration('openvsChat').update(
+		await vscode.workspace.getConfiguration('stormcoder').update(
 			ROLE_SETTING[role], value, vscode.ConfigurationTarget.Global);
 	}
 
 	isReviewEnabled(): boolean {
-		return vscode.workspace.getConfiguration('openvsChat').get<boolean>('auto.enableReview') ?? true;
+		return vscode.workspace.getConfiguration('stormcoder').get<boolean>('auto.enableReview') ?? true;
 	}
 
 	/** Whether Auto+Agent should split the plan into steps and run a sub-agent per step. */
 	isDecompose(): boolean {
-		return vscode.workspace.getConfiguration('openvsChat').get<boolean>('auto.decompose') ?? false;
+		return vscode.workspace.getConfiguration('stormcoder').get<boolean>('auto.decompose') ?? false;
 	}
 
 	/**

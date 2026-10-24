@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -54,7 +54,7 @@ export class OpenRouterProvider extends OpenAICompatibleProvider {
 
 	protected override extraHeaders(): Record<string, string> {
 		// App attribution headers recommended by OpenRouter (shown on their rankings).
-		return { 'HTTP-Referer': 'https://github.com/openvs', 'X-Title': 'Stormcoder' };
+		return { 'HTTP-Referer': 'https://github.com/techgniouss/stormcoder', 'X-Title': 'Stormcoder' };
 	}
 
 	/**

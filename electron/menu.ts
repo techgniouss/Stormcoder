@@ -29,7 +29,7 @@ export function buildMenu(a: MenuActions): Menu {
 		{
 			label: 'File',
 			submenu: [
-				{ label: 'New Chat', accelerator: 'CmdOrCtrl+N', click: () => a.command('openvsChat.newChat') },
+				{ label: 'New Chat', accelerator: 'CmdOrCtrl+N', click: () => a.command('stormcoder.newChat') },
 				{ type: 'separator' },
 				{ label: 'Open Project Folder…', accelerator: 'CmdOrCtrl+O', click: a.openFolder },
 				{

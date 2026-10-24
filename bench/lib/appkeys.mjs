@@ -4,7 +4,7 @@
 // benchmark runs its engine under Electron against a private COPY of the app's data. The copy is
 // deliberately narrower than the original:
 //   - API-key secrets are kept, still encrypted; nothing is ever decrypted to disk by this code.
-//   - Sign-in sessions (`openvsChat.oauth.*`) are dropped. Refreshing a copied token can rotate the
+//   - Sign-in sessions (`stormcoder.oauth.*`) are dropped. Refreshing a copied token can rotate the
 //     refresh token and silently sign the real app out.
 //   - Only provider settings (default provider, models, base URLs) are kept. MCP servers, hooks,
 //     rules and the like would start processes or change results, and are not what is measured.
@@ -13,9 +13,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const API_KEY = 'openvsChat.apiKey.';
-const OAUTH_KEY = 'openvsChat.oauth.';
-const KEPT_SETTING = /^openvsChat\.(defaultProvider|maxTokens|(?!completions\.|persona\.)[a-z0-9_-]+\.(model|baseUrl|thinking|accountId))$/i;
+const API_KEY = 'stormcoder.apiKey.';
+const OAUTH_KEY = 'stormcoder.oauth.';
+const KEPT_SETTING = /^stormcoder\.(defaultProvider|maxTokens|(?!completions\.|persona\.)[a-z0-9_-]+\.(model|baseUrl|thinking|accountId))$/i;
 
 /** Where the packaged app keeps its data on this machine. */
 export function defaultAppData(platform = process.platform, env = process.env, home = os.homedir()) {
@@ -39,12 +39,12 @@ export function inspectApp(dir) {
 	const names = Object.keys(secrets);
 	const apiKeys = names.filter(n => n.startsWith(API_KEY)).map(n => n.slice(API_KEY.length));
 	const signedIn = names.filter(n => n.startsWith(OAUTH_KEY)).map(n => n.slice(OAUTH_KEY.length)).filter(id => !apiKeys.includes(id));
-	return { dir, apiKeys, signedIn, defaultProvider: settings['openvsChat.defaultProvider'], settings, hasKeyFile: fs.existsSync(path.join(dir, 'secret.key')) };
+	return { dir, apiKeys, signedIn, defaultProvider: settings['stormcoder.defaultProvider'], settings, hasKeyFile: fs.existsSync(path.join(dir, 'secret.key')) };
 }
 
 /** The model the user has configured for `provider`, if any. */
 export function configuredModel(app, provider) {
-	return app?.settings?.[`openvsChat.${provider}.model`];
+	return app?.settings?.[`stormcoder.${provider}.model`];
 }
 
 /**

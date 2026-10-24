@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -2380,7 +2380,7 @@ async function runCommand(dir: vscode.Uri, dirLabel: string, command: string, ap
 			const out = collector.render();
 			const seconds = Math.round(g.commandTimeoutMs / 1000);
 			finish({
-				result: `The command was killed after the ${seconds}s timeout (openvsChat.agent.commandTimeoutMs) — it did NOT fail on its own. `
+				result: `The command was killed after the ${seconds}s timeout (stormcoder.agent.commandTimeoutMs) — it did NOT fail on its own. `
 					+ `Its exit status is unknown. Re-run a faster subset, or raise the timeout.`
 					+ (out ? `\n\nOutput before it was killed:\n${out}` : ''),
 				isError: true,
@@ -2727,7 +2727,7 @@ async function editNotebook(target: WorkspacePath, args: Record<string, unknown>
 /**
  * Starts `command` the way `run_command` runs everything: in its own process group off Windows
  * (so `killTree` can end whatever it starts), through the configured shell — and, when
- * `openvsChat.agent.sandbox` is on, inside the OS sandbox. A sandbox that cannot be set up
+ * `stormcoder.agent.sandbox` is on, inside the OS sandbox. A sandbox that cannot be set up
  * throws, so the command does not run unprotected; callers report that as a failed start.
  */
 function launchCommand(command: string, cwd: string, shell: string | boolean, g: Guardrails): ReturnType<typeof spawn> {

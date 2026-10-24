@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -122,6 +122,6 @@ function deliver(sink: MessageSink, message: Record<string, unknown> & { type: s
 	try {
 		sink.post(message);
 	} catch (err) {
-		console.warn(`OpenVS: could not deliver "${message.type}" to ${sink.kind} sink ${sink.id}.`, err);
+		console.warn(`Stormcoder: could not deliver "${message.type}" to ${sink.kind} sink ${sink.id}.`, err);
 	}
 }

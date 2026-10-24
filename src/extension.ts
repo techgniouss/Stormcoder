@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -25,7 +25,7 @@ import { SkillRegistry } from './skills';
  * kept in step with the setting.
  */
 function applyStreamIdleTimeout(): void {
-	const ms = vscode.workspace.getConfiguration('openvsChat').get<number>('stream.idleTimeoutMs');
+	const ms = vscode.workspace.getConfiguration('stormcoder').get<number>('stream.idleTimeoutMs');
 	if (typeof ms === 'number') {
 		setStreamIdleTimeout(ms);
 	}
@@ -42,7 +42,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	loadEnvFile(context.extensionPath);
 	applyStreamIdleTimeout();
 	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
-		if (e.affectsConfiguration('openvsChat.stream.idleTimeoutMs')) {
+		if (e.affectsConfiguration('stormcoder.stream.idleTimeoutMs')) {
 			applyStreamIdleTimeout();
 		}
 	}));
@@ -64,35 +64,35 @@ export function activate(context: vscode.ExtensionContext): void {
 	);
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('openvsChat.focus', () =>
-			vscode.commands.executeCommand('openvsChat.view.focus')),
-		vscode.commands.registerCommand('openvsChat.newChat', () => viewProvider.newChat()),
-		vscode.commands.registerCommand('openvsChat.openSettings', () => viewProvider.openSettingsWindow()),
-		vscode.commands.registerCommand('openvsChat.selectProvider', () => selectProvider(registry, viewProvider)),
-		vscode.commands.registerCommand('openvsChat.configureProvider', (presetId?: string) =>
+		vscode.commands.registerCommand('stormcoder.focus', () =>
+			vscode.commands.executeCommand('stormcoder.view.focus')),
+		vscode.commands.registerCommand('stormcoder.newChat', () => viewProvider.newChat()),
+		vscode.commands.registerCommand('stormcoder.openSettings', () => viewProvider.openSettingsWindow()),
+		vscode.commands.registerCommand('stormcoder.selectProvider', () => selectProvider(registry, viewProvider)),
+		vscode.commands.registerCommand('stormcoder.configureProvider', (presetId?: string) =>
 			configureProvider(registry, viewProvider, presetId)),
-		vscode.commands.registerCommand('openvsChat.signIn', (presetId?: string) =>
+		vscode.commands.registerCommand('stormcoder.signIn', (presetId?: string) =>
 			signIn(registry, viewProvider, presetId)),
-		vscode.commands.registerCommand('openvsChat.clearKey', () => clearKey(registry, viewProvider)),
-		vscode.commands.registerCommand('openvsChat.mcpReconnect', async () => {
+		vscode.commands.registerCommand('stormcoder.clearKey', () => clearKey(registry, viewProvider)),
+		vscode.commands.registerCommand('stormcoder.mcpReconnect', async () => {
 			mcp.reconnect();
 			await mcp.ensureStarted();
 			vscode.window.showInformationMessage(`MCP: ${mcp.getStatus().join('  ·  ')}`);
 		}),
-		vscode.commands.registerCommand('openvsChat.mcpStatus', async () => {
+		vscode.commands.registerCommand('stormcoder.mcpStatus', async () => {
 			await mcp.ensureStarted();
 			vscode.window.showInformationMessage(`MCP: ${mcp.getStatus().join('  ·  ')}`);
 		}),
-		vscode.commands.registerCommand('openvsChat.selectSkill', () => selectSkill(viewProvider, context.extensionUri)),
-		vscode.commands.registerCommand('openvsChat.createSkill', () => createSkill(viewProvider)),
-		vscode.commands.registerCommand('openvsChat.mcpAdd', () => mcpAdd(mcp, context.workspaceState)),
-		vscode.commands.registerCommand('openvsChat.mcpOpenConfig', () => mcpOpenConfig()),
-		vscode.commands.registerCommand('openvsChat.remoteEnable', (options?: { quiet?: boolean }) => remoteEnable(remoteService, options?.quiet === true)),
-		vscode.commands.registerCommand('openvsChat.remoteInstallCloudflared', () => remoteInstallCloudflared(context)),
-		vscode.commands.registerCommand('openvsChat.remoteSetTunnel', () => remoteSetTunnel(context)),
-		vscode.commands.registerCommand('openvsChat.remoteStatus', () => remoteStatus(remoteService)),
-		vscode.commands.registerCommand('openvsChat.remoteDeployRelay', () => remoteDeployRelay(context, registry)),
-		vscode.commands.registerCommand('openvsChat.generateCommitMessage', () => {
+		vscode.commands.registerCommand('stormcoder.selectSkill', () => selectSkill(viewProvider, context.extensionUri)),
+		vscode.commands.registerCommand('stormcoder.createSkill', () => createSkill(viewProvider)),
+		vscode.commands.registerCommand('stormcoder.mcpAdd', () => mcpAdd(mcp, context.workspaceState)),
+		vscode.commands.registerCommand('stormcoder.mcpOpenConfig', () => mcpOpenConfig()),
+		vscode.commands.registerCommand('stormcoder.remoteEnable', (options?: { quiet?: boolean }) => remoteEnable(remoteService, options?.quiet === true)),
+		vscode.commands.registerCommand('stormcoder.remoteInstallCloudflared', () => remoteInstallCloudflared(context)),
+		vscode.commands.registerCommand('stormcoder.remoteSetTunnel', () => remoteSetTunnel(context)),
+		vscode.commands.registerCommand('stormcoder.remoteStatus', () => remoteStatus(remoteService)),
+		vscode.commands.registerCommand('stormcoder.remoteDeployRelay', () => remoteDeployRelay(context, registry)),
+		vscode.commands.registerCommand('stormcoder.generateCommitMessage', () => {
 			const cts = new vscode.CancellationTokenSource();
 			return generateCommitMessage(registry, cts.token).finally(() => cts.dispose());
 		}),
@@ -102,7 +102,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	// starting settings: the Settings UI (or a hand edit of settings.json) can flip
 	// `remote.enabled` on, or clear `relayUrl`, without ever going through `remoteEnable()`.
 	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
-		if (['enabled', 'relayUrl', 'relayMode'].some(key => e.affectsConfiguration(`openvsChat.remote.${key}`))) {
+		if (['enabled', 'relayUrl', 'relayMode'].some(key => e.affectsConfiguration(`stormcoder.remote.${key}`))) {
 			void warnIfRemoteMisconfigured(context);
 		}
 	}));
@@ -118,7 +118,7 @@ export function activate(context: vscode.ExtensionContext): void {
  * so a *future* re-enable-without-relay prompts fresh rather than staying silenced forever from
  * one old dismissal.
  */
-const REMOTE_DEPLOY_NUDGE_DISMISSED_KEY = 'openvsChat.remote.deployNudgeDismissed';
+const REMOTE_DEPLOY_NUDGE_DISMISSED_KEY = 'stormcoder.remote.deployNudgeDismissed';
 
 /**
  * Nudges the user to finish relay setup when `remote.enabled` is on but `relayUrl` is still
@@ -146,11 +146,11 @@ async function warnIfRemoteMisconfigured(context: vscode.ExtensionContext): Prom
 		return;
 	}
 	const action = await vscode.window.showWarningMessage(
-		'OpenVS remote control is enabled, but no relay is deployed yet — pairing won\'t work until you do. '
+		'Stormcoder remote control is enabled, but no relay is deployed yet — pairing won\'t work until you do. '
 		+ 'Run "Remote: Deploy Your Own Relay" to do that in one step.',
 		'Deploy Your Own Relay', 'Don\'t Ask Again');
 	if (action === 'Deploy Your Own Relay') {
-		await vscode.commands.executeCommand('openvsChat.remoteDeployRelay');
+		await vscode.commands.executeCommand('stormcoder.remoteDeployRelay');
 	} else if (action === 'Don\'t Ask Again') {
 		await context.globalState.update(REMOTE_DEPLOY_NUDGE_DISMISSED_KEY, true);
 	}
@@ -183,7 +183,7 @@ async function selectProvider(registry: ProviderRegistry, view: ChatViewProvider
 	if (!id) {
 		return;
 	}
-	await vscode.workspace.getConfiguration('openvsChat').update(
+	await vscode.workspace.getConfiguration('stormcoder').update(
 		'defaultProvider', id, vscode.ConfigurationTarget.Global);
 	view.selectProvider(id);
 	await view.refreshConfig();
@@ -254,19 +254,19 @@ async function selectSkill(view: ChatViewProvider, extensionUri: vscode.Uri): Pr
 	);
 	if (picked) {
 		await view.setActiveSkills(picked.map(p => p.id));
-		await vscode.commands.executeCommand('openvsChat.view.focus');
+		await vscode.commands.executeCommand('stormcoder.view.focus');
 	}
 }
 
 /**
  * Guided skill creation: asks for an id/name/description, writes a Markdown scaffold
- * to `.openvs/skills/<id>.md` in the workspace, and opens it for editing. The skill
+ * to `.stormcoder/skills/<id>.md` in the workspace, and opens it for editing. The skill
  * shows up in the picker immediately (the registry re-reads the folder on each list).
  */
 async function createSkill(view: ChatViewProvider): Promise<void> {
 	const root = vscode.workspace.workspaceFolders?.[0]?.uri;
 	if (!root) {
-		vscode.window.showWarningMessage('Open a folder first — workspace skills live in .openvs/skills/. (You can also define global skills via the "openvsChat.skills" setting.)');
+		vscode.window.showWarningMessage('Open a folder first — workspace skills live in .stormcoder/skills/. (You can also define global skills via the "stormcoder.skills" setting.)');
 		return;
 	}
 	const id = await vscode.window.showInputBox({
@@ -296,7 +296,7 @@ async function createSkill(view: ChatViewProvider): Promise<void> {
 		return;
 	}
 
-	const file = vscode.Uri.joinPath(root, '.openvs', 'skills', `${id}.md`);
+	const file = vscode.Uri.joinPath(root, '.stormcoder', 'skills', `${id}.md`);
 	try {
 		await vscode.workspace.fs.stat(file);
 		const overwrite = await vscode.window.showWarningMessage(
@@ -333,8 +333,8 @@ async function mcpAdd(mcp: McpManager, workspaceState: vscode.Memento): Promise<
 	const root = vscode.workspace.workspaceFolders?.[0]?.uri;
 	const target = await vscode.window.showQuickPick(
 		[
-			...(root ? [{ label: '$(root-folder) This project', description: '.openvs/mcp.json (checked into the repo if you commit it)', id: 'project' }] : []),
-			{ label: '$(globe) Global', description: 'openvsChat.mcp.servers user setting (all projects)', id: 'global' },
+			...(root ? [{ label: '$(root-folder) This project', description: '.stormcoder/mcp.json (checked into the repo if you commit it)', id: 'project' }] : []),
+			{ label: '$(globe) Global', description: 'stormcoder.mcp.servers user setting (all projects)', id: 'global' },
 		],
 		{ placeHolder: 'Where should this MCP server be configured?' },
 	);
@@ -392,7 +392,7 @@ async function mcpAdd(mcp: McpManager, workspaceState: vscode.Memento): Promise<
 	}
 
 	if (target.id === 'project' && root) {
-		const file = vscode.Uri.joinPath(root, '.openvs', 'mcp.json');
+		const file = vscode.Uri.joinPath(root, '.stormcoder', 'mcp.json');
 		let config: { servers: Record<string, unknown> } = { servers: {} };
 		let raw: string | undefined;
 		try {
@@ -429,7 +429,7 @@ async function mcpAdd(mcp: McpManager, workspaceState: vscode.Memento): Promise<
 		// Added by the user, here and now: not a repository's server to ask them about.
 		await rememberProjectConsent(workspaceState, id, JSON.parse(JSON.stringify(entry)));
 	} else {
-		const cfg = vscode.workspace.getConfiguration('openvsChat');
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
 		const servers = { ...(cfg.get<Record<string, unknown>>('mcp.servers') ?? {}) };
 		servers[id] = entry;
 		await cfg.update('mcp.servers', servers, vscode.ConfigurationTarget.Global);
@@ -440,14 +440,14 @@ async function mcpAdd(mcp: McpManager, workspaceState: vscode.Memento): Promise<
 	vscode.window.showInformationMessage(`MCP: ${mcp.getStatus().join('  ·  ')}`);
 }
 
-/** Opens (creating if needed) the project's `.openvs/mcp.json`. */
+/** Opens (creating if needed) the project's `.stormcoder/mcp.json`. */
 async function mcpOpenConfig(): Promise<void> {
 	const root = vscode.workspace.workspaceFolders?.[0]?.uri;
 	if (!root) {
-		vscode.window.showWarningMessage('Open a folder first — the project MCP config lives in .openvs/mcp.json. (Global servers live in the "openvsChat.mcp.servers" setting.)');
+		vscode.window.showWarningMessage('Open a folder first — the project MCP config lives in .stormcoder/mcp.json. (Global servers live in the "stormcoder.mcp.servers" setting.)');
 		return;
 	}
-	const file = vscode.Uri.joinPath(root, '.openvs', 'mcp.json');
+	const file = vscode.Uri.joinPath(root, '.stormcoder', 'mcp.json');
 	try {
 		await vscode.workspace.fs.stat(file);
 	} catch {
@@ -458,7 +458,7 @@ async function mcpOpenConfig(): Promise<void> {
 }
 
 /**
- * `openvsChat.remoteEnable`: flips `openvsChat.remote.enabled` on, or — if no relay URL is
+ * `stormcoder.remoteEnable`: flips `stormcoder.remote.enabled` on, or — if no relay URL is
  * configured yet — explains what's missing instead. There is no default relay; the user
  * deploys their own via `wrangler deploy` first.
  */
@@ -466,37 +466,37 @@ async function remoteEnable(remoteService: RemoteService, quiet = false): Promis
 	if (getRelayMode() === 'local') {
 		// The user asked for remote: local hosting may install cloudflared without asking again.
 		remoteService.enableRequested();
-		await vscode.workspace.getConfiguration('openvsChat').update('remote.enabled', true, vscode.ConfigurationTarget.Global);
+		await vscode.workspace.getConfiguration('stormcoder').update('remote.enabled', true, vscode.ConfigurationTarget.Global);
 		// `quiet`: turned on from the Settings panel's own switch, which is already showing
 		// where to pair — the "Pair a Device" nudge would only point back at it.
 		if (quiet) {
 			return;
 		}
 		const choice = await vscode.window.showInformationMessage(
-			'OpenVS remote control is on. OpenVS runs the relay on this machine and reaches your phone through Cloudflare Tunnel — pair a device from Settings → Remote control.',
+			'Stormcoder remote control is on. Stormcoder runs the relay on this machine and reaches your phone through Cloudflare Tunnel — pair a device from Settings → Remote control.',
 			'Pair a Device');
 		if (choice) {
-			await vscode.commands.executeCommand('openvsChat.openSettings');
+			await vscode.commands.executeCommand('stormcoder.openSettings');
 		}
 		return;
 	}
 	if (!getRelayUrl()) {
 		const action = await vscode.window.showWarningMessage(
-			'Remote relay mode is set to "hosted", but no relay URL is set. Set "openvsChat.remote.relayMode" to "auto" to have OpenVS host the relay on this computer, '
+			'Remote relay mode is set to "hosted", but no relay URL is set. Set "stormcoder.remote.relayMode" to "auto" to have Stormcoder host the relay on this computer, '
 			+ 'or run "Remote: Deploy Your Own Relay" to deploy one to Cloudflare.',
 			'Deploy Your Own Relay');
 		if (action) {
-			await vscode.commands.executeCommand('openvsChat.remoteDeployRelay');
+			await vscode.commands.executeCommand('stormcoder.remoteDeployRelay');
 		}
 		return;
 	}
-	await vscode.workspace.getConfiguration('openvsChat').update('remote.enabled', true, vscode.ConfigurationTarget.Global);
+	await vscode.workspace.getConfiguration('stormcoder').update('remote.enabled', true, vscode.ConfigurationTarget.Global);
 	vscode.window.showInformationMessage(
-		'OpenVS remote control is enabled. Open ⚙ Providers & settings → Remote control to pair a device.');
+		'Stormcoder remote control is enabled. Open ⚙ Providers & settings → Remote control to pair a device.');
 }
 
 /**
- * `openvsChat.remoteInstallCloudflared`: installs Cloudflare's official `cloudflared` into this
+ * `stormcoder.remoteInstallCloudflared`: installs Cloudflare's official `cloudflared` into this
  * extension's storage (or reports the one already on the machine) — the manual path to what
  * local hosting otherwise does on its own the first time remote is turned on.
  */
@@ -508,17 +508,17 @@ async function remoteInstallCloudflared(context: vscode.ExtensionContext): Promi
 }
 
 /**
- * `openvsChat.remoteSetTunnel`: switches local hosting from a quick tunnel (a random address
+ * `stormcoder.remoteSetTunnel`: switches local hosting from a quick tunnel (a random address
  * that changes on every restart, so phones re-pair) to the user's own named tunnel, whose
  * hostname never changes. Takes the hostname and the tunnel's connector token from the
  * Cloudflare dashboard (Zero Trust → Networks → Tunnels → the tunnel's install command); the
  * token goes to SecretStorage, never settings. An empty hostname goes back to a quick tunnel.
  */
 async function remoteSetTunnel(context: vscode.ExtensionContext): Promise<void> {
-	const cfg = vscode.workspace.getConfiguration('openvsChat');
+	const cfg = vscode.workspace.getConfiguration('stormcoder');
 	const hostname = await vscode.window.showInputBox({
 		title: 'Use My Cloudflare Tunnel (1/2)',
-		prompt: 'Public hostname of your named tunnel, routed to http://localhost:8787 (or your "openvsChat.remote.localPort"). Leave empty to go back to a quick tunnel.',
+		prompt: 'Public hostname of your named tunnel, routed to http://localhost:8787 (or your "stormcoder.remote.localPort"). Leave empty to go back to a quick tunnel.',
 		placeHolder: 'remote.example.com',
 		value: cfg.get<string>('remote.tunnelHostname') ?? '',
 		ignoreFocusOut: true,
@@ -530,7 +530,7 @@ async function remoteSetTunnel(context: vscode.ExtensionContext): Promise<void> 
 	if (!clean) {
 		await context.secrets.delete(TUNNEL_TOKEN_KEY);
 		await cfg.update('remote.tunnelHostname', '', vscode.ConfigurationTarget.Global);
-		vscode.window.showInformationMessage('OpenVS Remote is back on a quick tunnel.');
+		vscode.window.showInformationMessage('Stormcoder Remote is back on a quick tunnel.');
 		return;
 	}
 	const token = await vscode.window.showInputBox({
@@ -546,16 +546,16 @@ async function remoteSetTunnel(context: vscode.ExtensionContext): Promise<void> 
 	await context.secrets.store(TUNNEL_TOKEN_KEY, token.trim());
 	// Written last: this change is what restarts local hosting, and it must find the token.
 	await cfg.update('remote.tunnelHostname', clean, vscode.ConfigurationTarget.Global);
-	vscode.window.showInformationMessage(`OpenVS Remote will use https://${clean}. Pair your phone once more; after that the address never changes.`);
+	vscode.window.showInformationMessage(`Stormcoder Remote will use https://${clean}. Pair your phone once more; after that the address never changes.`);
 }
 
 /**
- * `openvsChat.remoteStatus`: shows the current connection state (disabled / connecting / connected / …).
+ * `stormcoder.remoteStatus`: shows the current connection state (disabled / connecting / connected / …).
  * The in-panel status indicator (`media/pairing.js`, in Settings → Remote control) shows this
  * live; this command remains as a keyboard-only / Command Palette alternative.
  */
 function remoteStatus(remoteService: RemoteService): void {
-	vscode.window.showInformationMessage(`OpenVS remote control: ${remoteService.status()}.`);
+	vscode.window.showInformationMessage(`Stormcoder remote control: ${remoteService.status()}.`);
 }
 
 /**
@@ -587,10 +587,10 @@ function writableRelayDir(bundled: string, storageDir: string): string | undefin
 }
 
 /**
- * `openvsChat.remoteDeployRelay`: turns the manual "deploy your own relay" steps this
+ * `stormcoder.remoteDeployRelay`: turns the manual "deploy your own relay" steps this
  * extension has always required (see `remoteEnable`'s warning) into one click — installs
  * `openvs-relay/`'s dependencies if needed, mints and uploads a `RELAY_PEPPER` secret, runs
- * `wrangler deploy`, and saves the resulting URL into `openvsChat.remote.relayUrl`. Only works
+ * `wrangler deploy`, and saves the resulting URL into `stormcoder.remote.relayUrl`. Only works
  * from a full source checkout: `openvs-relay/` is a sibling of `extensions/` in this repo, not
  * something a normally-installed extension carries with it — this extension ships built-in
  * only (a packaged VSIX is refused, see `chatViewProvider.ts`'s `search_files` doc), so anyone
@@ -600,7 +600,7 @@ function writableRelayDir(bundled: string, storageDir: string): string | undefin
  * rather than the `wrangler login` browser flow — reusing the exact credential the Cloudflare
  * Workers AI *chat provider* already asks for (`registry.getApiKey('cloudflare')`, the same
  * secret `ENV_VARS.cloudflare = 'CLOUDFLARE_API_TOKEN'` names in `providers/registry.ts`, plus
- * `openvsChat.cloudflare.accountId`). One Cloudflare credential serves both features instead of
+ * `stormcoder.cloudflare.accountId`). One Cloudflare credential serves both features instead of
  * this command inventing a second, parallel place to paste the same token. When either half is
  * missing this refuses up front with a pointer to where to add it, rather than letting
  * `wrangler` fail deep into the pipeline with a login prompt that has nothing to attach to in a
@@ -611,12 +611,12 @@ async function remoteDeployRelay(context: vscode.ExtensionContext, registry: Pro
 	if (!relayDir || !fs.existsSync(relayDir)) {
 		vscode.window.showErrorMessage(
 			'Could not find the bundled openvs-relay/ — the relay package is missing from this installation. '
-			+ 'From a checkout: cd openvs-relay && npm install && npx wrangler deploy, then paste the printed URL into "openvsChat.remote.relayUrl".');
+			+ 'From a checkout: cd openvs-relay && npm install && npx wrangler deploy, then paste the printed URL into "stormcoder.remote.relayUrl".');
 		return;
 	}
 
 	const cloudflareToken = await registry.getApiKey('cloudflare');
-	const cloudflareAccountId = vscode.workspace.getConfiguration('openvsChat').get<string>('cloudflare.accountId')?.trim();
+	const cloudflareAccountId = vscode.workspace.getConfiguration('stormcoder').get<string>('cloudflare.accountId')?.trim();
 	if (!cloudflareToken || !cloudflareAccountId) {
 		const missing = !cloudflareToken && !cloudflareAccountId ? 'API token and Account ID'
 			: !cloudflareToken ? 'API token' : 'Account ID';
@@ -625,14 +625,14 @@ async function remoteDeployRelay(context: vscode.ExtensionContext, registry: Pro
 			+ 'under ⚙ Providers & settings → Providers → Cloudflare, then retry this command.',
 			'Open Settings');
 		if (action) {
-			await vscode.commands.executeCommand('openvsChat.openSettings');
+			await vscode.commands.executeCommand('stormcoder.openSettings');
 		}
 		return;
 	}
 
 	const channel = vscode.window.createOutputChannel('Stormcoder: Deploy Relay');
 	channel.show(true);
-	channel.appendLine(`Deploying your own OpenVS relay from ${relayDir} …`);
+	channel.appendLine(`Deploying your own Stormcoder relay from ${relayDir} …`);
 
 	const skipInstall = fs.existsSync(path.join(relayDir, 'node_modules'));
 	// `withProgress`'s CancellationToken has no native relationship to `deployRelay`'s
@@ -642,7 +642,7 @@ async function remoteDeployRelay(context: vscode.ExtensionContext, registry: Pro
 	const controller = new AbortController();
 	let cancelled = false;
 	const result = await vscode.window.withProgress(
-		{ location: vscode.ProgressLocation.Notification, title: 'Deploying OpenVS relay…', cancellable: true },
+		{ location: vscode.ProgressLocation.Notification, title: 'Deploying Stormcoder relay…', cancellable: true },
 		(_progress, token) => {
 			token.onCancellationRequested(() => { cancelled = true; controller.abort(); });
 			return deployRelay({
@@ -675,7 +675,7 @@ async function remoteDeployRelay(context: vscode.ExtensionContext, registry: Pro
 	const existingRelayUrl = getRelayUrl();
 	if (existingRelayUrl && existingRelayUrl !== result.url) {
 		const decision = await vscode.window.showWarningMessage(
-			`openvsChat.remote.relayUrl is already set to ${existingRelayUrl}. Replace it with the newly deployed ${result.url}?`,
+			`stormcoder.remote.relayUrl is already set to ${existingRelayUrl}. Replace it with the newly deployed ${result.url}?`,
 			'Replace', 'Keep Existing');
 		if (decision !== 'Replace') {
 			channel.appendLine(`\nDeployed to ${result.url}, but kept the existing relayUrl (${existingRelayUrl}) — update it yourself if you want to switch.`);
@@ -683,14 +683,14 @@ async function remoteDeployRelay(context: vscode.ExtensionContext, registry: Pro
 		}
 	}
 
-	await vscode.workspace.getConfiguration('openvsChat').update('remote.relayUrl', result.url, vscode.ConfigurationTarget.Global);
+	await vscode.workspace.getConfiguration('stormcoder').update('remote.relayUrl', result.url, vscode.ConfigurationTarget.Global);
 	channel.appendLine(`\nRelay deployed: ${result.url}`);
 	channel.appendLine('Note: push notifications need VAPID_PUBLIC/VAPID_PRIVATE/VAPID_SUBJECT secrets set separately (see openvs-relay/wrangler.jsonc) — remote control itself works without them.');
 
 	const choice = await vscode.window.showInformationMessage(
-		`OpenVS relay deployed at ${result.url}. Enable remote control now?`, 'Enable Remote Control');
+		`Stormcoder relay deployed at ${result.url}. Enable remote control now?`, 'Enable Remote Control');
 	if (choice) {
-		await vscode.commands.executeCommand('openvsChat.remoteEnable');
+		await vscode.commands.executeCommand('stormcoder.remoteEnable');
 	}
 }
 

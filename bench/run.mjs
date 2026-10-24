@@ -60,16 +60,16 @@ for (const task of tasks) {
 		let oracle;
 		let engine;
 		try {
-			const settings = { 'openvsChat.guardrails.approval': args.approval ?? 'yolo', 'openvsChat.agent.maxSteps': Number(args['max-steps'] ?? 60), 'openvsChat.agent.maxRunMinutes': 0 };
+			const settings = { 'stormcoder.guardrails.approval': args.approval ?? 'yolo', 'stormcoder.agent.maxSteps': Number(args['max-steps'] ?? 60), 'stormcoder.agent.maxRunMinutes': 0 };
 			let model = args.model;
 			if (provider === 'oracle') {
 				oracle = await startOracle(task, ws, { idle: args.oracle === 'idle' });
-				Object.assign(settings, { 'openvsChat.defaultProvider': 'custom', 'openvsChat.custom.baseUrl': `http://127.0.0.1:${oracle.port}/v1`, 'openvsChat.custom.model': 'oracle' });
+				Object.assign(settings, { 'stormcoder.defaultProvider': 'custom', 'stormcoder.custom.baseUrl': `http://127.0.0.1:${oracle.port}/v1`, 'stormcoder.custom.model': 'oracle' });
 				model = 'oracle';
 			} else if (provider === 'custom') {
-				Object.assign(settings, { 'openvsChat.defaultProvider': 'custom', 'openvsChat.custom.baseUrl': args['base-url'], 'openvsChat.custom.model': model });
+				Object.assign(settings, { 'stormcoder.defaultProvider': 'custom', 'stormcoder.custom.baseUrl': args['base-url'], 'stormcoder.custom.model': model });
 			} else {
-				settings['openvsChat.defaultProvider'] = provider;
+				settings['stormcoder.defaultProvider'] = provider;
 			}
 			engine = await startEngine({ project: ws.dir, settings, app, engineRoot: args.engine ? path.resolve(args.engine) : undefined });
 			const turns = [];

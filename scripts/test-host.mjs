@@ -51,17 +51,17 @@ assert.ok(g('**/{node_modules,.git}/**').test('x/node_modules/y/z.ts'));
 
 // Settings: defaults from the manifest, user overrides, change events, persistence.
 const ctx = vs.createContext();
-const cfg = vs.workspace.getConfiguration('openvsChat');
+const cfg = vs.workspace.getConfiguration('stormcoder');
 assert.equal(cfg.get('agent.maxSteps') > 0, true);
 assert.equal(cfg.get('does.not.exist', 7), 7);
 const events = [];
-vs.workspace.onDidChangeConfiguration(e => events.push(e.affectsConfiguration('openvsChat.agent')));
+vs.workspace.onDidChangeConfiguration(e => events.push(e.affectsConfiguration('stormcoder.agent')));
 await cfg.update('agent.maxSteps', 12, vs.ConfigurationTarget.Global);
-assert.equal(vs.workspace.getConfiguration('openvsChat').get('agent.maxSteps'), 12);
+assert.equal(vs.workspace.getConfiguration('stormcoder').get('agent.maxSteps'), 12);
 assert.deepEqual(events, [true]);
-assert.equal(JSON.parse(fs.readFileSync(path.join(data, 'settings.json'), 'utf8'))['openvsChat.agent.maxSteps'], 12);
+assert.equal(JSON.parse(fs.readFileSync(path.join(data, 'settings.json'), 'utf8'))['stormcoder.agent.maxSteps'], 12);
 await cfg.update('agent.maxSteps', undefined);
-assert.notEqual(vs.workspace.getConfiguration('openvsChat').get('agent.maxSteps'), 12);
+assert.notEqual(vs.workspace.getConfiguration('stormcoder').get('agent.maxSteps'), 12);
 
 // Secrets are encrypted at rest and readable back; state survives a new context.
 await ctx.secrets.store('k', 'sk-secret');
@@ -115,16 +115,38 @@ assert.equal(got, '/auth-callback');
 	const settingsPath = path.join(data, 'settings.json');
 	await cfg.update('agent.maxSteps', 33);
 	const good = fs.readFileSync(settingsPath, 'utf8');
-	fs.writeFileSync(settingsPath, '{ "openvsChat.agent.maxSteps": 33, oops');
+	fs.writeFileSync(settingsPath, '{ "stormcoder.agent.maxSteps": 33, oops');
 	vs.reloadSettings();
-	assert.equal(vs.workspace.getConfiguration('openvsChat').get('agent.maxSteps'), 33, 'previous settings survive a parse error');
+	assert.equal(vs.workspace.getConfiguration('stormcoder').get('agent.maxSteps'), 33, 'previous settings survive a parse error');
 	await assert.rejects(cfg.update('agent.maxSteps', 5), /not valid JSON/);
-	assert.equal(fs.readFileSync(settingsPath, 'utf8'), '{ "openvsChat.agent.maxSteps": 33, oops', 'the broken file is not overwritten');
+	assert.equal(fs.readFileSync(settingsPath, 'utf8'), '{ "stormcoder.agent.maxSteps": 33, oops', 'the broken file is not overwritten');
 	fs.writeFileSync(settingsPath, good);
 	vs.reloadSettings();
 	await cfg.update('agent.maxSteps', 34);
-	assert.equal(vs.workspace.getConfiguration('openvsChat').get('agent.maxSteps'), 34);
+	assert.equal(vs.workspace.getConfiguration('stormcoder').get('agent.maxSteps'), 34);
 	await cfg.update('agent.maxSteps', undefined);
+}
+
+// Settings saved before the rename (openvsChat.*) are carried over, and a key already set under the
+// new name wins.
+{
+	const settingsPath = path.join(data, 'settings.json');
+	const good = fs.readFileSync(settingsPath, 'utf8');
+	fs.writeFileSync(settingsPath, JSON.stringify({
+		'openvsChat.agent.maxSteps': 21,
+		'openvsChat.defaultProvider': 'groq',
+		'stormcoder.defaultProvider': 'openai',
+		'editor.fontSize': 14,
+	}));
+	vs.reloadSettings();
+	const migrated = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+	assert.equal(migrated['stormcoder.agent.maxSteps'], 21, 'a legacy key is moved to the new namespace');
+	assert.equal(migrated['stormcoder.defaultProvider'], 'openai', 'a key already set under the new name wins');
+	assert.equal(migrated['editor.fontSize'], 14, 'unrelated keys are untouched');
+	assert.ok(!Object.keys(migrated).some(k => k.startsWith('openvsChat.')), 'no legacy keys remain');
+	assert.equal(vs.workspace.getConfiguration('stormcoder').get('agent.maxSteps'), 21);
+	fs.writeFileSync(settingsPath, good);
+	vs.reloadSettings();
 }
 
 // A corrupt state file is moved aside, not silently reset in place.

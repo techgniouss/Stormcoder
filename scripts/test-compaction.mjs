@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Standalone unit test for src/agent/compaction.ts. Run:
@@ -79,7 +79,7 @@ assert.strictEqual(await m.compactMessages(convo(20, 4_000), async () => '   '),
 	assert.strictEqual(m.compactionThreshold(200_000, 151_808), 90_000);
 	assert.strictEqual(m.compactionThreshold(1_000_000, 791_808), 450_000);
 	assert.strictEqual(m.compactionThreshold(32_000, 17_408), 14_400);
-	// Pinning openvsChat.agent.maxContextTokens far below the window puts the trim budget
+	// Pinning stormcoder.agent.maxContextTokens far below the window puts the trim budget
 	// back in charge, and compaction must still precede it.
 	assert.strictEqual(m.compactionThreshold(200_000, 50_000), 45_000);
 	assert.ok(m.compactionThreshold(200_000, 50_000) < 50_000, 'compaction fires before trimming');

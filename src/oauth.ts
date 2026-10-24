@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -54,7 +54,7 @@ export function loadEnvFile(extensionPath: string): void {
 	}
 }
 
-const SECRET_PREFIX = 'openvsChat.oauth.';
+const SECRET_PREFIX = 'stormcoder.oauth.';
 /** Refresh when the access token has less than this long left to live. */
 const EXPIRY_SLACK_MS = 60_000;
 const SIGN_IN_TIMEOUT_MS = 5 * 60 * 1000;

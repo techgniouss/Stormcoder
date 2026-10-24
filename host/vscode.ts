@@ -419,6 +419,39 @@ let settings: Record<string, unknown> = {};
 /** Why settings.json could not be parsed; while set, writes are refused so the file is never clobbered. */
 let settingsError: string | undefined;
 
+/** Namespace the settings lived under before the product was renamed. */
+const LEGACY_SETTINGS_PREFIX = 'openvsChat.';
+
+/**
+ * Moves settings saved under the pre-rename `openvsChat.` namespace to `stormcoder.` and
+ * saves the file, so an existing install keeps its provider choices, guardrails and MCP
+ * servers. A key already present under the new name wins: the user set it after the rename.
+ */
+function migrateLegacySettings(loaded: Record<string, unknown>, file: string): Record<string, unknown> {
+	const legacy = Object.keys(loaded).filter(k => k.startsWith(LEGACY_SETTINGS_PREFIX));
+	if (!legacy.length) {
+		return loaded;
+	}
+	const migrated: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(loaded)) {
+		if (!key.startsWith(LEGACY_SETTINGS_PREFIX)) {
+			migrated[key] = value;
+		}
+	}
+	for (const key of legacy) {
+		const next = 'stormcoder.' + key.slice(LEGACY_SETTINGS_PREFIX.length);
+		if (!(next in migrated)) {
+			migrated[next] = loaded[key];
+		}
+	}
+	try {
+		writeJsonFile(file, migrated);
+	} catch (err) {
+		logHost(`could not save migrated settings: ${err instanceof Error ? err.message : String(err)}`);
+	}
+	return migrated;
+}
+
 function loadSettings(): void {
 	const file = path.join(host().userDataDir, 'settings.json');
 	if (file !== settingsFile) {
@@ -427,7 +460,7 @@ function loadSettings(): void {
 	settingsFile = file;
 	const read = readJsonFileChecked<unknown>(file, {});
 	if (!read.error && isPlainObject(read.value)) {
-		settings = read.value;
+		settings = migrateLegacySettings(read.value, file);
 		settingsError = undefined;
 		return;
 	}
@@ -795,7 +828,7 @@ export const commands = {
 		return new Disposable(() => commandTable.delete(id));
 	},
 	async executeCommand<T = unknown>(id: string, ...args: unknown[]): Promise<T | undefined> {
-		if (id === 'openvsChat.view.focus') {
+		if (id === 'stormcoder.view.focus') {
 			host().notify({ kind: 'focus', view: 'chat' });
 			return undefined;
 		}

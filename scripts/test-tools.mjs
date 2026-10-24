@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Standalone unit test for the agent tool layer in src/agent/tools.ts and the path
@@ -618,7 +618,7 @@ function reset(initial = {}, options = {}) {
 	const osMod = await import('node:os');
 	const fsMod = await import('node:fs');
 	const pathMod = await import('node:path');
-	const base = fsMod.mkdtempSync(pathMod.join(osMod.tmpdir(), 'openvs-link-'));
+	const base = fsMod.mkdtempSync(pathMod.join(osMod.tmpdir(), 'stormcoder-link-'));
 	const ws = pathMod.join(base, 'ws');
 	const outside = pathMod.join(base, 'outside');
 	fsMod.mkdirSync(ws);

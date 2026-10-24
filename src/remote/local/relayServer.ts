@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -472,7 +472,7 @@ export class LocalRelay {
 			this.state.rooms = merged.rooms;
 			this.options.store.save(merged);
 		} catch (err) {
-			console.warn('OpenVS local relay: could not save relay state.', err);
+			console.warn('Stormcoder local relay: could not save relay state.', err);
 		}
 	}
 

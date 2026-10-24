@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // The local relay (src/remote/local/relayServer.ts + websocket.ts) run for real: a live HTTP
@@ -16,8 +16,8 @@ import path from 'node:path';
 
 const { LocalRelay, memoryStore, fileStore } = await import(new URL('../out/remote/local/relayServer.js', import.meta.url));
 
-const pwaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openvs-pwa-'));
-fs.writeFileSync(path.join(pwaDir, 'index.html'), '<!doctype html><title>OpenVS Remote</title>');
+const pwaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stormcoder-pwa-'));
+fs.writeFileSync(path.join(pwaDir, 'index.html'), '<!doctype html><title>Stormcoder Remote</title>');
 fs.writeFileSync(path.join(pwaDir, 'app.js'), 'console.log(1);');
 
 const ROOM = 'ROOM1';
@@ -59,8 +59,8 @@ const claim = code => fetch(`${base}/pair/claim?room=${ROOM}`, { method: 'POST',
 
 // The phone app is served, with /p/<room> routed to its index like the cloud relay's SPA assets.
 assert.equal((await fetch(`${base}/app.js`)).status, 200);
-assert.match(await (await fetch(`${base}/p/${ROOM}`)).text(), /OpenVS Remote/);
-assert.match(await (await fetch(`${base}/../../etc/passwd`)).text(), /OpenVS Remote/, 'a path outside the app falls back to the index, never the filesystem');
+assert.match(await (await fetch(`${base}/p/${ROOM}`)).text(), /Stormcoder Remote/);
+assert.match(await (await fetch(`${base}/../../etc/passwd`)).text(), /Stormcoder Remote/, 'a path outside the app falls back to the index, never the filesystem');
 
 // Host: a wrong token is refused; the right one gets welcome.
 await assert.rejects(open(`${wsBase}/ws/host?room=${ROOM}`, { headers: { Authorization: 'Bearer nope' } }));
