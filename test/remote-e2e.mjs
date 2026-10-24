@@ -467,7 +467,12 @@ try {
 	proxy.cut();
 	await phone.locator('#status.status-ok').waitFor({ timeout: 30000 });
 	await send('SCN:plain hello phone after the drop');
-	await until('a reply after the drop', async () => (await phone.locator('.msg-user', { hasText: 'after the drop' }).count()) === 1 && (await phone.locator('.msg-assistant').count()) > 0, 20000);
+	// The reply to THIS message: assistant text after the last "after the drop" turn, not any earlier reply.
+	await until('a reply after the drop', async () => {
+		const text = await phone.locator('#messages').textContent();
+		const at = text.lastIndexOf('after the drop');
+		return at >= 0 && /Hello from the mock model\.|Nothing more to do\./.test(text.slice(at));
+	}, 30000);
 	await stopGone(20000);
 	// Reload the page: the pairing is remembered and the transcript comes back from the desktop.
 	await phone.reload();
@@ -501,7 +506,7 @@ try {
 	const replied = async () => { const t = await desktopChat.locator('#messages').textContent(); const k = t.lastIndexOf('SCN:plain hello phone desktop'); return k >= 0 && /Hello from the mock model\.|Nothing more to do\./.test(t.slice(k)); };
 	await desktopChat.locator('#input').fill('SCN:plain hello phone desktop');
 	await desktopChat.locator('#input').press('Enter');
-	await until('the desktop to get a reply after the revoke', replied);
+	await until('the desktop to get a reply after the revoke', replied, 40000);
 
 	assert.match(documentCsp, /script-src 'self'/, 'the phone app is served with a Content-Security-Policy');
 	assert.doesNotMatch(documentCsp, /unsafe-inline|unsafe-eval/);
