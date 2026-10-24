@@ -80,6 +80,7 @@ function loadPairing() {
 		TextEncoder,
 		setInterval,
 		clearInterval,
+		setTimeout,
 	};
 	sandbox.globalThis = sandbox;
 	vm.createContext(sandbox);
@@ -137,16 +138,32 @@ const pairing = {
 }
 
 // 3. Clicking "Pair a device" asks the host for a code — no client-generated code, no fake QR
-// shown before the host actually answers. Creation itself already requested the device list
-// once (Phase 7c, see test 10), so that message is expected ahead of the click.
+// shown before the host actually answers. Nothing is requested at creation: with Remote off
+// there is nothing to list, and asking only produced a red error on a fresh install. Once the
+// connection comes up the device list is requested exactly once.
 {
 	const h = harness();
-	assert.deepStrictEqual(h.posted, [{ type: 'listDevices' }], 'creation requests the device list once, up front');
+	assert.deepStrictEqual(h.posted, [], 'creation requests nothing while Remote is off');
 	// mini-button isn't a unique class (Done reuses it later) — find it via the actions row.
 	const actions = h.container.find('remote-actions');
 	const button = actions.children.find(c => c.className.includes('mini-button'));
+	assert.strictEqual(button.disabled, true, 'the pair button is off while Remote is off');
+	assert.match(h.container.find('remote-pair-hint').textContent, /Turn Remote on/);
+	button.fire('click');
+	assert.deepStrictEqual(h.posted, [], 'a click while off posts nothing');
+	h.api.update({ enabled: true, connected: false });
+	assert.match(h.container.find('remote-pair-hint').textContent, /Waiting for the relay/);
+	assert.strictEqual(button.disabled, true, 'and while connecting');
+	h.api.update({ enabled: true, connected: true });
+	assert.deepStrictEqual(h.posted, [{ type: 'listDevices' }], 'connecting asks for the device list once');
+	h.api.update({ enabled: true, connected: true });
+	assert.deepStrictEqual(h.posted, [{ type: 'listDevices' }], 'a further status update does not ask again');
+	assert.strictEqual(button.disabled, false);
+	assert.strictEqual(h.container.find('remote-pair-hint').textContent, '');
 	button.fire('click');
 	assert.deepStrictEqual(h.posted, [{ type: 'listDevices' }, { type: 'requestPairing' }]);
+	h.api.update({ enabled: false, connected: false });
+	assert.match(h.container.find('remote-device-empty').textContent, /Turn Remote on to see paired devices/, 'the list explains itself when Remote goes off');
 }
 
 // 4. A `remote` message carrying `pairing` renders the card: QR (as an inline SVG built from
@@ -196,12 +213,48 @@ const pairing = {
 {
 	const h = harness();
 	h.api.update({ enabled: true, connected: true, pairing });
-	h.posted.length = 0; // drop creation's own listDevices call — irrelevant to this assertion
+	h.posted.length = 0; // drop the device-list request made when it connected — irrelevant to this assertion
 	const card = h.container.find('remote-pairing-card');
 	const doneButton = card.children.find(c => c.tagName === 'BUTTON' && c.textContent === 'Done');
 	doneButton.fire('click');
 	assert.strictEqual(h.container.findAll('remote-pairing-card').length, 0, 'the card is gone');
 	assert.strictEqual(h.posted.length, 0, 'dismissal never posts to the host');
+}
+
+// 8b. The link is shown as text and can be copied, for a phone that cannot scan the QR. A failed
+// copy leaves it selected rather than failing silently.
+{
+	const copied = [];
+	const h = harness({ copy: async text => { copied.push(text); } });
+	h.api.update({ enabled: true, connected: true, pairing });
+	const card = h.container.find('remote-pairing-card');
+	const input = card.find('remote-pairing-link-input');
+	assert.strictEqual(input.value, pairing.url, 'the link is visible as text');
+	assert.strictEqual(input.getAttribute('readonly'), 'readonly');
+	assert.ok(input.getAttribute('aria-label'));
+	const button = card.find('remote-pairing-link').children.find(c => c.tagName === 'BUTTON');
+	button.fire('click');
+	await new Promise(r => setTimeout(r, 0));
+	assert.deepStrictEqual(copied, [pairing.url]);
+	assert.strictEqual(button.textContent, 'Copied');
+
+	let selected = 0;
+	const failing = harness({ copy: async () => { throw new Error('denied'); } });
+	failing.api.update({ enabled: true, connected: true, pairing });
+	const failInput = failing.container.find('remote-pairing-link-input');
+	failInput.select = () => { selected++; };
+	const failButton = failing.container.find('remote-pairing-link').children.find(c => c.tagName === 'BUTTON');
+	failButton.fire('click');
+	await new Promise(r => setTimeout(r, 0));
+	assert.strictEqual(selected, 1, 'the link is selected when the clipboard is unavailable');
+	assert.match(failButton.textContent, /Ctrl\+C/);
+}
+
+// 8c. Status changes are announced, and errors are alerts.
+{
+	const h = harness();
+	assert.strictEqual(h.container.find('remote-status-label').getAttribute('role'), 'status');
+	assert.strictEqual(h.container.find('remote-error').getAttribute('role'), 'alert');
 }
 
 // 9. Model-agnostic here (nothing renders arbitrary text from a model), but the same discipline
@@ -265,8 +318,11 @@ const pairing = {
 // 10e. "Refresh" re-requests the device list on demand.
 {
 	const h = harness();
-	h.posted.length = 0;
 	const refreshButton = h.container.find('remote-device-header').children.find(c => c.tagName === 'BUTTON');
+	refreshButton.fire('click');
+	assert.deepStrictEqual(h.posted, [], 'Refresh does nothing while not connected');
+	h.api.update({ enabled: true, connected: true, devices: [] });
+	h.posted.length = 0;
 	refreshButton.fire('click');
 	assert.deepStrictEqual(h.posted, [{ type: 'listDevices' }]);
 }

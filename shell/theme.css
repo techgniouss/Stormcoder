@@ -288,7 +288,7 @@ body.settings-window #settingsPanel > .panel-header { display: none; }
 .provider-title .warn { color: var(--warning); }
 .provider-title .tag { margin-left: auto; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: var(--accent-soft); color: var(--accent); }
 .provider-row { gap: 8px; }
-.key-input, .general-settings input, .general-settings textarea, .settings-number, .settings-textarea, .role-model, .role-provider, .provider-row input {
+.key-input, .general-settings input, .general-settings textarea, .settings-number, .settings-textarea, .role-model, .role-provider, .provider-row input, .remote-pairing-link-input {
 	height: 36px; padding: 0 12px; border-radius: 10px; background: var(--ground); border: 1px solid var(--border-strong); color: var(--text);
 }
 .general-settings textarea, .settings-textarea { height: auto; padding: 10px 12px; line-height: 1.55; }

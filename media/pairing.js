@@ -93,10 +93,13 @@
 	 *   container: { appendChild(node: any): void },
 	 *   post: (message: any) => void,
 	 *   now?: () => number,
+	 *   copy?: (text: string) => Promise<void>,
 	 * }} deps
 	 */
 	function create(deps) {
 		const now = deps.now || (() => Date.now());
+		/** Puts text on the clipboard; injected so tests need no browser. */
+		const copyText = deps.copy || (text => navigator.clipboard.writeText(text));
 
 		/** @type {{ enabled: boolean, connected: boolean, idleDisabled?: boolean }} */
 		let status = { enabled: false, connected: false };
@@ -107,6 +110,9 @@
 		const statusRow = el('div', 'remote-status-row');
 		const statusDot = el('span', 'remote-status-dot remote-status-off');
 		const statusLabel = el('span', 'remote-status-label', 'Remote: off');
+		// Announced when it changes (off, connecting, connected, paused), so a screen reader hears the outcome of the switch.
+		statusLabel.setAttribute('role', 'status');
+		statusLabel.setAttribute('aria-live', 'polite');
 		statusRow.appendChild(statusDot);
 		statusRow.appendChild(statusLabel);
 		// The on/off switch for `stormcoder.remote.enabled` — so turning remote on doesn't mean
@@ -143,15 +149,20 @@
 		// instead of the generic chat-tab error notice, which is invisible while this panel is
 		// open on top of it). Empty and unrendered until the first error arrives. ----
 		const errorLine = el('div', 'remote-error hidden');
+		errorLine.setAttribute('role', 'alert');
 		deps.container.appendChild(errorLine);
 
 		// ---- "Pair a device" trigger. ----
 		const actions = el('div', 'remote-actions');
-		const pairButton = el('button', 'mini-button', 'Pair a device');
+		const pairButton = /** @type {HTMLButtonElement} */ (el('button', 'mini-button', 'Pair a device'));
 		pairButton.addEventListener('click', () => {
+			if (!status.connected) { return; }
 			deps.post({ type: 'requestPairing' });
 		});
 		actions.appendChild(pairButton);
+		// Why the button is off, instead of letting it fail with an error on a fresh install.
+		const pairHint = el('span', 'hint remote-pair-hint', '');
+		actions.appendChild(pairHint);
 		deps.container.appendChild(actions);
 
 		const cardMount = el('div', 'remote-card-mount');
@@ -160,14 +171,31 @@
 		// ---- Paired-device list (Phase 7c): name, relative last-seen, revoke. ----
 		const deviceHeader = el('div', 'remote-device-header');
 		deviceHeader.appendChild(el('span', 'remote-pairing-title', 'Paired devices'));
-		const refreshButton = el('button', 'mini-button', 'Refresh');
-		refreshButton.addEventListener('click', () => { deps.post({ type: 'listDevices' }); });
+		const refreshButton = /** @type {HTMLButtonElement} */ (el('button', 'mini-button', 'Refresh'));
+		refreshButton.addEventListener('click', () => { if (status.connected) { deps.post({ type: 'listDevices' }); } });
 		deviceHeader.appendChild(refreshButton);
 		deps.container.appendChild(deviceHeader);
 
 		const deviceList = el('div', 'remote-device-list');
 		deps.container.appendChild(deviceList);
-		deps.post({ type: 'listDevices' });
+
+		/**
+		 * Pairing and the device list need a live connection to the relay. Without one the button
+		 * and Refresh are off and say why, and the list shows a note instead of asking the host
+		 * for something it can only refuse: a fresh install used to open this panel on a red
+		 * "not connected yet" error for doing nothing wrong.
+		 */
+		function renderGate() {
+			const on = status.connected;
+			pairButton.disabled = !on;
+			refreshButton.disabled = !on;
+			pairHint.textContent = on ? '' : status.enabled ? 'Waiting for the relay to connect…' : 'Turn Remote on to pair a device.';
+			if (!on) {
+				deviceList.textContent = '';
+				deviceList.appendChild(el('div', 'hint remote-device-empty', status.enabled ? 'Paired devices appear once Remote is connected.' : 'Turn Remote on to see paired devices.'));
+			}
+		}
+		renderGate();
 
 		/** Relative last-seen time, mirroring `main.js`'s own `relTime` helper — duplicated, not shared, since this is a separate script with no module boundary between the two. */
 		function relDeviceTime(ts) {
@@ -228,6 +256,31 @@
 
 			const codeRow = el('div', 'remote-pairing-code', pairing.code);
 			card.appendChild(codeRow);
+
+			// The link as text too: the QR needs a camera, and a phone that cannot scan (or a
+			// code read off another screen) needs the address to type or paste.
+			const linkRow = el('div', 'remote-pairing-link');
+			const linkInput = /** @type {HTMLInputElement} */ (el('input', 'remote-pairing-link-input'));
+			linkInput.setAttribute('type', 'text');
+			linkInput.setAttribute('readonly', 'readonly');
+			linkInput.setAttribute('aria-label', 'Pairing link');
+			linkInput.value = pairing.url;
+			linkInput.addEventListener('focus', () => { if (typeof linkInput.select === 'function') { linkInput.select(); } });
+			const copyButton = el('button', 'mini-button', 'Copy link');
+			copyButton.addEventListener('click', () => {
+				copyText(pairing.url).then(() => {
+					copyButton.textContent = 'Copied';
+					setTimeout(() => { copyButton.textContent = 'Copy link'; }, 1500);
+				}, () => {
+					// No clipboard access (a locked-down webview): leave the link selected to copy by hand.
+					if (typeof linkInput.select === 'function') { linkInput.select(); }
+					copyButton.textContent = 'Press Ctrl+C';
+				});
+			});
+			linkRow.appendChild(linkInput);
+			linkRow.appendChild(copyButton);
+			card.appendChild(linkRow);
+
 			if (pairing.hint) {
 				card.appendChild(el('div', 'hint remote-pairing-hint', pairing.hint));
 			}
@@ -270,8 +323,14 @@
 			 * @param {RemoteStatusPayload} payload
 			 */
 			update(payload) {
+				const wasConnected = status.connected;
 				status = { enabled: !!payload.enabled, connected: !!payload.connected, idleDisabled: !!payload.idleDisabled };
 				renderStatus();
+				renderGate();
+				if (!wasConnected && status.connected && !payload.devices) {
+					// Just connected: now there is a list to ask for.
+					deps.post({ type: 'listDevices' });
+				}
 				// Cleared on every update that doesn't carry one — a stale denial ("not
 				// connected yet") must not keep showing once a request actually succeeds.
 				errorLine.textContent = payload.error || '';

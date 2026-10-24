@@ -1871,6 +1871,14 @@ details[open] > .tool-summary::before,
 }
 
 
+/* ---- Remote control panel ---- */
+.remote-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.remote-actions button:disabled, .remote-device-header button:disabled { opacity: 0.45; cursor: not-allowed; }
+.remote-pairing-link { display: flex; gap: 6px; align-items: center; margin: 8px 0; }
+.remote-pairing-link-input {
+	flex: 1 1 auto; min-width: 0; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.8em;
+}
+
 /* ---- Memory panel ---- */
 .mem-row .skill-info { flex: 1 1 auto; }
 .mem-row .mem-text { overflow-wrap: anywhere; }
@@ -1887,3 +1895,4 @@ details[open] > .tool-summary::before,
 .mem-empty { font-size: 0.85em; color: var(--vscode-descriptionForeground); margin-bottom: 6px; }
 #memoryNewText { flex: 1 1 auto; min-width: 0; }
 .hint.mem-error { color: var(--vscode-errorForeground); }
+.remote-pairing-link .mini-button { white-space: nowrap; flex: 0 0 auto; }
