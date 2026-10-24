@@ -2525,12 +2525,6 @@ if (native) {
 		const detail = /** @type {CustomEvent} */ (event).detail;
 		if (detail && typeof detail === 'object') { detail.handled = handled; }
 	});
-	// The shell hands over a pairing link (opened from the camera or a message) as an event, so this
-	// file needs no knowledge of how Android delivers it.
-	window.addEventListener('stormcoder:pairing-link', event => {
-		const link = /** @type {CustomEvent} */ (event).detail;
-		if (typeof link === 'string' && link.length < 2048) { void pairFromInput(link); }
-	});
 	if (typeof native.scanQr === 'function' && els.scanBtn) {
 		const scanBtn = els.scanBtn;
 		scanBtn.hidden = false;

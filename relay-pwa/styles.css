@@ -334,7 +334,6 @@ input:focus-visible, textarea:focus-visible { outline: none; border-color: var(-
 /* The header is for state, not captions: the two actions are icons with accessible names. */
 .topbar .icon-label { display: none; }
 .status-scope { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status { white-space: nowrap; }
 
 /* ---- Tabs ---- */
 
@@ -822,7 +821,7 @@ h5.md-heading, h6.md-heading { font-size: 14px; color: var(--text-2); }
 .stop-btn { background: var(--raised); color: var(--text); border: 1px solid var(--border-strong); margin-right: 6px; }
 .stop-btn .icon { width: 14px; height: 14px; }
 
-.controls-row { display: flex; gap: 6px; }
+.controls-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .controls-row select {
 	flex: 1;
 	min-width: 0;
@@ -855,8 +854,9 @@ h5.md-heading, h6.md-heading { font-size: 14px; color: var(--text-2); }
 }
 .seg-btn[aria-checked="true"] { background: var(--raised); color: var(--text); }
 .seg-btn:active { background: var(--active-bg); }
-#providerSelect { flex: 0 1 auto; max-width: 42%; }
-#modelSelect { flex: 1 1 0; }
+/* The row wraps: with one provider the model sits beside the mode; with several the provider takes that place and the model gets a row of its own. */
+#providerSelect { flex: 1 1 0; min-width: 8em; }
+#modelSelect { flex: 1 1 0; min-width: 8em; }
 .controls-row select.select-warn { border-color: var(--warning); }
 
 .skills-panel { font-size: var(--fs-small); color: var(--text-2); }

@@ -26,8 +26,9 @@ Not protected:
 
 - **The phone app is delivered by the relay or tunnel.** A malicious relay could serve a modified
   copy of the app that steals the key when the page loads. End-to-end encryption does not fix
-  that; serving the app from a place you control and can verify (or a native app) would. Until
-  then, treat the relay as trusted to deliver the app, but not to read or change your traffic.
+  that; serving the app from a place you control and can verify would. The Android app (`android/`)
+  does this: its copy of the phone app is fixed inside the APK you build. For a phone browser or
+  an installed PWA, treat the relay as trusted to deliver the app, but not to read or change your traffic.
 - A compromised phone or desktop.
 - Metadata: the room id, device ids and names, connection times, message sizes and timing.
 - Push notifications carry only generic text ("Stormcoder needs your attention").

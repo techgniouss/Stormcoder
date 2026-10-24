@@ -49,11 +49,12 @@ npm run build:debug    # or, from the command line: android/app/build/outputs/ap
 
 - **Back button:** closes History or the slash menu first, and sends the app to the background from a plain screen (`stormcoder:back` in `src/native.js` and `app.js`).
 - **System bars:** Capacitor's `SystemBars` handles the edge-to-edge insets (`insetsHandling: css`); the app's own padding uses `env(safe-area-inset-*)`.
+- **Scanner failures:** if Google Play Services is missing or the scanner module is still downloading, the app says so and the pasted link still works.
 - **Header:** shows the connection and the desktop's folder name ("Connected · project"), which the desktop sends in its encrypted `config` message.
 
 ## Pairing
 
-Open the app and tap **Scan QR code** (it asks for camera access), or paste the pairing link from
+Open the app and tap **Scan QR code** (Google's code scanner: it needs Google Play Services and fetches its own module on first use), or paste the pairing link from
 the desktop. Only `https` links are accepted. A bare key cannot work, because it does not say where
 the relay is.
 

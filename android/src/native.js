@@ -26,12 +26,18 @@
 	globalThis.StormcoderNative = Object.freeze({
 		platform: 'android',
 		/**
-		 * Opens the camera and resolves with the text of the first QR code read, or null if the
-		 * person cancelled. Permission is asked for by the scanner plugin.
+		 * Opens Google's code scanner (it needs Google Play Services, and brings its own camera
+		 * permission handling) and resolves with the text of the first QR code read, or null if
+		 * the person cancelled. Its module is fetched on first use if it is not there yet.
 		 * @returns {Promise<string | null>}
 		 */
 		async scanQr() {
 			try {
+				const { available } = await scanner.isGoogleBarcodeScannerModuleAvailable();
+				if (!available) {
+					await scanner.installGoogleBarcodeScannerModule();
+					throw new Error('The scanner is being set up. Try again in a moment, or paste the pairing link.');
+				}
 				const { barcodes } = await scanner.scan({ formats: ['QR_CODE'] });
 				return barcodes && barcodes[0] && typeof barcodes[0].rawValue === 'string' ? barcodes[0].rawValue : null;
 			} catch (err) {
@@ -39,7 +45,7 @@
 				if (/cancel/i.test(message)) {
 					return null;
 				}
-				throw new Error('Could not scan. Allow camera access, or paste the pairing link instead.');
+				throw new Error(/set up/.test(message) ? message : 'Could not open the scanner (it needs Google Play Services). Paste the pairing link instead.');
 			}
 		},
 	});

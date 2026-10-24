@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- The phone app's light ground (--ground in openvs-relay/pwa/styles.css); values-night has the dark one. -->
+    <!-- The phone app's light ground, the phone app's ground token in openvs-relay/pwa/styles.css; values-night has the dark one. -->
     <color name="app_background">#F3F3F6</color>
     <color name="colorPrimary">#3D9BFF</color>
     <color name="colorPrimaryDark">#111114</color>

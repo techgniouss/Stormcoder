@@ -72,6 +72,20 @@ for (const density of ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi']) {
 	}
 }
 assert.ok(fs.existsSync(path.join(root, 'android', 'assets', 'icon-foreground.svg')), 'the icon source is kept beside the project');
+// Android's resource compiler rejects what XML forbids; a `--` inside a comment once got past review.
+(function walk(dir) {
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		const p = path.join(dir, entry.name);
+		if (entry.isDirectory()) { walk(p); continue; }
+		if (!p.endsWith('.xml')) { continue; }
+		const text = fs.readFileSync(p, 'utf8');
+		for (const m of text.matchAll(/<!--([\s\S]*?)-->/g)) {
+			assert.ok(!m[1].includes('--'), `${path.relative(root, p)}: a comment contains "--"`);
+		}
+		assert.equal((text.match(/<(?!\/|\?|!)[^>]*[^/]>/g) ?? []).length, (text.match(/<\/[^>]+>/g) ?? []).length, `${path.relative(root, p)}: unbalanced tags`);
+	}
+}(path.join(root, 'android', 'android', 'app', 'src', 'main')));
+assert.match(manifest, /com\.google\.mlkit\.vision\.DEPENDENCIES/, 'the scanner module is declared');
 const cap = JSON.parse(fs.readFileSync(path.join(root, 'android', 'capacitor.config.json'), 'utf8'));
 assert.equal(cap.server.cleartext, false);
 assert.equal(cap.android.allowMixedContent, false);
