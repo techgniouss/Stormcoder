@@ -65,8 +65,10 @@ try {
 	await settings.locator('.area.active[data-area=permissions]').waitFor();
 
 	// Project memory can be switched off from Settings > General, and the choice is saved.
-	await settings.getByRole('button', { name: 'General' }).click();
-	await settings.locator('.area.active[data-area=general]').waitFor();
+	await settings.getByRole('button', { name: 'Memory' }).click();
+	await settings.locator('.area.active[data-area=memory]').waitFor();
+	// The saved fact seeded before the first send is listed, and can be pinned.
+	await settings.locator('#memoryProject .mem-row', { hasText: 'The build needs the moon phase set.' }).waitFor({ timeout: 10000 });
 	const memoryToggle = settings.locator('#enableMemory');
 	assert.equal(await memoryToggle.isChecked(), true, 'memory is on by default');
 	await memoryToggle.uncheck();
@@ -77,6 +79,36 @@ try {
 	await memoryToggle.check();
 	for (let i = 0; i < 50 && JSON.parse(fs.readFileSync(settingsFile, 'utf8'))['stormcoder.memory.enabled'] !== true; i++) { await new Promise(r => setTimeout(r, 100)); }
 	assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8'))['stormcoder.memory.enabled'], true, 'turning it back on is saved');
+
+	// Notes can be added, pinned, edited and deleted from the panel, for this project and for the user.
+	const memFile = path.join(project, '.stormcoder/memory.md');
+	await settings.locator('#memoryNewType button', { hasText: 'command' }).click();
+	await settings.locator('#memoryNewText').fill('Run the linter with npm run lint.');
+	await settings.locator('#memoryAddBtn').click();
+	await settings.locator('#memoryProject .mem-row', { hasText: 'Run the linter with npm run lint.' }).waitFor({ timeout: 10000 });
+	assert.match(fs.readFileSync(memFile, 'utf8'), /\[command\] Run the linter with npm run lint\./);
+	const lintRow = settings.locator('#memoryProject .mem-row', { hasText: 'Run the linter' });
+	await lintRow.getByRole('button', { name: 'Pin' }).click();
+	await settings.locator('#memoryProject .mem-row.pinned', { hasText: 'Run the linter' }).waitFor({ timeout: 10000 });
+	assert.match(fs.readFileSync(memFile, 'utf8'), /\[command\*\] Run the linter/);
+	await settings.locator('#memoryProject .mem-row', { hasText: 'Run the linter' }).getByRole('button', { name: 'Edit' }).click();
+	await settings.locator('#memoryProject .mem-edit').fill('Run the linter with pnpm lint.');
+	await settings.locator('#memoryProject').getByRole('button', { name: 'Save' }).click();
+	await settings.locator('#memoryProject .mem-row', { hasText: 'pnpm lint' }).waitFor({ timeout: 10000 });
+	assert.match(fs.readFileSync(memFile, 'utf8'), /pnpm lint/);
+	await settings.locator('#memoryProject .mem-row', { hasText: 'pnpm lint' }).getByRole('button', { name: 'Delete' }).click();
+	await settings.locator('#memoryProject .mem-row', { hasText: 'pnpm lint' }).waitFor({ state: 'detached', timeout: 10000 });
+	assert.doesNotMatch(fs.readFileSync(memFile, 'utf8'), /pnpm lint/);
+	await settings.locator('#memoryNewScope button', { hasText: 'Every project' }).click();
+	await settings.locator('#memoryNewText').fill('I prefer small, focused commits.');
+	await settings.locator('#memoryAddBtn').click();
+	await settings.locator('#memoryUser .mem-row', { hasText: 'small, focused commits' }).waitFor({ timeout: 10000 });
+	assert.ok(fs.readdirSync(path.join(host.data, 'storage', 'memory')).includes('memory.md'), 'personal notes live in the app data, not the project');
+	// A secret is refused with the reason shown.
+	await settings.locator('#memoryNewText').fill('password = hunter2hunter2');
+	await settings.locator('#memoryAddBtn').click();
+	await settings.locator('#memoryNotice', { hasText: 'credential' }).waitFor({ timeout: 10000 });
+	await settings.locator('#memoryNewText').fill('');
 
 	// 4. The palette opens and filters.
 	await page.keyboard.press('Control+k');

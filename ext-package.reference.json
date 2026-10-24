@@ -1002,6 +1002,11 @@
           "default": true,
           "markdownDescription": "%config.memory.enabled%"
         },
+        "stormcoder.memory.autoPropose": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "%config.memory.autoPropose%"
+        },
         "stormcoder.memory.recentRuns": {
           "type": "number",
           "default": 5,

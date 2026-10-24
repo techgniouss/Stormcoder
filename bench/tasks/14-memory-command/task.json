@@ -1,0 +1,10 @@
+{
+  "id": "14-memory-command",
+  "title": "Use the test command the project's memory records",
+  "category": "memory",
+  "mode": "agent",
+  "prompts": [
+    "Add a function clamp(n, lo, hi) to src/math.js that limits n to the range lo..hi, then run the project's tests and tell me whether they pass."
+  ],
+  "timeoutSec": 240
+}

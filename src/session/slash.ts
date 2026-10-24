@@ -28,6 +28,7 @@ export const SLASH_COMMANDS: readonly { cmd: string; desc: string }[] = [
 	{ cmd: 'init', desc: 'Have the agent write an AGENTS.md describing this project' },
 	{ cmd: 'review', desc: 'Review the uncommitted changes (read-only)' },
 	{ cmd: 'compact', desc: 'Summarize older turns of this chat to free context' },
+	{ cmd: 'memory', desc: 'Show project memory — "add <text>" saves a note, "on"/"off" switches it' },
 	{ cmd: 'clear', desc: 'Clear this chat tab (saved to History)' },
 	{ cmd: 'help', desc: 'Show all slash commands' },
 ];
@@ -113,6 +114,8 @@ export interface SlashEffects {
 	openMcpSettings(): void;
 	/** Summarizes this tab's older turns now instead of waiting for the context to fill (`/compact`). */
 	compact(): void;
+	/** Handles `/memory` and its arguments (list, add, on, off) — the host answers the requesting sink. */
+	memory(args: string): void;
 	/** Restores the files this tab's latest run changed (`/undo`). */
 	undoRun(): void;
 	/** Renders help/skills-list text back to whichever sink asked, via `bus.postTo`. */
@@ -137,6 +140,7 @@ export const SLASH_HELP_TEXT = [
 	'`/history` — reopen a previous conversation (also the 🕘 button; closed tabs are saved there)',
 	'`/undo` — restore the files the last run in this tab changed',
 	'`/init` — have the agent write an `AGENTS.md` for this project   ·   `/review` — review the uncommitted changes   ·   `/compact` — summarize older turns now',
+	'`/memory` — what the project remembers   ·   `/memory add [user] <text>` — save a note (`user` = every project)   ·   `/memory on|off`',
 	'`/clear` — clear this chat tab (saved to History)   ·   `/help` — show this help',
 	'',
 	'**While a run is streaming**: keep typing! In Agent mode, Enter **steers** the live run; otherwise your message is **queued** and sent when the run finishes. The **+** tab button opens parallel chats.',
@@ -229,6 +233,14 @@ export function runSlash(text: string, effects: SlashEffects, remote = false): S
 	if (cmd === 'review') {
 		effects.setMode('agent');
 		return { handled: true, sendRest: rest ? `${REVIEW_PROMPT}\n\nFocus: ${rest}` : REVIEW_PROMPT };
+	}
+	if (cmd === 'memory') {
+		// Saving, switching and listing memory is desktop-only, like the Memory settings panel.
+		if (remote) {
+			return { handled: true, denied: true };
+		}
+		effects.memory(rest);
+		return { handled: true };
 	}
 	if (cmd === 'undo') {
 		// Allowed remotely, unlike the other commands that touch this instance's files: it can

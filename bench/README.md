@@ -1,6 +1,6 @@
 # Agent benchmark
 
-Thirteen small tasks that measure what the agent actually *gets done*, not whether the loop is
+Fifteen small tasks that measure what the agent actually *gets done*, not whether the loop is
 correct (the unit tests do that). Each task is a throwaway git repo, a prompt, and an objective
 check that inspects the result on disk. The model's own claims are never believed.
 
@@ -16,6 +16,7 @@ check that inspects the result on disk. The model's own claims are never believe
 | answering a question without changing anything (Ask mode) | 10 |
 | a one-line change in a 900-function file | 11 |
 | starting a server, calling it, stopping it | 12 |
+| using what project memory records: a command the code does not reveal, and unfinished work named only in the run journal | 14, 15 |
 
 ## Quick start
 
@@ -81,6 +82,20 @@ node bench/compare.mjs bench/results/sonnet.json bench/results/gpt.json
 
 Use `--repeat 3` or more: one run of a model on one task is an anecdote. Options: `--tasks 04 06`
 (substring filter), `--approval auto-edits`, `--max-steps`, `--timeout-scale`, `--label`.
+
+Tasks 14 and 15 only make sense with project memory on (the default). To measure what memory
+buys, run them with it on and off and compare:
+
+```sh
+node bench/run.mjs --provider anthropic --model claude-sonnet-5 --tasks 14 15 --repeat 5 --label memory-on --out bench/results/mem-on.json
+node bench/run.mjs --provider anthropic --model claude-sonnet-5 --tasks 14 15 --repeat 5 --setting memory.enabled=false --label memory-off --out bench/results/mem-off.json
+node bench/compare.mjs bench/results/mem-off.json bench/results/mem-on.json
+```
+
+`--setting key=value` (repeatable) sets any Stormcoder setting for the run. Task 14's `npm test`
+is a placeholder that always passes; only the memory says the real run is `node scripts/check.js`,
+and the check verifies it ran against the final file. Task 15 says only "continue the work from
+the last session": the unfinished retry support is named only in `.stormcoder/journal.jsonl`.
 
 To measure what a change bought, build the older revision in a worktree and run the same tasks
 against both:

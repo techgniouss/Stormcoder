@@ -128,6 +128,13 @@ export const REMOTE_DENIED: readonly string[] = [
 	'setMaxRunMinutes',
 	'setDecompose',
 	'setMemoryEnabled',
+	'setMemoryAutoPropose',
+	'memoryList',
+	'memoryAdd',
+	'memoryEdit',
+	'memoryDelete',
+	'memoryClear',
+	'memoryProposal',
 	'setMemoryRecentRuns',
 	'attachContext',
 	// Opens VS Code's file dialog on the desktop — which the remote user can't see — and reads

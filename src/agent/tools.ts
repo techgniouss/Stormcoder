@@ -11,7 +11,7 @@ import { MALFORMED_ARGS } from '../providers/toolCalls';
 import { ChatImage, ToolCall, ToolSpec, isAbortError } from '../providers/types';
 import { FileWrite } from './checkpoint';
 import { Guardrails, WorkspacePath, autoApproves, autoApprovesWrites, checkCommand, checkPath, describeWorkspaceUri, loadGuardrails, normalizeWorkspacePath, resolveWorkspacePath } from './guardrails';
-import { MAX_ENTRY_CHARS, MEMORY_TYPES, ProjectMemory } from '../memory/projectMemory';
+import { MAX_ENTRY_CHARS, MEMORY_TYPES, memoryEnabled, projectStore, recallAll, userStore } from '../memory/projectMemory';
 import { resolveAgentShell } from './shell';
 import { sandboxedSpawn } from './sandbox';
 
@@ -255,7 +255,7 @@ export const AGENT_TOOLS: ToolSpec[] = [
 	},
 	{
 		name: 'recall',
-		description: 'Search saved project memory and the journal of past runs by keyword. The prompt shows only the newest; use this to find older facts or what was done before.',
+		description: 'Search saved memory, the journal of past runs and past chats by keyword. The prompt shows only the newest; use this to find older facts or what was done before.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -273,6 +273,7 @@ export const AGENT_TOOLS: ToolSpec[] = [
 			properties: {
 				type: { type: 'string', enum: [...MEMORY_TYPES], description: 'Kind of fact.' },
 				text: { type: 'string', description: 'The fact.' },
+				scope: { type: 'string', enum: ['project', 'user'], description: 'user = the person\'s own habit that applies to every project. Default project.' },
 			},
 			required: ['type', 'text'],
 		},
@@ -771,7 +772,7 @@ export async function executeTool(rawCall: ToolCall, approver: ToolApprover, gua
 			case 'recall':
 					return await recallFacts(root, asString(call.args.query), asNumber(call.args.limit));
 				case 'remember':
-					return await rememberFact(root, asString(call.args.type), asString(call.args.text), approver, g);
+					return await rememberFact(root, asString(call.args.type), asString(call.args.text), asString(call.args.scope), approver, g);
 				case 'command_output':
 				return await readBackgroundCommand(asString(call.args.id).trim(), asBoolean(call.args.stop), asNumber(call.args.waitMs));
 			default:
@@ -796,10 +797,7 @@ export async function executeTool(rawCall: ToolCall, approver: ToolApprover, gua
 
 /** Searches project memory. Read-only, but not offered where memory is off or the folder is untrusted. */
 async function recallFacts(root: vscode.Uri, query: string, limit?: number): Promise<ToolResult> {
-	if (!vscode.workspace.isTrusted || vscode.workspace.getConfiguration('stormcoder').get<boolean>('memory.enabled') === false) {
-		return { result: 'Project memory is not available here (it is off, or this workspace is not trusted).', isError: false };
-	}
-	return { result: await new ProjectMemory(root).recall(query, limit), isError: false };
+	return { result: await recallAll(root, query, limit), isError: false };
 }
 
 /**
@@ -807,17 +805,22 @@ async function recallFacts(root: vscode.Uri, query: string, limit?: number): Pro
  * workspace write: what is saved is read back into every future prompt, so it is a way to
  * steer later sessions and the user gets the same say over it as over an edit.
  */
-async function rememberFact(root: vscode.Uri, type: string, text: string, approver: ToolApprover, g: Guardrails): Promise<ToolResult> {
-	if (vscode.workspace.getConfiguration('stormcoder').get<boolean>('memory.enabled') === false) {
+async function rememberFact(root: vscode.Uri, type: string, text: string, scope: string, approver: ToolApprover, g: Guardrails): Promise<ToolResult> {
+	if (!memoryEnabled()) {
 		return { result: 'Project memory is turned off in Settings, so nothing was saved. Tell the user if they asked you to remember something.', isError: true };
 	}
 	const clean = text.replace(/\s+/g, ' ').trim();
+	const toUser = scope === 'user';
+	const store = toUser ? userStore() : projectStore(root);
+	if (!store) {
+		return { result: 'Your personal memory is not available in this app, so nothing was saved. Save it as a project fact instead.', isError: true };
+	}
 	if (!autoApprovesWrites(g) && clean) {
 		const { approved, feedback } = await approver.confirm({
 			kind: 'write',
-			signature: 'remember',
-			title: 'Save to project memory?',
-			detail: 'Read back into every future conversation in this project.',
+			signature: toUser ? 'remember:user' : 'remember',
+			title: toUser ? 'Save to your memory?' : 'Save to project memory?',
+			detail: toUser ? 'Read back into every future conversation in every project.' : 'Read back into every future conversation in this project.',
 			preview: `[${type}] ${clean.slice(0, MAX_ENTRY_CHARS + 20)}`,
 			previewLanguage: '',
 		});
@@ -825,7 +828,7 @@ async function rememberFact(root: vscode.Uri, type: string, text: string, approv
 			return { result: denialMessage('write', feedback), isError: true };
 		}
 	}
-	const outcome = await new ProjectMemory(root).remember(type, text);
+	const outcome = await store.remember(type, text);
 	return { result: outcome.message, isError: !outcome.saved && !/^Already remembered/.test(outcome.message) };
 }
 

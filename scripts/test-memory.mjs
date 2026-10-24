@@ -124,26 +124,28 @@ const file = rel => path.join(ws, rel);
 
 // 8. On disk: first save creates the folder and a .gitignore; the block reads both stores.
 {
-	const memory = new mem.ProjectMemory(vs.Uri.file(ws));
-	assert.equal(await memory.promptBlock(), '', 'a fresh project adds no tokens');
+	const memory = mem.projectStore(vs.Uri.file(ws));
+	const rootUri = vs.Uri.file(ws);
+	const promptBlock = runs => mem.buildPromptBlock(rootUri, runs);
+	assert.equal(await promptBlock(), '', 'a fresh project adds no tokens');
 	const saved = await memory.remember('command', 'Run the linter with npm run lint.', '2026-10-24');
 	assert.equal(saved.saved, true, saved.message);
 	assert.match(fs.readFileSync(file('.stormcoder/memory.md'), 'utf8'), /\[command\] Run the linter with npm run lint\. \(2026-10-24\)/);
-	assert.equal(fs.readFileSync(file('.stormcoder/.gitignore'), 'utf8'), 'memory.md\njournal.jsonl\n', 'personal memory is not committed by default');
+	assert.equal(fs.readFileSync(file('.stormcoder/.gitignore'), 'utf8'), 'memory.md\njournal.jsonl\nproposals.json\n', 'personal memory is not committed by default');
 	fs.writeFileSync(file('.stormcoder/.gitignore'), 'custom\n');
 	await memory.remember('gotcha', 'Windows needs cmd.exe for the build script.', '2026-10-24');
 	assert.equal(fs.readFileSync(file('.stormcoder/.gitignore'), 'utf8'), 'custom\n', 'a .gitignore the user edited is left alone');
 	fs.mkdirSync(file('.openvs'), { recursive: true });
 	fs.writeFileSync(file('.openvs/memory.md'), '- Legacy note kept from before the rename\n');
 	await memory.appendJournal({ date: '2026-10-24', goal: 'Wire the linter', files: ['package.json'], verified: true });
-	const block = await memory.promptBlock();
+	const block = await promptBlock();
 	assert.match(block, /Legacy note kept from before the rename/);
 	assert.match(block, /Run the linter with npm run lint\./);
 	assert.match(block, /- 2026-10-24: Wire the linter\. Changed: package\.json\. Verified\./);
-	assert.doesNotMatch(await memory.promptBlock(0), /Recent work/, 'recentRuns 0 leaves the journal out');
+	assert.doesNotMatch(await promptBlock(0), /Recent work/, 'recentRuns 0 leaves the journal out');
 	for (let i = 0; i < 450; i++) { await memory.appendJournal({ date: '2026-10-24', goal: `run ${i}`, files: [], verified: false }); }
 	assert.ok(fs.readFileSync(file('.stormcoder/journal.jsonl'), 'utf8').trim().split('\n').length <= 400, 'the journal is trimmed');
-	assert.ok((await memory.promptBlock()).length < 6_500, 'the block stays within its budget');
+	assert.ok((await promptBlock()).length < 6_500, 'the block stays within its budget');
 }
 
 // 9. The remember tool: runs through approval, reports duplicates without failing, refuses secrets.
@@ -239,6 +241,143 @@ const file = rel => path.join(ws, rel);
 	assert.equal(tool.isError, false);
 	assert.match(tool.result, /No|Nothing|matches/, 'the tool answers even with no memory file');
 	assert.ok(tools.READ_ONLY_TOOL_NAMES.includes('recall'), 'Ask and Plan can recall');
+}
+
+// 12. Pins: never evicted, always kept in the prompt block, survive a toggle.
+{
+	let text = mem.addMemory('', 'gotcha', 'The pinned rule that must always be in view.', '2026-01-01').content;
+	text = mem.updateMemory(text, text.trim(), { pinned: true }, '2026-02-01').content;
+	assert.match(text, /^- \[gotcha\*\] The pinned rule/);
+	assert.equal(mem.parseMemory(text)[0].pinned, true);
+	for (let i = 0; i < 80; i++) {
+		text = mem.addMemory(text, 'decision', `Filler decision ${i} ${'xyz'.repeat(30)} number ${i}.`, '2026-03-01').content;
+	}
+	assert.match(text, /The pinned rule that must always be in view\./, 'a pin survives eviction');
+	const block = mem.renderMemory(mem.parseMemory(text), 600);
+	assert.match(block, /The pinned rule/, 'a pin is kept when the block is cut');
+	assert.match(block, /Filler decision 79 /, '...and the newest unpinned fill the rest');
+	assert.ok(block.length <= 600);
+	const unpinned = mem.updateMemory(text, mem.parseMemory(text)[0].raw, { pinned: false }, '2026-02-01').content;
+	assert.doesNotMatch(unpinned, /\*\]/);
+}
+
+// 13. Edit and delete: by exact line, same rules as a new fact, stale views refused.
+{
+	const base = '- my own note\n- [gotcha] Old wording of the fact. (2026-01-01)\n- [command] Run npm test. (2026-01-02)\n';
+	const edited = mem.updateMemory(base, '- [gotcha] Old wording of the fact. (2026-01-01)', { text: 'New wording of the fact.' }, '2026-05-05');
+	assert.equal(edited.ok, true);
+	assert.match(edited.content, /- \[gotcha\] New wording of the fact\. \(2026-01-01\)/, 'the original date is kept');
+	assert.equal(mem.updateMemory(base, '- [gotcha] Old wording of the fact. (2026-01-01)', { text: 'token = abcdefgh12345678' }, 'd').ok, false, 'a credential is refused on edit too');
+	assert.equal(mem.updateMemory(base, '- [gotcha] Old wording of the fact. (2026-01-01)', { text: 'run NPM test' }, 'd').ok, false, 'an edit cannot duplicate another line');
+	assert.equal(mem.updateMemory(base, '- [gotcha] Old wording of the fact. (2026-01-01)', { text: '' }, 'd').ok, false);
+	assert.equal(mem.updateMemory(base, '- [gotcha] Old wording of the fact. (2026-01-01)', { type: 'nonsense' }, 'd').ok, false);
+	const typed = mem.updateMemory(base, '- my own note', { type: 'convention' }, '2026-05-05');
+	assert.match(typed.content, /^- \[convention\] my own note \(2026-05-05\)/m, 'a free-form line can be given a kind');
+	const plain = mem.updateMemory(base, '- my own note', { text: 'my reworded note' }, '2026-05-05');
+	assert.match(plain.content, /^- my reworded note$/m, 'a free-form line stays free-form');
+	assert.match(mem.updateMemory(base, '- not a line here', { text: 'x' }, 'd').message, /changed or is gone/);
+	const gone = mem.deleteMemory(base, '- [command] Run npm test. (2026-01-02)');
+	assert.equal(gone.ok, true);
+	assert.doesNotMatch(gone.content, /npm test/);
+	assert.match(gone.content, /my own note/);
+	assert.equal(mem.deleteMemory(base, '- nope').ok, false);
+	assert.equal(mem.deleteMemory('- only\n', '- only').content, '', 'deleting the last line leaves an empty file');
+}
+
+// 14. Suggestions: parsed tolerantly, filtered like a real save, merged, and resolved through the store.
+{
+	const existing = mem.parseMemory('- [command] Run the unit tests with npm test. (2026-01-01)');
+	const reply = 'Sure! ```json\n[{"type":"gotcha","text":"The build needs NODE_OPTIONS set."},{"type":"command","text":"run the unit tests with NPM test"},{"type":"gotcha","text":"api_key = abcdefgh12345678"},{"type":"bogus","text":"x"},{"type":"decision","text":"Chose sqlite for the cache."},{"type":"note","text":"a"},{"type":"note","text":"b"}]\n```';
+	const out = mem.parseProposals(reply, existing, 'Fix the build', '2026-06-01');
+	assert.deepEqual(out.map(p => p.text), ['The build needs NODE_OPTIONS set.', 'Chose sqlite for the cache.', 'a'], 'a repeat, a credential and a bad type are dropped; at most three');
+	assert.equal(out[0].goal, 'Fix the build');
+	assert.deepEqual(mem.parseProposals('nothing useful', existing, 'g', 'd'), []);
+	assert.deepEqual(mem.parseProposals('[not json', existing, 'g', 'd'), []);
+	assert.deepEqual(mem.parseProposals('{"type":"gotcha"}', existing, 'g', 'd'), []);
+	const merged = mem.mergeProposals(out, mem.parseProposals('[{"type":"gotcha","text":"the build needs node_options set"},{"type":"gotcha","text":"A brand new fact."}]', [], 'g', 'd'));
+	assert.equal(merged.length, 4, 'a repeat of a waiting suggestion is not added twice');
+	assert.deepEqual(mem.parseProposalFile('garbage'), []);
+	assert.equal(mem.parseProposalFile(JSON.stringify([{ id: 'a', type: 'gotcha', text: 't' }, { id: 1 }])).length, 1);
+	assert.match(mem.buildProposalPrompt('goal', 'digest', 'answer', '- saved'), /JSON array/);
+
+	fs.rmSync(file('.stormcoder'), { recursive: true, force: true });
+	const store = mem.projectStore(vs.Uri.file(ws));
+	await store.addProposals(out);
+	assert.equal((await store.proposals()).length, 3);
+	const accepted = await store.resolveProposal(out[0].id, true);
+	assert.equal(accepted.ok, true, accepted.message);
+	assert.match(fs.readFileSync(file('.stormcoder/memory.md'), 'utf8'), /NODE_OPTIONS/);
+	assert.equal((await store.proposals()).length, 2);
+	assert.equal((await store.resolveProposal(out[1].id, false)).ok, true);
+	assert.doesNotMatch(fs.readFileSync(file('.stormcoder/memory.md'), 'utf8'), /sqlite/, 'a dismissed suggestion is not saved');
+	assert.equal((await store.resolveProposal(out[1].id, false)).ok, false, 'resolving twice is reported, not silently repeated');
+	await store.clear();
+	assert.deepEqual(await store.proposals(), []);
+}
+
+// 15. The user's own store: separate from the project, always readable, listed first in the block.
+{
+	const userDir = path.join(tmp, 'user-memory');
+	mem.configureMemory({ userDir: vs.Uri.file(userDir), searchChats: words => words.includes('migration') ? ['- "Old chat" (2026-04-01), user: …we discussed the migration plan…'] : [] });
+	fs.rmSync(file('.stormcoder'), { recursive: true, force: true });
+	const user = mem.userStore();
+	assert.ok(user);
+	assert.equal((await user.remember('convention', 'I prefer tabs over spaces everywhere.', '2026-06-01')).saved, true);
+	assert.ok(fs.existsSync(path.join(userDir, 'memory.md')));
+	assert.ok(!fs.existsSync(path.join(userDir, '.gitignore')), 'the user store is not in a repository');
+	assert.equal((await user.view()).journalRuns, 0);
+	await user.appendJournal({ date: 'd', goal: 'g', files: [], verified: false });
+	assert.ok(!fs.existsSync(path.join(userDir, 'journal.jsonl')), 'only a project keeps a journal');
+	await mem.projectStore(vs.Uri.file(ws)).remember('gotcha', 'This project builds with make.', '2026-06-02');
+	const rootUri = vs.Uri.file(ws);
+	const block = await mem.buildPromptBlock(rootUri);
+	assert.match(block, /### Your preferences \(all projects\)\n- \[convention\] I prefer tabs/);
+	assert.ok(block.indexOf('Your preferences') < block.indexOf('Saved facts'), 'personal notes come first');
+	assert.match(block, /This project builds with make\./);
+	// An untrusted folder: the project half is not read, the user's own notes still are.
+	const trustedBefore = vs.workspace.isTrusted;
+	Object.defineProperty(vs.workspace, 'isTrusted', { value: false, configurable: true });
+	const untrusted = await mem.buildPromptBlock(rootUri);
+	assert.match(untrusted, /I prefer tabs/);
+	assert.doesNotMatch(untrusted, /builds with make/);
+	assert.doesNotMatch(await mem.recallAll(rootUri, 'make'), /builds with make/);
+	assert.doesNotMatch(await mem.recallAll(rootUri, 'migration'), /Old chat/, 'past chats are not searched in an untrusted folder');
+	Object.defineProperty(vs.workspace, 'isTrusted', { value: trustedBefore, configurable: true });
+	// recall covers both stores and the past chats.
+	const found = await mem.recallAll(rootUri, 'tabs');
+	assert.match(found, /\(all projects\) I prefer tabs/);
+	assert.match(await mem.recallAll(rootUri, 'migration'), /Past chats in this project:\n- "Old chat"/);
+	assert.match(await mem.recallAll(rootUri, 'make migration'), /builds with make[\s\S]*Past chats/);
+	// The tool: a user-scope save goes to the user store, with its own approval wording.
+	const asks = [];
+	const approve = { confirm: async r => { asks.push(r); return { approved: true }; }, ask: async () => '' };
+	const ask = { ...require('../out/agent/guardrails.js').loadGuardrails(), approval: 'always' };
+	const saved = await tools.executeTool({ id: '1', name: 'remember', args: { type: 'convention', text: 'I always want small commits.', scope: 'user' } }, approve, ask);
+	assert.equal(saved.isError, false, saved.result);
+	assert.match(asks[0].title, /your memory/);
+	assert.match(fs.readFileSync(path.join(userDir, 'memory.md'), 'utf8'), /small commits/);
+	assert.doesNotMatch(fs.existsSync(file('.stormcoder/memory.md')) ? fs.readFileSync(file('.stormcoder/memory.md'), 'utf8') : '', /small commits/);
+	// No user directory configured: the tool says so and saves nothing.
+	mem.configureMemory({});
+	const none = await tools.executeTool({ id: '1', name: 'remember', args: { type: 'convention', text: 'Another personal habit here.', scope: 'user' } }, approve, ask);
+	assert.equal(none.isError, true);
+	assert.match(none.result, /not available/);
+	mem.configureMemory({ userDir: vs.Uri.file(userDir) });
+}
+
+// 16. A fact repeated by the legacy file is a repeat; the legacy file is shown, never written.
+{
+	fs.rmSync(file('.stormcoder'), { recursive: true, force: true });
+	fs.mkdirSync(file('.openvs'), { recursive: true });
+	fs.writeFileSync(file('.openvs/memory.md'), '- Deploys go through the staging pipeline first\n');
+	const store = mem.projectStore(vs.Uri.file(ws));
+	assert.match((await store.remember('gotcha', 'deploys go through the staging pipeline first', 'd')).message, /Already remembered/);
+	const view = await store.view();
+	assert.equal(view.entries.length, 1);
+	assert.equal(view.entries[0].legacy, true);
+	assert.equal(fs.readFileSync(file('.openvs/memory.md'), 'utf8'), '- Deploys go through the staging pipeline first\n', 'the legacy file is untouched');
+	await store.remember('gotcha', 'A different fact entirely.', 'd');
+	assert.deepEqual((await store.view()).entries.map(e => e.legacy), [true, false]);
 }
 
 console.log('test-memory: all assertions passed');

@@ -55,14 +55,6 @@ export const CHAT_APP_HTML = `
 					<input id="maxRunMinutesInput" type="number" min="1" step="1" class="settings-number" />
 					<button id="saveMaxRunMinutes" class="mini-button">Save</button>
 				</div>
-				<label class="field-label" for="enableMemory">Project memory</label>
-				<label class="review-toggle"><input type="checkbox" id="enableMemory" /> Remember this project between chats</label>
-				<p class="hint">New chats start with facts the agent saved earlier and a short list of recent runs that changed files, about 1,500 tokens at most. Applies to chats you start after changing it. Files live in <code>.stormcoder/</code> and are git-ignored by default; nothing is read in an untrusted folder.</p>
-				<label class="field-label" for="memoryRecentRunsInput">Recent runs listed at the start of a chat</label>
-				<div class="settings-row">
-					<input id="memoryRecentRunsInput" type="number" min="0" max="20" step="1" class="settings-number" />
-					<button id="saveMemoryRecentRuns" class="mini-button">Save</button>
-				</div>
 			</div>
 			</div>
 
@@ -70,6 +62,40 @@ export const CHAT_APP_HTML = `
 						<div class="settings-header"><h2>Agent permissions</h2></div>
 			<p class="hint">Controls when Agent mode pauses for your approval. <strong>Always Ask</strong> confirms every write and command; <strong>Default</strong> auto-approves file edits but asks before running commands; <strong>Full Auto</strong> never asks (the hard guardrails — protected paths, denied commands, workspace confinement — still apply). Reading, listing and searching never ask.</p>
 			<div id="approvalList"></div>
+			</div>
+
+			<div class="area" data-area="memory">
+						<div class="settings-header"><h2>Memory</h2></div>
+			<p class="hint">New chats start with what Stormcoder remembers: notes you keep for every project, facts saved for this project (<code>.stormcoder/memory.md</code>, git-ignored by default) and the last few runs that changed files. The agent saves facts with <code>remember</code> and searches the rest with <code>recall</code>. Changes apply to chats you start afterwards. Nothing from a project is read until you trust its folder.</p>
+			<div class="general-settings">
+				<label class="review-toggle"><input type="checkbox" id="enableMemory" /> Remember between chats</label>
+				<label class="review-toggle" title="One extra request after each run that changed files. You approve every suggestion."><input type="checkbox" id="memoryAutoPropose" /> Suggest notes after runs (about 1-2k tokens each; you approve them)</label>
+				<label class="field-label" for="memoryRecentRunsInput">Recent runs listed at the start of a chat</label>
+				<div class="settings-row">
+					<input id="memoryRecentRunsInput" type="number" min="0" max="20" step="1" class="settings-number" />
+					<button id="saveMemoryRecentRuns" class="mini-button">Save</button>
+				</div>
+			</div>
+			<p class="hint" id="memoryStatus"></p>
+			<p class="hint" id="memoryNotice" role="status"></p>
+			<div id="memorySuggestions"></div>
+			<div class="settings-header"><h2 id="memoryProjectTitle">This project</h2>
+				<button id="memoryClearProject" class="mini-button">Clear</button>
+			</div>
+			<div id="memoryProject"></div>
+			<div class="settings-header"><h2>You, in every project</h2>
+				<button id="memoryClearUser" class="mini-button">Clear</button>
+			</div>
+			<div id="memoryUser"></div>
+			<div class="settings-header"><h2>Add a note</h2></div>
+			<div class="general-settings">
+				<div class="header-actions" id="memoryNewScope" role="group" aria-label="Where to save"></div>
+				<div class="header-actions" id="memoryNewType" role="group" aria-label="Kind of note"></div>
+				<div class="settings-row">
+					<input id="memoryNewText" type="text" class="settings-textarea" maxlength="300" placeholder="e.g. Run the linter with npm run lint before committing." />
+					<button id="memoryAddBtn" class="mini-button">Add</button>
+				</div>
+			</div>
 			</div>
 
 			<div class="area" data-area="skills">

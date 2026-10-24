@@ -8,6 +8,7 @@
 // Keys come from the environment, as the app reads them (ANTHROPIC_API_KEY, OPENAI_API_KEY, ...).
 // Options: --tasks <substring ...>  --repeat N  --approval yolo|auto-edits  --max-steps N
 //          --timeout-scale X  --label text  --out file.json
+//          --setting key=value ...  set Stormcoder settings for the run, e.g. --setting memory.enabled=false
 //          --app-data [dir]  use the keys and provider settings already saved in the Stormcoder app
 //                            (default folder for this OS; read-only, signed-in sessions are never touched)
 //          --engine <dir>   a different checkout (with dist/ built) to run the tasks against
@@ -61,6 +62,15 @@ for (const task of tasks) {
 		let engine;
 		try {
 			const settings = { 'stormcoder.guardrails.approval': args.approval ?? 'yolo', 'stormcoder.agent.maxSteps': Number(args['max-steps'] ?? 60), 'stormcoder.agent.maxRunMinutes': 0 };
+			for (const pair of [].concat(args.setting ?? [])) {
+				const eq = String(pair).indexOf('=');
+				if (eq < 1) { throw new Error(`--setting needs key=value, got "${pair}"`); }
+				const key = String(pair).slice(0, eq);
+				const raw = String(pair).slice(eq + 1);
+				let value = raw;
+				try { value = JSON.parse(raw); } catch { /* a plain string */ }
+				settings[key.startsWith('stormcoder.') ? key : `stormcoder.${key}`] = value;
+			}
 			let model = args.model;
 			if (provider === 'oracle') {
 				oracle = await startOracle(task, ws, { idle: args.oracle === 'idle' });
@@ -125,7 +135,7 @@ function parseArgs(argv) {
 		const key = argv[i].slice(2);
 		const values = [];
 		while (argv[i + 1] && !argv[i + 1].startsWith('--')) { values.push(argv[++i]); }
-		out[key] = key === 'tasks' ? values : (values[0] ?? true);
+		out[key] = key === 'tasks' || key === 'setting' ? values : (values[0] ?? true);
 	}
 	return out;
 }

@@ -137,6 +137,7 @@
 		"stormcoder.mcp.servers": {},
 		"stormcoder.skills": [],
 		"stormcoder.memory.enabled": true,
+		"stormcoder.memory.autoPropose": false,
 		"stormcoder.memory.recentRuns": 5,
 		"stormcoder.auto.planModel": "",
 		"stormcoder.auto.codeModel": "",
@@ -630,6 +631,10 @@
 		"stormcoder.memory.enabled": {
 			"type": "boolean",
 			"description": "%config.memory.enabled%"
+		},
+		"stormcoder.memory.autoPropose": {
+			"type": "boolean",
+			"description": "%config.memory.autoPropose%"
 		},
 		"stormcoder.memory.recentRuns": {
 			"type": "number",

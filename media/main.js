@@ -169,6 +169,19 @@
 		enableMemory: /** @type {HTMLInputElement} */ ($('enableMemory')),
 		memoryRecentRunsInput: /** @type {HTMLInputElement} */ ($('memoryRecentRunsInput')),
 		saveMemoryRecentRuns: $('saveMemoryRecentRuns'),
+		memoryAutoPropose: /** @type {HTMLInputElement} */ ($('memoryAutoPropose')),
+		memoryStatus: $('memoryStatus'),
+		memoryNotice: $('memoryNotice'),
+		memorySuggestions: $('memorySuggestions'),
+		memoryProject: $('memoryProject'),
+		memoryUser: $('memoryUser'),
+		memoryProjectTitle: $('memoryProjectTitle'),
+		memoryClearProject: $('memoryClearProject'),
+		memoryClearUser: $('memoryClearUser'),
+		memoryNewScope: $('memoryNewScope'),
+		memoryNewType: $('memoryNewType'),
+		memoryNewText: /** @type {HTMLInputElement} */ ($('memoryNewText')),
+		memoryAddBtn: $('memoryAddBtn'),
 		enableDecompose: /** @type {HTMLInputElement} */ ($('enableDecompose')),
 		enableReview: /** @type {HTMLInputElement} */ ($('enableReview')),
 		messages: $('messages'),
@@ -1403,6 +1416,206 @@
 		renderApprovalList();
 		renderSkillList();
 		vscode.postMessage({ type: 'listMcp' });
+		memoryPost({ type: 'memoryList' });
+	}
+
+	// ---- Memory panel ----------------------------------------------------------
+	/** @type {{ enabled: boolean, autoPropose: boolean, hasProject: boolean, trusted: boolean, tokens: number, types: string[], project?: any, user?: any } | null} */
+	let memoryState = null;
+	let memoryNewScope = 'project';
+	let memoryNewType = 'note';
+	/** The line being edited, by its exact text, so a re-render does not drop the edit box. */
+	let memoryEditing = '';
+	/** Clear buttons that were pressed once and now ask to be pressed again. */
+	const memoryArmed = new Set();
+
+	/** Posts a Memory panel request. */
+	function memoryPost(message) {
+		vscode.postMessage(message);
+	}
+
+	/**
+	 * One button of a small button group (used instead of a native select, which the app's
+	 * styling cannot reach). `pressed` marks the current choice.
+	 * @param {HTMLElement} group @param {string[][]} options [value, label] pairs
+	 * @param {string} current @param {(value: string) => void} onPick
+	 */
+	function buttonGroup(group, options, current, onPick) {
+		group.textContent = '';
+		for (const [value, label] of options) {
+			const b = document.createElement('button');
+			b.className = 'mini-button';
+			b.textContent = label;
+			b.setAttribute('aria-pressed', String(value === current));
+			b.addEventListener('click', () => onPick(value));
+			group.appendChild(b);
+		}
+	}
+
+	/**
+	 * One saved line: its kind, text and date, with pin, edit and delete. A line from the
+	 * pre-rename folder is shown but cannot be changed here.
+	 * @param {any} e @param {string} scope
+	 */
+	function memoryRow(e, scope) {
+		const row = document.createElement('div');
+		row.className = 'skill-row mem-row' + (e.pinned ? ' pinned' : '') + (e.legacy ? ' legacy' : '');
+		const info = document.createElement('div');
+		info.className = 'skill-info';
+		if (memoryEditing === e.raw && !e.legacy) {
+			const input = document.createElement('input');
+			input.type = 'text';
+			input.className = 'settings-textarea mem-edit';
+			input.maxLength = 300;
+			input.value = e.text;
+			const save = document.createElement('button');
+			save.className = 'mini-button';
+			save.textContent = 'Save';
+			save.addEventListener('click', () => {
+				memoryEditing = '';
+				memoryPost({ type: 'memoryEdit', memoryScope: scope, memoryRaw: e.raw, memoryText: input.value });
+			});
+			const cancel = document.createElement('button');
+			cancel.className = 'mini-button';
+			cancel.textContent = 'Cancel';
+			cancel.addEventListener('click', () => { memoryEditing = ''; renderMemory(); });
+			input.addEventListener('keydown', ev => { if (ev.key === 'Enter') { save.click(); } else if (ev.key === 'Escape') { cancel.click(); } });
+			info.append(input);
+			const actions = document.createElement('div');
+			actions.className = 'mem-actions';
+			actions.append(save, cancel);
+			row.append(info, actions);
+			setTimeout(() => input.focus(), 0);
+			return row;
+		}
+		if (e.type) {
+			const tag = document.createElement('span');
+			tag.className = 'mem-tag';
+			tag.textContent = e.type + (e.pinned ? ' · pinned' : '');
+			info.appendChild(tag);
+		} else if (e.legacy) {
+			const tag = document.createElement('span');
+			tag.className = 'mem-tag';
+			tag.textContent = 'from .openvs';
+			info.appendChild(tag);
+		}
+		const text = document.createElement('span');
+		text.className = 'mem-text';
+		text.textContent = e.text;
+		info.appendChild(text);
+		if (e.date) {
+			const d = document.createElement('div');
+			d.className = 'skill-desc';
+			d.textContent = e.date;
+			info.appendChild(d);
+		}
+		row.appendChild(info);
+		if (!e.legacy) {
+			const actions = document.createElement('div');
+			actions.className = 'mem-actions';
+			const mk = (label, handler) => {
+				const b = document.createElement('button');
+				b.className = 'mini-button';
+				b.textContent = label;
+				b.addEventListener('click', handler);
+				actions.appendChild(b);
+			};
+			if (e.type) {
+				mk(e.pinned ? 'Unpin' : 'Pin', () => memoryPost({ type: 'memoryEdit', memoryScope: scope, memoryRaw: e.raw, memoryPinned: !e.pinned }));
+			}
+			mk('Edit', () => { memoryEditing = e.raw; renderMemory(); });
+			mk('Delete', () => memoryPost({ type: 'memoryDelete', memoryScope: scope, memoryRaw: e.raw }));
+			row.appendChild(actions);
+		}
+		return row;
+	}
+
+	/** Renders the whole Memory panel from the last state the host sent. */
+	function renderMemory() {
+		if (!els.memoryStatus || !memoryState) { return; }
+		const st = memoryState;
+		els.enableMemory.checked = !!st.enabled;
+		els.memoryAutoPropose.checked = !!st.autoPropose;
+		els.memoryAutoPropose.disabled = !st.enabled;
+		els.memoryRecentRunsInput.disabled = !st.enabled;
+		els.memoryStatus.textContent = !st.enabled
+			? 'Memory is off: new chats start without it, and the agent cannot save or search notes.'
+			: `New chats start with about ${st.tokens} tokens of memory.`
+				+ (st.hasProject && !st.trusted ? ' This folder is not trusted, so its project memory is not read.' : '')
+				+ (!st.hasProject ? ' No folder is open, so only your own notes apply.' : '');
+		els.memorySuggestions.textContent = '';
+		const waiting = (st.project && st.project.proposals) || [];
+		if (waiting.length) {
+			const h = document.createElement('div');
+			h.className = 'settings-header';
+			h.innerHTML = '<h2>Suggested notes</h2>';
+			els.memorySuggestions.appendChild(h);
+			for (const p of waiting) {
+				const row = document.createElement('div');
+				row.className = 'skill-row mem-row';
+				const info = document.createElement('div');
+				info.className = 'skill-info';
+				const tag = document.createElement('span');
+				tag.className = 'mem-tag';
+				tag.textContent = p.type;
+				const text = document.createElement('span');
+				text.className = 'mem-text';
+				text.textContent = p.text;
+				const why = document.createElement('div');
+				why.className = 'skill-desc';
+				why.textContent = p.goal ? `After: ${p.goal}` : p.date;
+				info.append(tag, text, why);
+				const actions = document.createElement('div');
+				actions.className = 'mem-actions';
+				for (const [label, accept] of [['Accept', true], ['Dismiss', false]]) {
+					const b = document.createElement('button');
+					b.className = 'mini-button';
+					b.textContent = String(label);
+					b.addEventListener('click', () => memoryPost({ type: 'memoryProposal', memoryScope: 'project', suggestionId: p.id, suggestionAccept: accept }));
+					actions.appendChild(b);
+				}
+				row.append(info, actions);
+				els.memorySuggestions.appendChild(row);
+			}
+		}
+		/** @type {Array<[HTMLElement, any, string, string]>} */
+		const lists = [[els.memoryProject, st.project, 'project', 'Nothing saved for this project yet.'], [els.memoryUser, st.user, 'user', 'No personal notes yet.']];
+		for (const [host, view, scope, empty] of lists) {
+			host.textContent = '';
+			const entries = (view && view.entries) || [];
+			if (!entries.length) {
+				const p = document.createElement('div');
+				p.className = 'mem-empty';
+				p.textContent = scope === 'project' && !st.trusted ? 'Not available until the folder is trusted.' : empty;
+				host.appendChild(p);
+			}
+			for (const e of entries) { host.appendChild(memoryRow(e, scope)); }
+		}
+		if (memoryHasJournal(st)) {
+			els.memoryProjectTitle.textContent = `This project (${st.project.journalRuns} run${st.project.journalRuns === 1 ? '' : 's'} journaled)`;
+		} else {
+			els.memoryProjectTitle.textContent = 'This project';
+		}
+		/** @type {Array<[HTMLElement, string]>} */
+		const clears = [[els.memoryClearProject, 'project'], [els.memoryClearUser, 'user']];
+		for (const [btn, scope] of clears) {
+			btn.textContent = memoryArmed.has(scope) ? 'Click again to clear' : 'Clear';
+			btn.classList.toggle('hidden', scope === 'user' ? !st.user : !st.project);
+		}
+		buttonGroup(els.memoryNewScope, [['project', 'This project'], ['user', 'Every project']], memoryNewScope, v => { memoryNewScope = v; renderMemory(); });
+		buttonGroup(els.memoryNewType, (st.types || []).map(t => [t, t]), memoryNewType, v => { memoryNewType = v; renderMemory(); });
+	}
+
+	/** @param {{ project?: any }} st */
+	function memoryHasJournal(st) {
+		return !!(st.project && typeof st.project.journalRuns === 'number');
+	}
+
+	/** Updates the one-line outcome under the memory status. @param {string | undefined} message @param {boolean | undefined} isError */
+	function memoryFeedback(message, isError) {
+		if (!els.memoryNotice) { return; }
+		els.memoryNotice.textContent = message || '';
+		els.memoryNotice.style.color = isError ? 'var(--vscode-errorForeground, #f85149)' : '';
 	}
 
 	/** Renders the skills section in the settings panel. */
@@ -2527,6 +2740,30 @@
 		generalConfig.maxRunMinutes = n;
 		vscode.postMessage({ type: 'setMaxRunMinutes', maxRunMinutes: n });
 	});
+	els.memoryAutoPropose?.addEventListener('change', () => {
+		memoryPost({ type: 'setMemoryAutoPropose', memoryAutoPropose: els.memoryAutoPropose.checked });
+	});
+	els.memoryAddBtn?.addEventListener('click', () => {
+		const text = els.memoryNewText.value.trim();
+		if (!text) { memoryFeedback('Write the note first.', true); return; }
+		memoryPost({ type: 'memoryAdd', memoryScope: memoryNewScope, memoryType: memoryNewType, memoryText: text });
+	});
+	els.memoryNewText?.addEventListener('keydown', ev => { if (ev.key === 'Enter') { els.memoryAddBtn.click(); } });
+	/** @type {Array<[HTMLElement, string]>} */
+	const clearButtons = [[els.memoryClearProject, 'project'], [els.memoryClearUser, 'user']];
+	for (const [btn, scope] of clearButtons) {
+		btn?.addEventListener('click', () => {
+			// Two presses: clearing cannot be undone, and the second one is the confirmation.
+			if (!memoryArmed.has(scope)) {
+				memoryArmed.add(scope);
+				renderMemory();
+				setTimeout(() => { if (memoryArmed.delete(scope)) { renderMemory(); } }, 4000);
+				return;
+			}
+			memoryArmed.delete(scope);
+			memoryPost({ type: 'memoryClear', memoryScope: scope });
+		});
+	}
 	els.enableMemory?.addEventListener('change', () => {
 		generalConfig.memoryEnabled = els.enableMemory.checked;
 		els.memoryRecentRunsInput.disabled = !generalConfig.memoryEnabled;
@@ -2842,6 +3079,13 @@
 				break;
 			case 'openSettings':
 				els.settingsPanel.classList.remove('hidden'); renderSettings();
+				break;
+			case 'memoryState':
+				memoryState = msg.state;
+				// What was added or changed is shown; a rejected edit leaves the box as typed.
+				if (msg.message) { memoryFeedback(msg.message, !!msg.error); }
+				if (/^Remembered/.test(msg.message || '')) { els.memoryNewText.value = ''; }
+				renderMemory();
 				break;
 			case 'models':
 				fetchedModels[msg.provider] = normalizeModelEntries(msg.models);

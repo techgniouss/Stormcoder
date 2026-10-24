@@ -6,7 +6,7 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { AgentA2A, AgentMessageDelivery, AgentOptions, AgentRunner, AgentSessionInfo, RunResult } from './agent/agentRunner';
-import { ProjectMemory, appendMemory, goalOf } from './memory/projectMemory';
+import { MEMORY_TYPES, MemoryScope, MemoryStore, appendMemory, buildPromptBlock, buildProposalPrompt, configureMemory, goalOf, memoryEnabled, parseProposals, projectStore, userStore } from './memory/projectMemory';
 import { WorkLog } from './agent/workLog';
 import { thinkingStyle } from './providers/anthropic';
 import { streamBudgeted } from './agent/budgetedStream';
@@ -32,7 +32,7 @@ import { rateLimitStatus } from './providers/rateLimits';
 import { ProviderRegistry } from './providers/registry';
 import { withProviderResilience } from './providers/resilience';
 import { ModelCatalog } from './providers/modelCatalog';
-import { ChatImage, ChatMessage, ChatProvider, entrySupportsTools, isAbortError, modelSupportsVision } from './providers/types';
+import { ChatImage, ChatMessage, ChatProvider, entrySupportsTools, isAbortError, modelSupportsVision, streamChatWithContinuation } from './providers/types';
 import { defaultChromeProfilePath } from './providers/webCookie/chromeCookies';
 import { AttachImageChunk, UploadAssembler, readPickedImages, sanitizeInlineImages } from './remote/attachments';
 import { QueueDrainGate } from './session/queueDrain';
@@ -185,6 +185,15 @@ interface WebviewToHost {
 	reviewEnabled?: boolean;
 	memoryEnabled?: boolean;
 	memoryRecentRuns?: number;
+	memoryAutoPropose?: boolean;
+	/** The Memory panel's requests: which store, which line (by its exact text), and what to change. */
+	memoryScope?: string;
+	memoryRaw?: string;
+	memoryType?: string;
+	memoryText?: string;
+	memoryPinned?: boolean;
+	suggestionId?: string;
+	suggestionAccept?: boolean;
 	inline?: boolean;
 	/** `applyEdit` only: which stored proposal to apply (see `ChatViewProvider.editProposals`). */
 	proposalId?: string;
@@ -575,6 +584,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		};
 		this.bus.setChatOnlyTypes(CHAT_ONLY_MESSAGE_TYPES);
 		this.restoreSessionState();
+		configureMemory({
+			userDir: vscode.Uri.joinPath(context.globalStorageUri, 'memory'),
+			searchChats: (words, limit) => this.searchChats(words, limit),
+		});
 		// A hidden sink that exercises the N-sink paths (origin routing, rebind, escalation)
 		// with no network transport — see the "remote control" plan's Phase 3 staging note.
 		// Read once at construction, like `traceSessions`: no live toggling.
@@ -643,16 +656,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	/** Project memory as read when each chat session first needed it; see {@link memoryBlock}. */
 	private readonly memorySnapshots = new Map<string, string>();
 
-	/** The project memory, when it is on and the workspace is one the user trusts. */
-	private memoryFor(): ProjectMemory | undefined {
-		const cfg = vscode.workspace.getConfiguration('stormcoder');
-		const root = vscode.workspace.workspaceFolders?.[0]?.uri;
-		// A cloned repository's memory file is text an attacker could have written into the
-		// prompt, so it is not read until the folder is trusted.
-		if (!root || !vscode.workspace.isTrusted || cfg.get<boolean>('memory.enabled') === false) {
-			return undefined;
-		}
-		return new ProjectMemory(root);
+	/** The first workspace folder, where project memory lives. */
+	private memoryRoot(): vscode.Uri | undefined {
+		return vscode.workspace.workspaceFolders?.[0]?.uri;
+	}
+
+	/** The project's memory store, when memory is on and the folder is one the user trusts (a cloned repository's memory file is text anyone could have written). */
+	private projectMemory(): MemoryStore | undefined {
+		const root = this.memoryRoot();
+		return root && vscode.workspace.isTrusted && memoryEnabled() ? projectStore(root) : undefined;
+	}
+
+	/** How many recent runs the memory block lists (`stormcoder.memory.recentRuns`). */
+	private memoryRecentRuns(): number | undefined {
+		const runs = vscode.workspace.getConfiguration('stormcoder').get<number>('memory.recentRuns');
+		return typeof runs === 'number' ? runs : undefined;
 	}
 
 	/**
@@ -665,8 +683,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		if (sessionId && this.memorySnapshots.has(sessionId)) {
 			return this.memorySnapshots.get(sessionId)!;
 		}
-		const runs = vscode.workspace.getConfiguration('stormcoder').get<number>('memory.recentRuns');
-		const block = (await this.memoryFor()?.promptBlock(typeof runs === 'number' ? runs : undefined)) ?? '';
+		const block = await buildPromptBlock(this.memoryRoot(), this.memoryRecentRuns());
 		if (sessionId) {
 			if (this.memorySnapshots.size >= 50) {
 				this.memorySnapshots.delete(this.memorySnapshots.keys().next().value as string);
@@ -680,11 +697,180 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	private async journalRun(messages: ReadonlyArray<{ role: string; content: string }>, workLog: WorkLog): Promise<void> {
 		const files = workLog.changedFiles();
 		const goal = goalOf(messages);
-		const memory = this.memoryFor();
+		const memory = this.projectMemory();
 		if (!memory || !files.length || !goal) {
 			return;
 		}
 		await memory.appendJournal({ date: new Date().toISOString().slice(0, 10), goal, files, verified: workLog.verified() });
+	}
+
+	/**
+	 * Asks the model, once the run is over, what the next session should be told, and queues the
+	 * answer as suggestions for the user to accept or dismiss in Settings > Memory. Off unless
+	 * `stormcoder.memory.autoPropose` is on, because it costs one more request (about 1-2k
+	 * tokens) per run that changed files. Runs detached from the chat: nothing waits on it and
+	 * any failure is only a suggestion not made.
+	 */
+	private proposeMemory(
+		provider: ChatProvider,
+		params: { model: string; baseUrl: string },
+		messages: ReadonlyArray<{ role: string; content: string }>,
+		workLog: WorkLog,
+		sessionId: string,
+		post: SessionPost,
+	): void {
+		const memory = this.projectMemory();
+		const goal = goalOf(messages);
+		if (!memory || !goal || !workLog.changedFiles().length
+			|| vscode.workspace.getConfiguration('stormcoder').get<boolean>('memory.autoPropose') !== true) {
+			return;
+		}
+		const answer = [...(this.sessionStore.getSession(sessionId)?.messages ?? [])].reverse().find(m => m.role === 'assistant' && !m.kind)?.content ?? '';
+		const digest = workLog.render();
+		const run = async (): Promise<void> => {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), 45_000);
+			try {
+				const providerId = provider.info.id;
+				const saved = (await memory.facts()).map(e => `- ${e.text}`).join('\n');
+				const result = await withProviderResilience(this.registry, providerId, params.model, apiKey => streamChatWithContinuation(provider, {
+					messages: [{ role: 'user', content: buildProposalPrompt(goal, digest, answer, saved) }],
+					model: params.model,
+					apiKey,
+					baseUrl: params.baseUrl,
+					maxTokens: 500,
+					signal: controller.signal,
+					onToken: () => { /* nothing is shown while this runs */ },
+				}));
+				const today = new Date().toISOString().slice(0, 10);
+				const proposals = parseProposals(result.text, await memory.facts(), goal, today);
+				if (!proposals.length) {
+					return;
+				}
+				await memory.addProposals(proposals);
+				post({ type: 'info', message: `Stormcoder suggests ${proposals.length} note${proposals.length === 1 ? '' : 's'} for project memory. Review ${proposals.length === 1 ? 'it' : 'them'} in Settings > Memory.` });
+			} catch {
+				// a suggestion not made is not an error worth showing
+			} finally {
+				clearTimeout(timer);
+			}
+		};
+		void run();
+	}
+
+	/** Past chats mentioning all-ish of `words`, as ready-to-show lines for the `recall` tool. */
+	private searchChats(words: string[], limit: number): string[] {
+		interface Chat { title: string; when?: string; messages: ReadonlyArray<{ role: string; content: string; kind?: string }> }
+		const chats: Chat[] = [
+			...this.sessionStore.getSessions().map(s => ({ title: s.title || 'Untitled chat', messages: s.messages })),
+			...this.sessionStore.getHistory().map(h => ({ title: h.title, when: new Date(h.savedAt).toISOString().slice(0, 10), messages: h.messages })),
+		];
+		const hits: Array<{ score: number; line: string }> = [];
+		const seen = new Set<string>();
+		for (const chat of chats) {
+			for (const m of chat.messages) {
+				if (m.kind || (m.role !== 'user' && m.role !== 'assistant') || typeof m.content !== 'string') {
+					continue;
+				}
+				const lower = m.content.toLowerCase();
+				const found = words.filter(w => lower.includes(w));
+				if (!found.length) {
+					continue;
+				}
+				const at = lower.indexOf(found[0]);
+				const snippet = m.content.slice(Math.max(0, at - 80), at + 160).replace(/\s+/g, ' ').trim();
+				const line = `- "${chat.title.slice(0, 40)}"${chat.when ? ` (${chat.when})` : ''}, ${m.role}: …${snippet}…`;
+				if (!seen.has(line)) {
+					seen.add(line);
+					hits.push({ score: found.length, line });
+				}
+			}
+		}
+		return hits.sort((a, b) => b.score - a.score).slice(0, limit).map(h => h.line);
+	}
+
+	/** The store for a panel request's scope, or undefined when that scope is not available. */
+	private memoryStoreFor(scope: unknown): MemoryStore | undefined {
+		if (scope === 'user') {
+			return userStore();
+		}
+		const root = this.memoryRoot();
+		return root && vscode.workspace.isTrusted ? projectStore(root) : undefined;
+	}
+
+	/** Everything the Memory panel shows, for one sink. */
+	private async memoryState(): Promise<Record<string, unknown>> {
+		const root = this.memoryRoot();
+		const trusted = !!root && vscode.workspace.isTrusted;
+		const project = trusted ? await projectStore(root!).view() : undefined;
+		const user = await userStore()?.view();
+		const block = await buildPromptBlock(root, this.memoryRecentRuns());
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
+		return {
+			enabled: memoryEnabled(),
+			autoPropose: cfg.get<boolean>('memory.autoPropose') === true,
+			hasProject: !!root,
+			trusted,
+			tokens: estimateTokens(block),
+			types: [...MEMORY_TYPES],
+			project,
+			user,
+		};
+	}
+
+	/** Answers a Memory panel request: the new state for the sink that asked, plus a one-line outcome. */
+	private async postMemoryState(origin: string, message?: string, error?: boolean): Promise<void> {
+		this.bus.postTo(origin, { type: 'memoryState', state: await this.memoryState(), message, error });
+	}
+
+	/** `/memory`: lists what is remembered, saves a note, or switches memory on or off. */
+	private async handleMemorySlash(args: string, reply: (text: string) => void): Promise<void> {
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
+		const [sub = '', ...restWords] = args.trim().split(/\s+/).filter(Boolean);
+		const word = sub.toLowerCase();
+		if (word === 'on' || word === 'off') {
+			await cfg.update('memory.enabled', word === 'on', vscode.ConfigurationTarget.Global);
+			await this.postConfig();
+			reply(word === 'on' ? 'Project memory is on. It applies to chats you start from now on.' : 'Project memory is off. Chats you start from now on will not carry it.');
+			return;
+		}
+		if (word === 'add') {
+			let words = restWords;
+			let scope: MemoryScope = 'project';
+			if (words[0]?.toLowerCase() === 'user') {
+				scope = 'user';
+				words = words.slice(1);
+			}
+			let type = 'note';
+			if (words[0] && (MEMORY_TYPES as readonly string[]).includes(words[0].toLowerCase())) {
+				type = words[0].toLowerCase();
+				words = words.slice(1);
+			}
+			const store = this.memoryStoreFor(scope);
+			if (!memoryEnabled()) {
+				reply('Project memory is off. Turn it on with `/memory on` first.');
+			} else if (!store) {
+				reply(scope === 'user' ? 'Your personal memory is not available here.' : 'Open a trusted folder first: project memory lives in it.');
+			} else if (!words.length) {
+				reply('Usage: `/memory add [user] [convention|command|decision|gotcha|note] <text>`');
+			} else {
+				const outcome = await store.remember(type, words.join(' '));
+				reply(outcome.saved ? `${outcome.message}\nIt applies to chats you start from now on.` : outcome.message);
+			}
+			return;
+		}
+		if (!memoryEnabled()) {
+			reply('Project memory is off (`/memory on` turns it on).');
+			return;
+		}
+		const state = await this.memoryState();
+		const count = (v: unknown): number => ((v as { entries?: unknown[] } | undefined)?.entries?.length ?? 0);
+		const waiting = ((state.project as { proposals?: unknown[] } | undefined)?.proposals?.length ?? 0);
+		reply([
+			`**Project memory** is on: ${count(state.project)} saved fact${count(state.project) === 1 ? '' : 's'} here, ${count(state.user)} of yours across projects, about ${state.tokens} tokens at the start of a new chat.`,
+			waiting ? `${waiting} suggested note${waiting === 1 ? ' is' : 's are'} waiting for your decision.` : '',
+			'Manage it in Settings > Memory. `/memory add [user] <text>` saves a note; `/memory off` switches it off.',
+		].filter(Boolean).join('\n'));
 	}
 
 	/** `base` followed by every active skill, within the combined skills budget. */
@@ -1684,6 +1870,45 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 					await this.postConfig();
 				}
 				break;
+			case 'setMemoryAutoPropose':
+				await vscode.workspace.getConfiguration('stormcoder').update(
+					'memory.autoPropose', !!message.memoryAutoPropose, vscode.ConfigurationTarget.Global);
+				await this.postMemoryState(origin);
+				break;
+			case 'memoryList':
+				await this.postMemoryState(origin);
+				break;
+			case 'memoryAdd':
+			case 'memoryEdit':
+			case 'memoryDelete':
+			case 'memoryClear':
+			case 'memoryProposal': {
+				const store = this.memoryStoreFor(message.memoryScope);
+				if (!store) {
+					await this.postMemoryState(origin, message.memoryScope === 'user' ? 'Your personal memory is not available here.' : 'Open a trusted folder first: project memory lives in it.', true);
+					break;
+				}
+				let outcome: { ok: boolean; message: string };
+				if (message.type === 'memoryAdd') {
+					const saved = await store.remember(message.memoryType || 'note', message.memoryText ?? '');
+					outcome = { ok: saved.saved, message: saved.message };
+				} else if (message.type === 'memoryEdit') {
+					outcome = await store.update(message.memoryRaw ?? '', {
+						...(message.memoryText !== undefined ? { text: message.memoryText } : {}),
+						...(message.memoryType !== undefined ? { type: message.memoryType } : {}),
+						...(message.memoryPinned !== undefined ? { pinned: message.memoryPinned } : {}),
+					});
+				} else if (message.type === 'memoryDelete') {
+					outcome = await store.remove(message.memoryRaw ?? '');
+				} else if (message.type === 'memoryProposal') {
+					outcome = await store.resolveProposal(message.suggestionId ?? '', !!message.suggestionAccept);
+				} else {
+					await store.clear();
+					outcome = { ok: true, message: 'Cleared.' };
+				}
+				await this.postMemoryState(origin, outcome.message, !outcome.ok);
+				break;
+			}
 			case 'setDecompose':
 				await vscode.workspace.getConfiguration('stormcoder').update(
 					'auto.decompose', !!message.decompose, vscode.ConfigurationTarget.Global);
@@ -2804,6 +3029,7 @@ ${context.content}` }
 			openMcpSettings: () => { this.openSettingsWindow(); },
 			reply: text => { this.bus.postTo(origin, { type: 'info', sessionId, message: text }); },
 			compact: () => { void this.compactSession(sessionId, origin); },
+			memory: args => { void this.handleMemorySlash(args, text => this.bus.postTo(origin, { type: 'info', sessionId, message: text })); },
 			undoRun: () => { void this.undoLastRun(sessionId, origin); },
 			listSkills: () => skillsSnapshot,
 		};
@@ -2981,6 +3207,12 @@ ${context.content}` }
 				flushPhaseText();
 				this.sessionStore.attachWorkNotes(sessionId, autoWorkLog.render());
 				await this.journalRun(history, autoWorkLog);
+				// Suggestions are asked of the planning model: it is the one the user picked for judgement.
+				const planner = (await this.router.resolveRoleCandidates('plan', {}))[0];
+				const plannerProvider = planner?.ready ? this.registry.getProvider(planner.providerId) : undefined;
+				if (planner && plannerProvider) {
+					this.proposeMemory(plannerProvider, { model: planner.model, baseUrl: this.registry.getBaseUrl(planner.providerId) }, history, autoWorkLog, sessionId, post);
+				}
 			} else {
 				// Ask/Plan → planning/reasoning model; inline Edit → implementation model.
 				const role: AutoRole = mode === 'edit' ? 'code' : 'plan';
@@ -3433,6 +3665,7 @@ ${context.content}` }
 			// The digest the next turn reads (see WorkLog) and the journal the next session reads.
 			this.sessionStore.attachWorkNotes(sessionId, workLog.render());
 			await this.journalRun(messages, workLog);
+			this.proposeMemory(provider, params, messages, workLog, sessionId, post);
 		}
 	}
 

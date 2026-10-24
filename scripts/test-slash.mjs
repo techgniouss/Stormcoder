@@ -27,6 +27,7 @@ function makeEffects(skillsSnapshot) {
 		openMcpSettings: () => calls.push({ fn: 'openMcpSettings' }),
 		reply: text => calls.push({ fn: 'reply', text }),
 		compact: () => calls.push({ fn: 'compact' }),
+		memory: args => calls.push({ fn: 'memory', args }),
 		undoRun: () => calls.push({ fn: 'undoRun' }),
 		listSkills: () => skillsSnapshot ?? { skills: [], active: [] },
 	};
@@ -261,6 +262,19 @@ for (const remote of [false, true]) {
 	const c = makeEffects();
 	assert.deepStrictEqual(runSlash('/compact', c.effects, remote), { handled: true });
 	assert.deepStrictEqual(c.calls, [{ fn: 'compact' }]);
+}
+
+// /memory: handed to the host with its arguments; refused from a remote client, like the Memory panel.
+{
+	const local = makeEffects();
+	assert.deepStrictEqual(runSlash('/memory add user I prefer tabs', local.effects), { handled: true });
+	assert.deepStrictEqual(local.calls, [{ fn: 'memory', args: 'add user I prefer tabs' }]);
+	const bare = makeEffects();
+	runSlash('/memory', bare.effects);
+	assert.deepStrictEqual(bare.calls, [{ fn: 'memory', args: '' }]);
+	const remoteRun = makeEffects();
+	assert.deepStrictEqual(runSlash('/memory off', remoteRun.effects, true), { handled: true, denied: true });
+	assert.deepStrictEqual(remoteRun.calls, [], 'a remote client cannot read or change memory');
 }
 
 console.log('test-slash: all assertions passed');
