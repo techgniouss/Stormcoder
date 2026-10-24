@@ -118,6 +118,12 @@ const SETTINGS_SINK_ID = 'settings';
 /** {@link MessageSink} id for the diagnostic `stormcoder.remote.loopback` sink. */
 const LOOPBACK_SINK_ID = 'loopback';
 
+/** Most messages a paired device may page back in one `fetchTranscript`. */
+const MAX_TRANSCRIPT_PAGE = 100;
+
+/** Paths a run started from a paired phone may not write: instructions and process config that outlive the run. */
+const REMOTE_PROTECTED_PATHS = /(^|\/)(\.stormcoder|\.openvs)\/(skills(\/|$)|mcp\.json$)|(^|\/)\.vscode\/mcp\.json$/i;
+
 /**
  * Message `type`s that must never reach a `wantsChat: false` sink (the detached Settings tab
  * today; a later phase's non-chat remote sinks too). Mirrors `CHAT_ONLY_MESSAGES` at
@@ -125,12 +131,14 @@ const LOOPBACK_SINK_ID = 'loopback';
  * `SessionBus.post` is what actually enforces it now, per the "remote control" plan's "Multi-
  * sink egress" section ("CHAT_ONLY filtering moves host-side"). `SessionBus` itself has to stay
  * `vscode`-free and so cannot read `media/main.js`, which is why this copy lives here instead.
+ * `'remote'` is deliberately absent, as in `media/main.js`: connection status, pairing replies and
+ * the device list are the Remote control panel's data, and that panel lives in the Settings tab.
  */
 const CHAT_ONLY_MESSAGE_TYPES: ReadonlySet<string> = new Set([
 	'token', 'agentStepStart', 'agentStepEnd', 'toolStart', 'toolEnd',
 	'done', 'newChat', 'inline', 'autoPhase', 'autoSummary', 'editProposal', 'compacted', 'steerable', 'steerRejected',
 	'approvalRequest', 'askRequest', 'promptCancel',
-	'sessions', 'transcript', 'runStart', 'userTurn', 'commands', 'remote',
+	'sessions', 'transcript', 'runStart', 'userTurn', 'commands',
 ]);
 
 /**
@@ -1467,7 +1475,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		// remote request with no interlock at all.
 		const rawFloor = vscode.workspace.getConfiguration('stormcoder').get<string>('remote.approvalFloor');
 		const floor: ApprovalPolicy = (APPROVAL_POLICIES as readonly string[]).includes(rawFloor ?? '') ? (rawFloor as ApprovalPolicy) : 'auto-edits';
-		return { ...g, approval: applyApprovalFloor(g.approval, runOrigin, floor) };
+		const approval = applyApprovalFloor(g.approval, runOrigin, floor);
+		// A run started from a paired phone additionally cannot write the files that steer later
+		// sessions or start processes (skills, MCP config): under the default 'auto-edits' floor
+		// file edits are not asked about, so a prompt-injected remote run could plant them silently.
+		return runOrigin === 'remote' ? { ...g, approval, protectedRegex: [...(g.protectedRegex ?? []), REMOTE_PROTECTED_PATHS] } : { ...g, approval };
 	}
 
 	// --- Message handling -------------------------------------------------------
@@ -1492,9 +1504,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			}
 			const post = this.sessionPost(message.sessionId || 'default');
 			post({ type: 'error', message: err instanceof Error ? err.message : String(err) });
-			// A no-op unless this session's run was actually tracked (see trackSessionSend).
-			this.sessionStore.endRun(message.sessionId || 'default');
-			post({ type: 'done' });
+			// Only a message that starts a run can have left one tracked. Ending it for any other
+			// type let a malformed `steer` from a paired phone mark someone's live run as over while
+			// it kept running.
+			if (message.type === 'send' || message.type === 'slash') {
+				// A no-op unless this session's run was actually tracked (see trackSessionSend).
+				this.sessionStore.endRun(message.sessionId || 'default');
+				post({ type: 'done' });
+			}
 		});
 	}
 
@@ -1705,7 +1722,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				// history back must not overwrite what any other connected client is showing.
 				if (message.sessionId) {
 					const before = typeof message.before === 'number' ? message.before : 0;
-					const count = typeof message.count === 'number' ? message.count : undefined;
+					// Capped: a paired device could otherwise ask for a whole transcript in one frame, past what
+					// the relay accepts, and the relay answers an oversized frame by dropping the host's socket.
+					const count = typeof message.count === 'number' ? Math.min(Math.max(1, Math.floor(message.count) || 1), MAX_TRANSCRIPT_PAGE) : undefined;
 					const page = this.sessionStore.pageMessages(message.sessionId, { before, count });
 					this.bus.postTo(origin, { type: 'transcript', sessionId: message.sessionId, ...page });
 				}
@@ -1786,7 +1805,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				await this.postConfig();
 				break;
 			case 'setModel':
-				if (message.provider && typeof message.model === 'string') {
+				// A known provider only: any other id would create a `stormcoder.<id>.model` setting
+				// of the sender's choosing, and a paired phone is allowed to send this message.
+				if (message.provider && typeof message.model === 'string' && message.model.length <= 200 && this.registry.getProvider(message.provider)) {
 					await this.registry.setModel(message.provider, message.model);
 					// See `setProvider`'s own note just above — same gap, same fix.
 					await this.postConfig();
@@ -3511,6 +3532,12 @@ ${context.content}` }
 		if (!target) {
 			// Raced with `list_agent_sessions`: the tab closed between the two calls.
 			return { ok: false, error: `No open chat tab with session id "${targetSessionId}" — it may have just been closed.` };
+		}
+		// A run started from a paired phone may only talk to runs started the same way. Otherwise
+		// it could put text into a run the desktop user started, which has no approval floor, and
+		// the phone's own floor would be no protection at all.
+		if (this.runOriginLocal.get(fromSessionId)?.local === false && this.runOriginLocal.get(targetSessionId)?.local !== false) {
+			return { ok: false, error: 'A run started from a paired device cannot send messages to a chat that was started on this computer.' };
 		}
 		const senderTitle = this.sessionStore.getSession(fromSessionId)?.title || 'New chat';
 		const replyHint = expectsReply

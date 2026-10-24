@@ -172,6 +172,11 @@ for (const excluded of EXCLUDED_FROM_WEBVIEW) {
 	// every status update, pairing reply and error `media/pairing.js` ever needed to show,
 	// leaving the status dot stuck at "off" regardless of the real connection state.
 	assert.ok(!list[1].includes(`'remote'`), 'remote status/pairing/device updates must reach the Settings tab — it is where the Remote control panel lives');
+	// The host enforces its own copy of the list (SessionBus), and it must agree: it used to list
+	// 'remote', so the standalone app's Settings panel never saw the connection come up.
+	const hostList = /const CHAT_ONLY_MESSAGE_TYPES[^=]*= new Set\(\[([\s\S]*?)\]\);/.exec(host);
+	assert.ok(hostList, 'the host declares CHAT_ONLY_MESSAGE_TYPES');
+	assert.ok(!hostList[1].includes(`'remote'`), 'the host must not withhold remote status from the Settings sink');
 }
 
 // 5. The prompt round-trip has to name the same fields on both sides. These are read out

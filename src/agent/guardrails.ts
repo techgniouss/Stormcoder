@@ -88,6 +88,8 @@ export interface Guardrails {
 	readonly deniedCommands: RegExp[];
 	readonly allowedCommands: RegExp[];
 	readonly protectedPaths: string[];
+	/** Extra write-protected path patterns (matched against the whole relative path), added for some runs, e.g. ones started from a paired phone. */
+	readonly protectedRegex?: readonly RegExp[];
 	readonly commandTimeoutMs: number;
 	readonly maxSubagents: number;
 	readonly maxSubagentDepth: number;
@@ -425,6 +427,9 @@ export function checkPath(root: vscode.Uri, relativePath: string, forWrite: bool
 	if (forWrite) {
 		if (MEMORY_FILES.test(clean.replace(/\\/g, '/'))) {
 			return { ok: false, reason: `Writing "${relativePath}" is blocked: it is project memory. Use the remember tool to save a fact (the user can edit the file in Settings > Memory).` };
+		}
+		if (g.protectedRegex?.some(re => re.test(clean.replace(/\\/g, '/')))) {
+			return { ok: false, reason: `Writing "${relativePath}" is blocked for runs started from a paired device: it holds instructions or process configuration that outlive the run. Do it on the desktop.` };
 		}
 		const segments = clean.split(/[/\\]+/).filter(Boolean);
 		const basename = segments[segments.length - 1] ?? '';

@@ -54,6 +54,12 @@ const SECRET_PATTERNS: readonly [RegExp, string][] = [
 	[/\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[redacted jwt]'],
 	[/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{16,}/gi, '$1 [redacted]'],
 	[/\b((?:api[_-]?key|secret|token|passw(?:or)?d|authorization|private[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;&]{6,}/gi, '$1[redacted]'],
+	// Environment-style names that merely contain one of those words: AWS_SECRET_ACCESS_KEY=…, DB_PASSWORD=…
+	[/\b([A-Z][A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|TOKEN|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY)[A-Z0-9_]*\s*=\s*["']?)[^\s"',;&]{4,}/g, '$1[redacted]'],
+	// Credentials inside a URL: postgres://user:password@host
+	[/\b([a-z][a-z0-9+.-]*:\/\/[^\/\s:@]+:)[^@\s\/]+@/gi, '$1[redacted]@'],
+	// A password given on the command line to the database clients that take it as -pPASSWORD.
+	[/(\b(?:mysql|mysqldump|mariadb)\b[^\n;&|]*?\s-p)\S+/g, '$1[redacted]'],
 ];
 
 /** Masks the credential shapes in {@link SECRET_PATTERNS} inside `text`. */
@@ -67,6 +73,55 @@ export function scrubSecrets(text: string): string {
 
 /** The deepest nesting {@link scrubValue} walks; past it a value is replaced rather than copied. */
 const SCRUB_MAX_DEPTH = 8;
+
+/** The most one string may carry to a remote device, whatever the message (a stray multi-megabyte delta must not reach a phone). */
+const REMOTE_MAX_STRING_BYTES = 256 * 1024;
+
+/**
+ * Masks credential shapes in every string of `value`, at any depth, without shortening the
+ * text (beyond a very large ceiling). The per-field scrubbing above covers the fields known to
+ * carry tool output; this is the net under everything else, so a message type nobody thought
+ * of (an MCP status line, a transcript replayed after a reconnect, a todo) is covered too.
+ */
+function scrubDeep(value: unknown, depth = 0): unknown {
+	if (typeof value === 'string') {
+		const scrubbed = scrubSecrets(value);
+		return Buffer.byteLength(scrubbed, 'utf8') > REMOTE_MAX_STRING_BYTES ? truncateUtf8(scrubbed, REMOTE_MAX_STRING_BYTES) + TRUNCATION_SUFFIX : scrubbed;
+	}
+	if (typeof value !== 'object' || value === null || depth >= 16) {
+		return value;
+	}
+	if (Array.isArray(value)) {
+		return value.map(entry => scrubDeep(entry, depth + 1));
+	}
+	const out: Record<string, unknown> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		out[key] = scrubDeep(entry, depth + 1);
+	}
+	return out;
+}
+
+/** How much of each end of an over-long approval is shown; the middle is what gets hidden. */
+const APPROVAL_HEAD_BYTES = 5 * 1024;
+const APPROVAL_TAIL_BYTES = 2 * 1024;
+
+/**
+ * Shortens an approval's text without hiding its end. A command or file that is longer than a
+ * phone should render used to be cut after the first 8KB, which let a long run of padding push
+ * the part that matters out of view while the card still offered "Allow". Both ends are kept,
+ * the hidden size is stated, and the caller marks the card so it can say to decide on the desktop.
+ */
+function headAndTail(text: string): { text: string; hidden: number } {
+	const bytes = Buffer.from(text, 'utf8');
+	if (bytes.length <= REMOTE_TRUNCATE_BYTES) {
+		return { text, hidden: 0 };
+	}
+	const hidden = bytes.length - APPROVAL_HEAD_BYTES - APPROVAL_TAIL_BYTES;
+	return {
+		text: `${bytes.subarray(0, APPROVAL_HEAD_BYTES).toString('utf8')}\n… [${hidden} bytes hidden: too long to review on a phone, check it on the desktop] …\n${bytes.subarray(bytes.length - APPROVAL_TAIL_BYTES).toString('utf8')}`,
+		hidden,
+	};
+}
 
 /** Scrubs and truncates every string inside `value`, recursively through arrays and plain objects. */
 function scrubValue(value: unknown, depth = 0): unknown {
@@ -182,7 +237,27 @@ function redactProviders(providers: unknown): unknown {
  */
 export function redactForRemote(message: Record<string, unknown> & { type: string }): Record<string, unknown> & { type: string } {
 	const clone: Record<string, unknown> = { ...message };
+	// An approval is shown with both ends of anything long (see headAndTail), before the
+	// general truncation below could cut the end off.
+	let hiddenInApproval = 0;
+	if (message.type === 'approvalRequest') {
+		for (const field of ['title', 'detail', 'preview'] as const) {
+			const value = clone[field];
+			if (typeof value === 'string') {
+				const shown = headAndTail(scrubSecrets(value));
+				clone[field] = shown.text;
+				hiddenInApproval += shown.hidden;
+			}
+		}
+		if (hiddenInApproval) {
+			clone.reviewOnDesktop = true;
+			clone.hiddenBytes = hiddenInApproval;
+		}
+	}
 	for (const field of ['content', 'preview'] as const) {
+		if (message.type === 'approvalRequest') {
+			break;
+		}
 		const value = clone[field];
 		if (typeof value === 'string') {
 			clone[field] = truncateUtf8(value, REMOTE_TRUNCATE_BYTES) + (Buffer.byteLength(value, 'utf8') > REMOTE_TRUNCATE_BYTES ? TRUNCATION_SUFFIX : '');
@@ -197,6 +272,9 @@ export function redactForRemote(message: Record<string, unknown> & { type: strin
 		clone.result = scrubValue(clone.result);
 	}
 	for (const field of ['title', 'detail', 'question', 'preview', 'content'] as const) {
+		if (message.type === 'approvalRequest' && (field === 'title' || field === 'detail' || field === 'preview')) {
+			continue;
+		}
 		if (typeof clone[field] === 'string' && (field !== 'content' || message.type === 'toolEnd')) {
 			clone[field] = scrubValue(clone[field]);
 		}
@@ -242,7 +320,8 @@ export function redactForRemote(message: Record<string, unknown> & { type: strin
 	if (message.type === 'config' && 'providers' in clone) {
 		clone.providers = redactProviders(clone.providers);
 	}
-	return clone as Record<string, unknown> & { type: string };
+	// The net under everything above: every string of every message, at any depth.
+	return scrubDeep(clone) as Record<string, unknown> & { type: string };
 }
 
 /**

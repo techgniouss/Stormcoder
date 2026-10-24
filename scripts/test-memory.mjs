@@ -441,6 +441,24 @@ const file = rel => path.join(ws, rel);
 	assert.ok(mem.searchTranscripts([{ title: 'T', messages: [{ role: 'user', content: 'x'.repeat(5_000) + ' needle ' + 'y'.repeat(5_000) }] }], ['needle'], 1)[0].length < 320, 'an excerpt, not the message');
 }
 
+// 19b. A run started from a paired phone additionally cannot write skills or MCP config (they outlive the run).
+{
+	const g = { ...require('../out/agent/guardrails.js').loadGuardrails(), approval: 'auto-edits', protectedRegex: [/(^|\/)(\.stormcoder|\.openvs)\/(skills(\/|$)|mcp\.json$)|(^|\/)\.vscode\/mcp\.json$/i] };
+	const approve = { confirm: async () => ({ approved: true }), ask: async () => '' };
+	for (const target of ['.stormcoder/skills/evil/SKILL.md', '.stormcoder/skills/evil.md', '.stormcoder/mcp.json', '.vscode/mcp.json', '.openvs/skills/x.md', 'packages/app/.stormcoder/skills/x.md', '.STORMCODER/MCP.JSON']) {
+		const r = await tools.executeTool({ id: '1', name: 'write_file', args: { path: target, content: 'x' } }, approve, g);
+		assert.equal(r.isError, true, `${target} must be blocked for a remote run`);
+		assert.match(r.result, /paired device/);
+	}
+	for (const fine of ['.stormcoder/rules.md', 'src/skills.ts', 'docs/mcp.json.md', 'skills/readme.md']) {
+		const r = await tools.executeTool({ id: '1', name: 'write_file', args: { path: fine, content: 'x' } }, approve, g);
+		assert.equal(r.isError, false, `${fine} stays writable: ${r.result}`);
+	}
+	// And a local run (no extra patterns) can still create a skill.
+	const local = { ...g, protectedRegex: undefined };
+	assert.equal((await tools.executeTool({ id: '1', name: 'write_file', args: { path: '.stormcoder/skills/mine/SKILL.md', content: 'x' } }, approve, local)).isError, false);
+}
+
 // 20. Other agents' names for these tools reach the same code.
 {
 	const norm = (name, args) => tools.normalizeToolCall({ id: '1', name, args });

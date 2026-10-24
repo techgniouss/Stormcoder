@@ -77,6 +77,8 @@ const CONTENT_TYPES: Record<string, string> = {
 	'.svg': 'image/svg+xml',
 	'.png': 'image/png',
 	'.webmanifest': 'application/manifest+json',
+	'.woff2': 'font/woff2',
+	'.txt': 'text/plain; charset=utf-8',
 	'.json': 'application/json',
 };
 
@@ -176,6 +178,20 @@ export function mergeRelayStates(disk: RelayState, memory: RelayState): RelaySta
 	return { rooms };
 }
 
+/**
+ * The devices of `roomId`, only if it is a room this relay really has. A room id comes off the
+ * wire, and `rooms` is a plain object: `__proto__` or `constructor` used to resolve to
+ * `Object.prototype` here, and the lookup after it threw inside the upgrade handler.
+ */
+function devicesOf(state: RelayState, roomId: string): DeviceRecord[] | undefined {
+	return Object.prototype.hasOwnProperty.call(state.rooms, roomId) ? state.rooms[roomId]?.devices : undefined;
+}
+
+/** `socket.setTimeout`, which a plain `Duplex` does not declare but every real TCP socket has. */
+function idleTimeout(socket: Duplex, ms: number, onTimeout?: () => void): void {
+	(socket as { setTimeout?: (ms: number, cb?: () => void) => void }).setTimeout?.(ms, onTimeout);
+}
+
 function hmacHex(pepper: string, value: string): string {
 	return createHmac('sha256', pepper).update(value).digest('hex');
 }
@@ -237,6 +253,11 @@ export class LocalRelay {
 			}
 		}));
 		server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
+		// A malformed request must cost the sender a closed socket, not this process a file
+		// descriptor: without these a half-sent request was held open indefinitely.
+		server.on('clientError', (_err, socket) => socket.destroy());
+		server.headersTimeout = 15_000;
+		server.requestTimeout = 30_000;
 		this.server = server;
 		return new Promise((resolve, reject) => {
 			server.once('error', reject);
@@ -390,7 +411,7 @@ export class LocalRelay {
 		const deviceId = randomUUID();
 		const issuedAt = this.now();
 		const token = `${deviceId}.${createHmac('sha256', this.options.pepper).update(`${deviceId}|${roomId}|${issuedAt}`).digest('base64url')}`;
-		this.state.rooms[roomId].devices.push({
+		(devicesOf(this.state, roomId) ?? (this.state.rooms[roomId] = { devices: [] }).devices).push({
 			id: deviceId,
 			name: typeof body.name === 'string' && body.name ? body.name.slice(0, 80) : 'Unnamed device',
 			tokenHash: hmacHex(this.options.pepper, `${roomId}|${token}`),
@@ -440,7 +461,7 @@ export class LocalRelay {
 			reply(res, 403, 'host token mismatch');
 			return;
 		}
-		const devices = [...this.state.rooms[roomId].devices]
+		const devices = [...(devicesOf(this.state, roomId) ?? [])]
 			.sort((a, b) => b.createdAt - a.createdAt)
 			.map(({ id, name, createdAt, lastSeenAt, revokedAt }) => ({ id, name, createdAt, lastSeenAt, revokedAt }));
 		reply(res, 200, JSON.stringify({ devices }), 'application/json');
@@ -454,10 +475,11 @@ export class LocalRelay {
 	/** The device a token authenticates in `roomId`, if it is valid and not revoked. */
 	private verifyDevice(roomId: string, token: string): DeviceRecord | undefined {
 		const dot = token.indexOf('.');
-		if (dot <= 0 || !this.state.rooms[roomId]) {
+		const devices = dot > 0 ? devicesOf(this.state, roomId) : undefined;
+		if (!devices) {
 			return undefined;
 		}
-		const device = this.state.rooms[roomId].devices.find(d => d.id === token.slice(0, dot));
+		const device = devices.find(d => d.id === token.slice(0, dot));
 		if (!device || device.revokedAt !== null) {
 			return undefined;
 		}
@@ -479,6 +501,18 @@ export class LocalRelay {
 	// ---- WebSockets ----------------------------------------------------------------------
 
 	private handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): void {
+		// Nothing in here may throw: an exception in this listener is uncaught, and leaves the
+		// socket neither answered nor closed. Anything unexpected closes the connection.
+		try {
+			this.routeUpgrade(req, socket, head);
+		} catch {
+			socket.destroy();
+		}
+	}
+
+	private routeUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): void {
+		// An upgrade that is never completed is dropped (cleared once the WebSocket is accepted).
+		idleTimeout(socket, 30_000, () => socket.destroy());
 		const url = new URL(req.url ?? '/', 'http://localhost');
 		const roomId = url.searchParams.get('room') ?? '';
 		if (url.pathname === '/ws/host') {
@@ -521,6 +555,7 @@ export class LocalRelay {
 			onClose: () => { if (peer) { this.detach(peer); } },
 		});
 		if (conn) {
+			idleTimeout(socket, 0);
 			peer = { ...identity, conn };
 			this.peers.add(peer);
 		}
@@ -612,7 +647,7 @@ export class LocalRelay {
 	}
 
 	private revoke(roomId: string, deviceId: string): void {
-		const device = this.state.rooms[roomId]?.devices.find(d => d.id === deviceId);
+		const device = devicesOf(this.state, roomId)?.find(d => d.id === deviceId);
 		if (device && device.revokedAt === null) {
 			device.revokedAt = this.now();
 			this.save();

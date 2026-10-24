@@ -116,6 +116,38 @@ assert.equal(await phone.closed, 4001);
 await assert.rejects(open(`${wsBase}/ws/client?room=${ROOM}&token=${encodeURIComponent(token)}`));
 
 host2.close();
+// Hostile upgrade requests close the connection and nothing more: no uncaught exception, no socket
+// held open (each one used to leak a file descriptor), and the relay keeps serving.
+{
+	const { connect } = await import('node:net');
+	const uncaught = [];
+	const onUncaught = err => uncaught.push(String(err));
+	process.on('uncaughtException', onUncaught);
+	const upgrade = target => new Promise(resolve => {
+		const sock = connect(port, '127.0.0.1', () => {
+			sock.write(`GET ${target} HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`);
+		});
+		let data = '';
+		sock.on('data', d => { data += d; });
+		const timer = setTimeout(() => { sock.destroy(); resolve({ closed: false, data }); }, 1500);
+		sock.on('close', () => { clearTimeout(timer); resolve({ closed: true, data }); });
+		sock.on('error', () => { });
+	});
+	for (const target of ['//', '/ws/client?room=__proto__&token=a.b', '/ws/client?room=constructor&token=a.b', '/ws/client?room=hasOwnProperty&token=x.y', '/ws/host?room=__proto__', 'http://[::1']) {
+		const r = await upgrade(target);
+		assert.ok(r.closed, `${target}: the connection must be closed, not held open`);
+		assert.doesNotMatch(r.data, /101 Switching/, `${target} must not upgrade`);
+	}
+	await new Promise(r => setTimeout(r, 100));
+	process.off('uncaughtException', onUncaught);
+	assert.deepEqual(uncaught, [], 'hostile upgrade requests raise no uncaught exception');
+	// Still serving, and a font file is served with a font type.
+	fs.writeFileSync(path.join(pwaDir, 'f.woff2'), 'x');
+	const font = await fetch(`${base}/f.woff2`);
+	assert.equal(font.headers.get('content-type'), 'font/woff2');
+	assert.equal((await fetch(`${base}/`)).status, 200);
+}
+
 await relay.stop();
 
 // State survives a restart through the file store: a device paired before still authenticates.
