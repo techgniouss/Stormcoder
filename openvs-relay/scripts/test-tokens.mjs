@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 // Tests src/tokens.ts: mint/verify round-trip, tamper rejection, timing-safe comparison.
 import assert from 'node:assert/strict';
 import { mintToken, verifyToken, hashForStorage, timingSafeEqualHex } from '../src/tokens.ts';

@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // The wire envelope and control-frame vocabulary shared by the relay (`room.ts`) and, in spirit,
 // the extension's `src/remote/protocol.ts` (Phase 5) and the PWA's `pwa/app.js`. This file is

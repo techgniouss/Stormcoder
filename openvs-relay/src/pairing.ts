@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // Pure pairing-code logic: generation, hashing, expiry, and attempt limiting. Nothing here
 // touches Durable Object storage or `fetch` — `room.ts` wires this to real SQLite rows so the

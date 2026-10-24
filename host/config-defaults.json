@@ -119,7 +119,8 @@
 			"\\b(env|printenv|set)\\s*\\|\\s*(curl|wget|nc|ncat|socat)\\b",
 			"\\b(curl|wget)\\b[^;&\\n]*(\\s(-d|--data[a-z-]*|-F|--form|--upload-file|-T)\\s*[\\\"']?[\\w.-]*=?@)",
 			">>?\\s*[\\\"']?[^\\s;&|\\\"']*(\\.env(\\.[\\w-]+)?|\\.pem|\\.key|id_rsa|\\.ssh/[^\\s;&|]*|\\.git/[^\\s;&|]*)[\\\"']?(\\s|$|[;&|])",
-			"\\btee\\b[^;&|\\n]*(\\.env(\\.[\\w-]+)?|\\.pem|\\.key|id_rsa|\\.ssh/|\\.git/)"
+			"\\btee\\b[^;&|\\n]*(\\.env(\\.[\\w-]+)?|\\.pem|\\.key|id_rsa|\\.ssh/|\\.git/)",
+			">>?\\s*[\\\"']?[^\\s;&|\\\"']*\\.(stormcoder|openvs)/(memory\\.md|journal\\.jsonl|proposals\\.json)|\\btee\\b[^;&|\\n]*\\.(stormcoder|openvs)/(memory\\.md|journal\\.jsonl|proposals\\.json)"
 		],
 		"stormcoder.guardrails.allowedCommands": [],
 		"stormcoder.agent.sandbox": "off",

@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // Exercises `pwa/transcript.js` against a minimal fake DOM. `transcript.js` reaches
 // `document.createElement`/`createTextNode` directly (no injected deps), so this stubs

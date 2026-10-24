@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // Minimal service worker. Its only job of substance is the `push` handler, and per the plan it
 // must never trust the push payload — Web Push here is deliberately payload-less (see
@@ -148,7 +148,7 @@ self.addEventListener('push', event => {
 	event.waitUntil((async () => {
 		// No payload is ever read from `event.data` here, by design — see this file's top doc.
 		const auth = await readActiveAuth();
-		let title = 'OpenVS';
+		let title = 'Stormcoder';
 		let body = 'You have an update.';
 		let tag = 'openvs-pending';
 		try {

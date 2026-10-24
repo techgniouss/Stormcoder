@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // DO SQLite schema for `WorkspaceRoom`. Every statement is `CREATE TABLE IF NOT EXISTS`, so
 // re-running the migration list on an already-migrated DO (e.g. after a redeploy) is a no-op

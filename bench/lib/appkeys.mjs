@@ -24,6 +24,9 @@ export function defaultAppData(platform = process.platform, env = process.env, h
 	return path.join(env.XDG_CONFIG_HOME ?? path.join(home, '.config'), 'Stormcoder');
 }
 
+/** App data saved before the rename uses `openvsChat.` names; the engine migrates them, and so does this reading. */
+const normalizeName = name => name.startsWith('openvsChat.') ? `stormcoder.${name.slice('openvsChat.'.length)}` : name;
+
 function readJson(file) {
 	try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return undefined; }
 }
@@ -35,8 +38,8 @@ function readJson(file) {
 export function inspectApp(dir) {
 	if (!dir || !fs.existsSync(dir)) { return undefined; }
 	const secrets = readJson(path.join(dir, 'secrets.json')) ?? {};
-	const settings = readJson(path.join(dir, 'settings.json')) ?? {};
-	const names = Object.keys(secrets);
+	const settings = Object.fromEntries(Object.entries(readJson(path.join(dir, 'settings.json')) ?? {}).map(([k, v]) => [normalizeName(k), v]));
+	const names = Object.keys(secrets).map(normalizeName);
 	const apiKeys = names.filter(n => n.startsWith(API_KEY)).map(n => n.slice(API_KEY.length));
 	const signedIn = names.filter(n => n.startsWith(OAUTH_KEY)).map(n => n.slice(OAUTH_KEY.length)).filter(id => !apiKeys.includes(id));
 	return { dir, apiKeys, signedIn, defaultProvider: settings['stormcoder.defaultProvider'], settings, hasKeyFile: fs.existsSync(path.join(dir, 'secret.key')) };
@@ -54,7 +57,7 @@ export function configuredModel(app, provider) {
 export function prepareDataCopy(app, overrides) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bench-appdata-'));
 	const secrets = readJson(path.join(app.dir, 'secrets.json')) ?? {};
-	const kept = Object.fromEntries(Object.entries(secrets).filter(([name]) => !name.startsWith(OAUTH_KEY)));
+	const kept = Object.fromEntries(Object.entries(secrets).filter(([name]) => !normalizeName(name).startsWith(OAUTH_KEY)));
 	fs.writeFileSync(path.join(dir, 'secrets.json'), JSON.stringify(kept), { mode: 0o600 });
 	if (app.hasKeyFile) { fs.copyFileSync(path.join(app.dir, 'secret.key'), path.join(dir, 'secret.key')); fs.chmodSync(path.join(dir, 'secret.key'), 0o600); }
 	const settings = Object.fromEntries(Object.entries(app.settings).filter(([k]) => KEPT_SETTING.test(k)));

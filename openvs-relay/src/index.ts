@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // The Worker's `fetch` entry point. Kept thin on purpose (per the plan's "index.ts should be a
 // thin router, room.ts should hold the actual DO logic" split): this file only decides *which*

@@ -344,11 +344,46 @@ function readObjectFile<V>(file: string): Record<string, V> {
 	return {};
 }
 
+/** Prefix every setting and stored key had before the product was renamed. */
+const LEGACY_SETTINGS_PREFIX = 'openvsChat.';
+
+/**
+ * Moves entries stored under the pre-rename `openvsChat.` prefix to `stormcoder.` and saves the
+ * file. The prefix names API keys, sign-in sessions, chat history, remote-control secrets and
+ * consent decisions, so without this an existing install would lose all of them at the rename.
+ * A key already present under the new name wins. Values are moved as stored (secrets stay
+ * encrypted), so nothing needs decrypting.
+ */
+function migrateLegacyKeys<V>(data: Record<string, V>, file: string): Record<string, V> {
+	const legacy = Object.keys(data).filter(k => k.startsWith(LEGACY_SETTINGS_PREFIX));
+	if (!legacy.length) {
+		return data;
+	}
+	const migrated: Record<string, V> = {};
+	for (const [key, value] of Object.entries(data)) {
+		if (!key.startsWith(LEGACY_SETTINGS_PREFIX)) {
+			migrated[key] = value;
+		}
+	}
+	for (const key of legacy) {
+		const next = 'stormcoder.' + key.slice(LEGACY_SETTINGS_PREFIX.length);
+		if (!(next in migrated)) {
+			migrated[next] = data[key];
+		}
+	}
+	try {
+		writeJsonFile(file, migrated);
+	} catch (err) {
+		logHost(`could not save migrated keys in ${file}: ${err instanceof Error ? err.message : String(err)}`);
+	}
+	return migrated;
+}
+
 /** A JSON-file-backed key/value store, written through on every update. */
 class FileMemento implements Memento {
 	private data: Record<string, unknown>;
 	constructor(private readonly file: string) {
-		this.data = readObjectFile<unknown>(file);
+		this.data = migrateLegacyKeys(readObjectFile<unknown>(file), file);
 	}
 	keys(): readonly string[] { return Object.keys(this.data); }
 	get<T>(key: string, defaultValue?: T): T | undefined {
@@ -372,7 +407,7 @@ export class SecretStorage {
 	readonly onDidChange = this.emitter.event;
 	private data: Record<string, string>;
 	constructor(private readonly file: string) {
-		this.data = readObjectFile<string>(file);
+		this.data = migrateLegacyKeys(readObjectFile<string>(file), file);
 	}
 	async get(key: string): Promise<string | undefined> {
 		const raw = this.data[key];
@@ -419,8 +454,6 @@ let settings: Record<string, unknown> = {};
 /** Why settings.json could not be parsed; while set, writes are refused so the file is never clobbered. */
 let settingsError: string | undefined;
 
-/** Namespace the settings lived under before the product was renamed. */
-const LEGACY_SETTINGS_PREFIX = 'openvsChat.';
 
 /**
  * Moves settings saved under the pre-rename `openvsChat.` namespace to `stormcoder.` and

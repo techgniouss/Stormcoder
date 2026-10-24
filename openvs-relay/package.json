@@ -3,7 +3,7 @@
 	"version": "0.1.0",
 	"private": true,
 	"type": "module",
-	"description": "Cloudflare Worker + Durable Object relay and PWA for OpenVS Chat remote control.",
+	"description": "Cloudflare Worker + Durable Object relay and PWA for Stormcoder remote control.",
 	"scripts": {
 		"dev": "wrangler dev",
 		"deploy": "wrangler deploy",

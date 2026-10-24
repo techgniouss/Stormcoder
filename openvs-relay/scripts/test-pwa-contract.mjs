@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // The cross-boundary drift check the plan calls out by name: without this, the PWA would slowly
 // reproduce the exact class of silent failure `extensions/openvs-chat/scripts/test-webview.mjs`

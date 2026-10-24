@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 // Tests the pure routing/takeover decisions in src/room.ts, plus `WorkspaceRoom.webSocketMessage`
 // itself against a fake `DurableObjectState`.
 //

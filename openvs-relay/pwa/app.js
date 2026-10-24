@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // The PWA's core client: pairing-code claim, the envelope protocol (mirrored from
 // ../src/protocol.ts — this file ships as a plain browser module with no bundler, so it cannot
@@ -355,7 +355,7 @@ async function claim(room, code) {
 	const res = await fetch(`/pair/claim?room=${encodeURIComponent(room)}`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ code, name: 'OpenVS Remote (PWA)' }),
+		body: JSON.stringify({ code, name: 'Stormcoder Remote (PWA)' }),
 	});
 	if (!res.ok) {
 		// `room.ts`'s handlePairClaim responds with a plain-text reason (`code expired`, `invalid

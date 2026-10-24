@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 // Runs every test-*.mjs in this folder and reports a summary. Run:
 //   npm test --prefix openvs-relay
 //

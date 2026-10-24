@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 // Tests src/push.ts: the VAPID JWT builder's shape/claims, and shouldPush's push-eligibility rules.
 import assert from 'node:assert/strict';
 import { buildVapidJwt, shouldPush } from '../src/push.ts';

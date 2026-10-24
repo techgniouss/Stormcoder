@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // Pure device-token logic: minting, parsing, and constant-time verification. Like `pairing.ts`,
 // nothing here touches Durable Object storage — `room.ts` supplies the lookup function that

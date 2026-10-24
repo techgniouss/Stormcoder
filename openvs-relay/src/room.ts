@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // `WorkspaceRoom`: one Durable Object per paired workspace. Deliberately does *not* extend the
 // RPC-style `DurableObject` base class from `cloudflare:workers` — nothing here is called via

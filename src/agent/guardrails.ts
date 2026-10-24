@@ -156,6 +156,8 @@ export const DEFAULT_DENIED_COMMANDS: readonly string[] = [
 	'\\b(curl|wget)\\b[^;&\\n]*(\\s(-d|--data[a-z-]*|-F|--form|--upload-file|-T)\\s*[\\"\']?[\\w.-]*=?@)',
 	'>>?\\s*[\\"\']?[^\\s;&|\\"\']*(\\.env(\\.[\\w-]+)?|\\.pem|\\.key|id_rsa|\\.ssh/[^\\s;&|]*|\\.git/[^\\s;&|]*)[\\"\']?(\\s|$|[;&|])',
 	'\\btee\\b[^;&|\\n]*(\\.env(\\.[\\w-]+)?|\\.pem|\\.key|id_rsa|\\.ssh/|\\.git/)',
+	// Project memory is written through the remember tool (see MEMORY_FILES), not by shell redirection.
+	'>>?\\s*[\\"\']?[^\\s;&|\\"\']*\\.(stormcoder|openvs)/(memory\\.md|journal\\.jsonl|proposals\\.json)|\\btee\\b[^;&|\\n]*\\.(stormcoder|openvs)/(memory\\.md|journal\\.jsonl|proposals\\.json)',
 ];
 
 export const DEFAULT_PROTECTED_PATHS: readonly string[] = [
@@ -167,6 +169,14 @@ export const DEFAULT_PROTECTED_PATHS: readonly string[] = [
 	'id_rsa',
 	'.ssh',
 ];
+
+/**
+ * Files the agent may never write directly, whatever `protectedPaths` says. They are read back
+ * into the model's prompt in every later session, so an edit that skipped the `remember` tool
+ * would skip its approval, its credential check and its size limit, and a page the agent had
+ * fetched could plant standing instructions. The tool is the way in.
+ */
+const MEMORY_FILES = /(^|\/)\.(stormcoder|openvs)\/(memory\.md|journal\.jsonl|proposals\.json)$/i;
 
 function compile(patterns: string[]): RegExp[] {
 	const out: RegExp[] = [];
@@ -413,6 +423,9 @@ export function checkPath(root: vscode.Uri, relativePath: string, forWrite: bool
 		return { ok: false, reason: `Path "${relativePath}" escapes the workspace root and was blocked.` };
 	}
 	if (forWrite) {
+		if (MEMORY_FILES.test(clean.replace(/\\/g, '/'))) {
+			return { ok: false, reason: `Writing "${relativePath}" is blocked: it is project memory. Use the remember tool to save a fact (the user can edit the file in Settings > Memory).` };
+		}
 		const segments = clean.split(/[/\\]+/).filter(Boolean);
 		const basename = segments[segments.length - 1] ?? '';
 		for (const pattern of g.protectedPaths) {

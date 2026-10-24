@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // Approval / ask_user card rendering for the PWA — a port of
 // `extensions/openvs-chat/media/prompts.js`'s shape (same reply fields: `approved`/`always`/

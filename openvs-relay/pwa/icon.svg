@@ -1,4 +1,4 @@
-<!-- OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+<!-- Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
      Fallback SVG icon (kept for the manifest's "any"/SVG entry and old browsers). The real,
      branded icon — the same mark used for the desktop app (resources/linux/code.png) — ships as
      PNG/maskable variants generated from that source: icon-192.png, icon-512.png,

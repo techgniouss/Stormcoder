@@ -1,7 +1,7 @@
 {
-	"name": "OpenVS Remote",
-	"short_name": "OpenVS",
-	"description": "Remote control for the OpenVS Chat panel — babysit an agent run from your phone.",
+	"name": "Stormcoder Remote",
+	"short_name": "Stormcoder",
+	"description": "Remote control for the Stormcoder chat panel — babysit an agent run from your phone.",
 	"start_url": "/",
 	"scope": "/",
 	"display": "standalone",

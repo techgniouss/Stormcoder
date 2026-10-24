@@ -1876,13 +1876,14 @@ details[open] > .tool-summary::before,
 .mem-row .mem-text { overflow-wrap: anywhere; }
 .mem-row.legacy { opacity: 0.75; }
 .mem-row.pinned { border-color: var(--vscode-focusBorder, #007fd4); }
+.mem-row .skill-info { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
 .mem-tag {
+	display: inline-block; width: auto; align-self: flex-start;
 	font-size: 0.7em; padding: 1px 6px; border-radius: 8px; margin-right: 6px;
 	background: var(--vscode-badge-background); color: var(--vscode-badge-foreground);
 }
 .mem-actions { display: flex; flex: 0 0 auto; gap: 4px; }
 .mem-edit { width: 100%; }
 .mem-empty { font-size: 0.85em; color: var(--vscode-descriptionForeground); margin-bottom: 6px; }
-.mini-button[aria-pressed="true"] { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
 #memoryNewText { flex: 1 1 auto; min-width: 0; }
 .hint.mem-error { color: var(--vscode-errorForeground); }

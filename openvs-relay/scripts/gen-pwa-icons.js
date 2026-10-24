@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // Regenerates the PWA's PNG icon set from the real desktop app icon
 // (resources/linux/code.png, the 1024x1024 master others' .ico/.icns are also built from) instead
