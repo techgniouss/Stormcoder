@@ -37,6 +37,36 @@ node bench/start.mjs --provider oracle --yes        # no model: checks the bench
 `--yes` asks nothing and uses defaults for anything missing (a missing API key is then an error).
 A server that needs a key for `--provider custom` reads `CUSTOM_API_KEY`.
 
+## Using the keys you already saved in the app
+
+If you have used Stormcoder on this machine, you do not need to type or export a key. `start.mjs`
+finds the app's data folder, lists the providers that have a saved API key, and offers to use
+them (with the model you configured). Directly:
+
+```sh
+node bench/run.mjs --provider groq --app-data                 # default data folder for this OS
+node bench/run.mjs --provider groq --app-data ~/.config/Stormcoder
+node bench/start.mjs --provider groq --app-data --yes         # unattended; asks nothing
+```
+
+How it works, and what it will not do:
+
+- The app encrypts keys with the OS keychain (or a key file), which only Electron can open. So the
+  benchmark runs its engine under Electron, using the app's own secret code, against a **private
+  copy** of your data. Nothing is decrypted to disk, and your original files are only read.
+- **Sign-in sessions are not used.** Providers you only sign into (no API key saved) are refused
+  with an explanation: refreshing a copied sign-in can rotate its token and log the real app out.
+- Only provider settings are copied: default provider, models, base URLs. Your MCP servers, hooks,
+  system prompt and rules are left out, so the benchmark does not start your processes and its
+  results do not depend on your personalization.
+- A key in an environment variable still takes precedence, exactly as in the app.
+- On Linux without a display it uses `xvfb-run` if installed. On macOS the OS may ask once to let
+  Electron read the "Stormcoder Safe Storage" keychain item; allow it.
+
+Tested end to end under Electron with the app's file-key storage (`test/bench-appkeys.mjs`). The
+OS-keychain path (macOS Keychain, Windows DPAPI) runs the same code as the app but has not been
+exercised by that test.
+
 ## Run it directly
 
 The runner drives the real engine (the dev host) over its WebSocket, the way the chat UI does.

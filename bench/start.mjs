@@ -11,6 +11,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
+import { configuredModel, defaultAppData, inspectApp } from './lib/appkeys.mjs';
 import { compare, report } from './lib/report.mjs';
 import { loadTasks } from './lib/tasks.mjs';
 
@@ -59,16 +60,37 @@ function ask(question, fallback = '', secret = false) {
 
 console.log('Stormcoder benchmark — 13 tasks run through the real engine.\n');
 
+// Keys and provider settings already saved in the Stormcoder app, if it has been used on this machine.
+const appDir = args['app-data'] && args['app-data'] !== true ? path.resolve(args['app-data']) : defaultAppData();
+const app = args['no-app-data'] ? undefined : inspectApp(appDir);
+if (app?.apiKeys.length) {
+	console.log(`Found the Stormcoder app's saved settings (${app.dir}).`);
+	console.log(`  Saved API keys:  ${app.apiKeys.join(', ')}`);
+	if (app.signedIn.length) { console.log(`  Signed in only:  ${app.signedIn.join(', ')}  (not usable here: refreshing a copy of a sign-in can log the app out)`); }
+	console.log('  They are read from a private copy, by the same code the app uses; nothing is changed or written back.\n');
+}
+
 const names = Object.keys(PROVIDERS);
 let provider = args.provider;
 if (!provider) {
-	console.log('Providers:\n' + names.map(n => `  ${n.padEnd(11)} ${PROVIDERS[n].note}`).join('\n'));
-	provider = await ask('\nProvider', 'anthropic');
+	console.log('Providers:\n' + names.map(n => `  ${n.padEnd(11)} ${PROVIDERS[n].note}${app?.apiKeys.includes(n) ? '   [saved key in app]' : ''}`).join('\n'));
+	const preferred = app?.apiKeys.includes(app.defaultProvider) ? app.defaultProvider : app?.apiKeys[0];
+	provider = await ask('\nProvider', preferred ?? 'anthropic');
 }
 if (!PROVIDERS[provider]) { fail(`Unknown provider "${provider}". Choose one of: ${names.join(', ')}.`); }
 const info = PROVIDERS[provider];
 
 let model = args.model;
+// Use the app's saved key when it has one for this provider and no key was given another way.
+// Unattended runs (--yes) do so only when asked with --app-data, so a script never reaches into
+// the app's data by surprise.
+const hasSaved = !!app && provider !== 'oracle' && (provider === 'custom' ? false : app.apiKeys.includes(provider));
+const envKeySet = !!info.env && !!process.env[info.env];
+let useApp = false;
+if (hasSaved && !envKeySet) {
+	useApp = args.yes ? !!args['app-data'] : (await ask(`Use the ${provider} key saved in the app? (y/n)`, 'y')).toLowerCase() === 'y';
+}
+if (!model && useApp) { model = configuredModel(app, provider) ?? info.model; if (!args.yes) { model = await ask('Model id', model); } }
 if (!model && provider !== 'oracle') { model = await ask('Model id', info.model); }
 if (provider !== 'oracle' && !model) { fail('A model id is required.'); }
 
@@ -77,7 +99,7 @@ if (provider === 'custom' && !baseUrl) { baseUrl = await ask('Base URL (e.g. htt
 if (provider === 'custom' && !baseUrl) { fail('A base URL is required for a custom provider.'); }
 
 const env = { ...process.env };
-if (info.env && !env[info.env]) {
+if (info.env && !env[info.env] && !useApp) {
 	const key = await ask(`${info.env} (input is hidden; used for this run only)`, '', true);
 	if (!key) { fail(`No API key. Set ${info.env} or type it when asked.`); }
 	env[info.env] = key;
@@ -116,6 +138,7 @@ const runArgs = ['bench/run.mjs', '--provider', provider, '--repeat', String(rep
 if (model && provider !== 'oracle') { runArgs.push('--model', model); }
 if (baseUrl) { runArgs.push('--base-url', baseUrl); }
 if (filter.length) { runArgs.push('--tasks', ...filter); }
+if (useApp) { runArgs.push('--app-data', app.dir); }
 for (const k of ['approval', 'max-steps', 'timeout-scale', 'engine', 'oracle']) { if (args[k]) { runArgs.push(`--${k}`, String(args[k])); } }
 console.log(`\nRunning… (results will be saved to ${path.relative(root, out)})\n`);
 const run = spawnSync(process.execPath, runArgs, { cwd: root, env, stdio: 'inherit' });

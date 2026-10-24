@@ -6,18 +6,38 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { WebSocket } from 'ws';
+import { createRequire } from 'node:module';
 import { benchRoot } from './tasks.mjs';
+import { prepareDataCopy } from './appkeys.mjs';
 
 const repoRoot = path.resolve(benchRoot, '..');
 
 /** Starts the dev host on `project` with a private data dir and `settings`, and connects to it. */
-export async function startEngine({ project, settings, engineRoot = repoRoot }) {
-	const data = fs.mkdtempSync(path.join(os.tmpdir(), 'bench-data-'));
-	fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify(settings));
-	const host = spawn(process.execPath, [path.join(engineRoot, 'dist/dev-host.js')], {
-		env: { ...process.env, MJ_USER_DATA: data, MJ_FOLDER: project, MJ_PORT: '0' },
-		stdio: ['ignore', 'pipe', 'pipe'],
-	});
+export async function startEngine({ project, settings, engineRoot = repoRoot, app }) {
+	// With `app`, the engine runs under Electron on a sanitized copy of the app's saved keys and
+	// provider settings (see appkeys.mjs); otherwise under plain Node with a throwaway data dir.
+	const copy = app ? prepareDataCopy(app, settings) : undefined;
+	const data = copy?.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'bench-data-'));
+	if (!copy) { fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify(settings)); }
+	const entry = path.join(engineRoot, 'dist/dev-host.js');
+	const env = { ...process.env, MJ_USER_DATA: data, MJ_FOLDER: project, MJ_PORT: '0', ...(app ? { MJ_APP_KEYS: '1' } : {}) };
+	let command = process.execPath;
+	let argv = [entry];
+	if (app) {
+		command = createRequire(path.join(engineRoot, 'package.json'))('electron');
+		argv = [entry];
+		// Containers and root shells cannot use Chromium's sandbox; a window-less Electron needs no GPU.
+		if (process.platform === 'linux') { argv.unshift('--disable-gpu', ...(process.getuid?.() === 0 ? ['--no-sandbox'] : [])); }
+		if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+			// Electron wants a display even with no window; a virtual one is used when available.
+			argv = [command, ...argv];
+			command = 'xvfb-run';
+			argv.unshift('-a');
+		}
+	}
+	// Its own process group under Electron, so stopping takes the xvfb wrapper and Electron's helpers too.
+	const host = spawn(command, argv, { env, stdio: ['ignore', 'pipe', 'pipe'], detached: !!app && process.platform !== 'win32' });
+	const killHost = () => { try { if (app && process.platform !== 'win32' && host.pid) { process.kill(-host.pid, 'SIGTERM'); } else { host.kill(); } } catch { /* already gone */ } };
 	let log = '';
 	host.stderr.on('data', d => { log += d; });
 	const url = await new Promise((resolve, reject) => {
@@ -78,9 +98,9 @@ export async function startEngine({ project, settings, engineRoot = repoRoot }) 
 		},
 		async stop() {
 			ws.close();
-			host.kill();
-			await new Promise(r => setTimeout(r, 200));
-			fs.rmSync(data, { recursive: true, force: true });
+			killHost();
+			await new Promise(r => setTimeout(r, 500));
+			if (copy) { copy.dispose(); } else { fs.rmSync(data, { recursive: true, force: true }); }
 		},
 	};
 }

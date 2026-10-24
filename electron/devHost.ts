@@ -16,6 +16,7 @@ import * as path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Controller } from '../host/controller';
 import { ASSET_ORIGIN } from '../host/vscode';
+import { createSecretCodec } from './secrets';
 import { prepareViewHtml } from './viewHtml';
 import * as extension from '../src/extension';
 
@@ -27,6 +28,29 @@ const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javasc
 let socket: WebSocket | undefined;
 const key = crypto.randomBytes(32);
 
+type Codec = { encrypt(plain: string): Buffer; decrypt(data: Buffer): string };
+const throwaway: Codec = {
+	encrypt: plain => { const iv = crypto.randomBytes(12); const c = crypto.createCipheriv('aes-256-gcm', key, iv); const b = Buffer.concat([c.update(plain, 'utf8'), c.final()]); return Buffer.concat([iv, c.getAuthTag(), b]); },
+	decrypt: data => { const d = crypto.createDecipheriv('aes-256-gcm', key, data.subarray(0, 12)); d.setAuthTag(data.subarray(12, 28)); return Buffer.concat([d.update(data.subarray(28)), d.final()]).toString('utf8'); },
+};
+
+/**
+ * With `MJ_APP_KEYS=1`, and only when this bundle is run by Electron itself (`electron dist/dev-host.js`),
+ * secrets are read with the app's real codec — the OS keychain, or the file key in `MJ_USER_DATA` —
+ * instead of a throwaway one. That is what lets the benchmark use the keys a user already saved in
+ * the app. Anywhere else (plain Node, the tests) this stays off and secrets are per-process.
+ */
+let appCodec: Codec | undefined;
+const appCodecReady: Promise<void> = process.env.MJ_APP_KEYS === '1' && process.versions.electron
+	? (async () => {
+		// `electron` is external to this bundle and only resolves to the real module inside Electron.
+		const { app, safeStorage } = await import('electron');
+		app.setName('Stormcoder');
+		await app.whenReady();
+		appCodec = createSecretCodec({ userDataDir, safeStorage, log: (level, ...parts) => console.error(level, ...parts) });
+	})()
+	: Promise.resolve();
+
 const controller = new Controller({
 	appRoot,
 	userDataDir,
@@ -35,8 +59,8 @@ const controller = new Controller({
 	platform: process.platform,
 	secureStorage: false,
 	codec: {
-		encrypt: plain => { const iv = crypto.randomBytes(12); const c = crypto.createCipheriv('aes-256-gcm', key, iv); const b = Buffer.concat([c.update(plain, 'utf8'), c.final()]); return Buffer.concat([iv, c.getAuthTag(), b]); },
-		decrypt: data => { const d = crypto.createDecipheriv('aes-256-gcm', key, data.subarray(0, 12)); d.setAuthTag(data.subarray(12, 28)); return Buffer.concat([d.update(data.subarray(28)), d.final()]).toString('utf8'); },
+		encrypt: plain => (appCodec ?? throwaway).encrypt(plain),
+		decrypt: data => (appCodec ?? throwaway).decrypt(data),
 	},
 	send: (channel, payload) => { if (socket?.readyState === 1) { socket.send(JSON.stringify({ channel, payload })); } },
 	openExternal: async () => true,
@@ -123,6 +147,7 @@ wss.on('connection', ws => {
 });
 
 server.listen(port, '127.0.0.1', async () => {
+	await appCodecReady;
 	const addr = server.address();
 	const actual = typeof addr === 'object' && addr ? addr.port : port;
 	if (process.env.MJ_FOLDER) {

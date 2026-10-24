@@ -8,9 +8,12 @@
 // Keys come from the environment, as the app reads them (ANTHROPIC_API_KEY, OPENAI_API_KEY, ...).
 // Options: --tasks <substring ...>  --repeat N  --approval yolo|auto-edits  --max-steps N
 //          --timeout-scale X  --label text  --out file.json
+//          --app-data [dir]  use the keys and provider settings already saved in the Stormcoder app
+//                            (default folder for this OS; read-only, signed-in sessions are never touched)
 //          --engine <dir>   a different checkout (with dist/ built) to run the tasks against
 import fs from 'node:fs';
 import path from 'node:path';
+import { configuredModel, defaultAppData, inspectApp } from './lib/appkeys.mjs';
 import { startEngine } from './lib/engine.mjs';
 import { startOracle } from './lib/oracle.mjs';
 import { report } from './lib/report.mjs';
@@ -23,7 +26,23 @@ if (!tasks.length) { console.error('no tasks match'); process.exit(2); }
 const repeat = Number(args.repeat ?? 1);
 const scale = Number(args['timeout-scale'] ?? 1);
 
-if (provider !== 'oracle' && provider !== 'custom') {
+// Keys already saved in the app: read from a sanitized copy, by running the engine under Electron.
+let app;
+if (args['app-data']) {
+	const dir = args['app-data'] === true ? defaultAppData() : path.resolve(args['app-data']);
+	app = inspectApp(dir);
+	if (!app) { console.error(`No Stormcoder app data at ${dir}. Pass --app-data <folder>, or open the app once and save a key.`); process.exit(2); }
+	if (provider === 'oracle') { console.error('--app-data has no use with the oracle.'); process.exit(2); }
+	if (provider !== 'custom' && !app.apiKeys.includes(provider)) {
+		const why = app.signedIn.includes(provider)
+			? `${provider} is signed in with a web session in the app. The benchmark never touches sign-in sessions, because refreshing a copy can sign the app out. Save an API key for it in the app, or use another provider.`
+			: `The app has no saved key for ${provider}. Providers with a saved API key: ${app.apiKeys.join(', ') || 'none'}.`;
+		console.error(why); process.exit(2);
+	}
+	args.model ??= configuredModel(app, provider);
+}
+
+if (!app && provider !== 'oracle' && provider !== 'custom') {
 	const envName = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY', groq: 'GROQ_API_KEY', openrouter: 'OPENROUTER_API_KEY' }[provider];
 	if (envName && !process.env[envName]) { console.error(`${envName} is not set; cannot run against ${provider}.`); process.exit(2); }
 }
@@ -52,7 +71,7 @@ for (const task of tasks) {
 			} else {
 				settings['openvsChat.defaultProvider'] = provider;
 			}
-			engine = await startEngine({ project: ws.dir, settings, engineRoot: args.engine ? path.resolve(args.engine) : undefined });
+			engine = await startEngine({ project: ws.dir, settings, app, engineRoot: args.engine ? path.resolve(args.engine) : undefined });
 			const turns = [];
 			for (const text of task.prompts) {
 				turns.push(await engine.send({ sessionId: 'bench', mode: task.mode, provider: provider === 'oracle' ? 'custom' : provider, model, text, timeoutMs: (task.timeoutSec ?? 300) * 1000 * scale }));
@@ -90,7 +109,7 @@ if (aborted) {
 	process.exit(3);
 }
 
-const meta = { label: args.label ?? `${provider}${args.model ? ':' + args.model : ''}`, provider, model: args.model ?? null, approval: args.approval ?? 'yolo', repeat, date: new Date().toISOString() };
+const meta = { keys: app ? `app (${app.dir})` : 'environment', label: args.label ?? `${provider}${args.model ? ':' + args.model : ''}`, provider, model: args.model ?? null, approval: args.approval ?? 'yolo', repeat, date: new Date().toISOString() };
 console.log('\n' + report(meta, runs));
 if (args.out) {
 	fs.mkdirSync(path.dirname(path.resolve(args.out)), { recursive: true });
