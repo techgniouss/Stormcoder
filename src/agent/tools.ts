@@ -11,6 +11,7 @@ import { MALFORMED_ARGS } from '../providers/toolCalls';
 import { ChatImage, ToolCall, ToolSpec, isAbortError } from '../providers/types';
 import { FileWrite } from './checkpoint';
 import { Guardrails, WorkspacePath, autoApproves, autoApprovesWrites, checkCommand, checkPath, describeWorkspaceUri, loadGuardrails, normalizeWorkspacePath, resolveWorkspacePath } from './guardrails';
+import { MAX_ENTRY_CHARS, MEMORY_TYPES, ProjectMemory } from '../memory/projectMemory';
 import { resolveAgentShell } from './shell';
 import { sandboxedSpawn } from './sandbox';
 
@@ -250,6 +251,18 @@ export const AGENT_TOOLS: ToolSpec[] = [
 				waitMs: { type: 'number', description: 'Wait this long for new output.' },
 			},
 			required: ['id'],
+		},
+	},
+	{
+		name: 'remember',
+		description: `Save one durable project fact for future sessions (quirk, convention, command, decision), one line under ${MAX_ENTRY_CHARS} characters. No secrets or progress notes. Requires approval.`,
+		parameters: {
+			type: 'object',
+			properties: {
+				type: { type: 'string', enum: [...MEMORY_TYPES], description: 'Kind of fact.' },
+				text: { type: 'string', description: 'The fact.' },
+			},
+			required: ['type', 'text'],
 		},
 	},
 ];
@@ -669,7 +682,7 @@ export async function executeTool(rawCall: ToolCall, approver: ToolApprover, gua
 		return { result: 'No workspace folder is open; file and command tools are unavailable.', isError: true };
 	}
 	// Side-effecting tools are blocked in untrusted workspaces, regardless of approval.
-	if ((call.name === 'write_file' || call.name === 'edit_file' || call.name === 'edit_notebook' || call.name === 'run_command') && !vscode.workspace.isTrusted) {
+	if ((call.name === 'write_file' || call.name === 'edit_file' || call.name === 'edit_notebook' || call.name === 'run_command' || call.name === 'remember') && !vscode.workspace.isTrusted) {
 		const action = call.name === 'run_command' ? 'run commands' : 'write files';
 		return {
 			result: `This workspace is not trusted, so the agent can't ${action}. Use "Workspaces: Manage Workspace Trust" to trust it, then retry.`,
@@ -743,7 +756,9 @@ export async function executeTool(rawCall: ToolCall, approver: ToolApprover, gua
 					? await runCommand(found.target.uri, found.target.display, command, approver, g, signal, background)
 					: { result: found.error, isError: true };
 			}
-			case 'command_output':
+			case 'remember':
+					return await rememberFact(root, asString(call.args.type), asString(call.args.text), approver, g);
+				case 'command_output':
 				return await readBackgroundCommand(asString(call.args.id).trim(), asBoolean(call.args.stop), asNumber(call.args.waitMs));
 			default:
 				// Naming the real tools matters: a model that invented a name has no way to
@@ -763,6 +778,30 @@ export async function executeTool(rawCall: ToolCall, approver: ToolApprover, gua
 		}
 		return { result: `Tool "${call.name}" failed: ${err instanceof Error ? err.message : String(err)}`, isError: true };
 	}
+}
+
+/**
+ * Saves a fact to the project's memory file. Goes through the same approval as any other
+ * workspace write: what is saved is read back into every future prompt, so it is a way to
+ * steer later sessions and the user gets the same say over it as over an edit.
+ */
+async function rememberFact(root: vscode.Uri, type: string, text: string, approver: ToolApprover, g: Guardrails): Promise<ToolResult> {
+	const clean = text.replace(/\s+/g, ' ').trim();
+	if (!autoApprovesWrites(g) && clean) {
+		const { approved, feedback } = await approver.confirm({
+			kind: 'write',
+			signature: 'remember',
+			title: 'Save to project memory?',
+			detail: 'Read back into every future conversation in this project.',
+			preview: `[${type}] ${clean.slice(0, MAX_ENTRY_CHARS + 20)}`,
+			previewLanguage: '',
+		});
+		if (!approved) {
+			return { result: denialMessage('write', feedback), isError: true };
+		}
+	}
+	const outcome = await new ProjectMemory(root).remember(type, text);
+	return { result: outcome.message, isError: !outcome.saved && !/^Already remembered/.test(outcome.message) };
 }
 
 async function readFile(target: WorkspacePath, offset?: number, limit?: number, maxChars = MAX_READ_CHARS): Promise<ToolResult> {

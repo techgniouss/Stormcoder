@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ToolCall } from '../providers/types';
-import { commandTextOf, normalizeToolCall } from './tools';
+import { asBoolean, commandTextOf, isVerificationCommand, normalizeToolCall } from './tools';
 
 /** Most characters the digest keeps; the oldest lines are dropped first. */
 const MAX_DIGEST_CHARS = 3_000;
@@ -21,6 +21,8 @@ const OUTPUT_TAIL_CHARS = 200;
  */
 export class WorkLog {
 	private readonly lines: string[] = [];
+	private readonly changed = new Set<string>();
+	private verifiedSinceWrite = false;
 
 	/** Records one finished top-level tool call. */
 	record(raw: ToolCall, result: string, isError: boolean): void {
@@ -28,6 +30,14 @@ export class WorkLog {
 		const path = typeof call.args.path === 'string' ? call.args.path : '';
 		const flag = isError ? ' (failed)' : '';
 		let line: string | undefined;
+		if (!isError) {
+			if ((call.name === 'write_file' || call.name === 'edit_file' || call.name === 'edit_notebook') && path) {
+				this.changed.add(path);
+				this.verifiedSinceWrite = false;
+			} else if (call.name === 'run_command' && !asBoolean(call.args.background) && isVerificationCommand(commandTextOf(call.args))) {
+				this.verifiedSinceWrite = true;
+			}
+		}
 		switch (call.name) {
 			case 'read_file':
 				line = `read ${path}${call.args.offset ? ` from line ${String(call.args.offset)}` : ''}${flag}`;
@@ -64,6 +74,16 @@ export class WorkLog {
 		if (line) {
 			this.lines.push(`- ${line}`);
 		}
+	}
+
+	/** Paths this run wrote or edited successfully, in the order first changed. */
+	changedFiles(): string[] {
+		return [...this.changed];
+	}
+
+	/** Whether a verification command passed after the last successful write. */
+	verified(): boolean {
+		return this.verifiedSinceWrite;
 	}
 
 	/** The digest, newest activity kept when it has to be cut. Empty when nothing was recorded. */

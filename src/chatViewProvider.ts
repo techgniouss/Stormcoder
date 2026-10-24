@@ -6,6 +6,7 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { AgentA2A, AgentMessageDelivery, AgentOptions, AgentRunner, AgentSessionInfo, RunResult } from './agent/agentRunner';
+import { ProjectMemory, appendMemory, goalOf } from './memory/projectMemory';
 import { WorkLog } from './agent/workLog';
 import { thinkingStyle } from './providers/anthropic';
 import { streamBudgeted } from './agent/budgetedStream';
@@ -36,6 +37,9 @@ import { defaultChromeProfilePath } from './providers/webCookie/chromeCookies';
 import { AttachImageChunk, UploadAssembler, readPickedImages, sanitizeInlineImages } from './remote/attachments';
 import { QueueDrainGate } from './session/queueDrain';
 import { appendRules, COMPACT_RULES_CHARS, RulesProvider } from './rules';
+
+/** What the compact system prompt may carry of project memory (about 400 tokens). */
+const COMPACT_MEMORY_CHARS = 1_600;
 import { MessageSink, SessionBus } from './session/bus';
 import { adoptLegacyState, buildPersistedState, LegacyPersistedState, loadState, restoredSessions, saveState } from './session/persistence';
 import { PromptRegistry } from './session/prompts';
@@ -623,14 +627,62 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	 * {@link COMPACT_RULES_CHARS} and leaves the active skills out: on a budget that small a
 	 * skill (up to 16k characters) cannot fit whole, and half a skill is worse than none.
 	 */
-	private async basePrompts(): Promise<{ full: string; compact: string }> {
+	private async basePrompts(sessionId?: string): Promise<{ full: string; compact: string }> {
 		const env = this.environmentEnabled() ? (await buildEnvContext()).stable : '';
 		const userBase = this.registry.getSystemPrompt();
 		const rules = await this.rules.getRules();
+		const memory = await this.memoryBlock(sessionId);
 		return {
-			full: await this.withSkills(appendRules(personaBase(env, userBase), rules)),
-			compact: appendRules(personaBase(env, userBase, true), rules, COMPACT_RULES_CHARS),
+			full: await this.withSkills(appendMemory(appendRules(personaBase(env, userBase), rules), memory)),
+			compact: appendMemory(appendRules(personaBase(env, userBase, true), rules, COMPACT_RULES_CHARS), memory, COMPACT_MEMORY_CHARS),
 		};
+	}
+
+	/** Project memory as read when each chat session first needed it; see {@link memoryBlock}. */
+	private readonly memorySnapshots = new Map<string, string>();
+
+	/** The project memory, when it is on and the workspace is one the user trusts. */
+	private memoryFor(): ProjectMemory | undefined {
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+		// A cloned repository's memory file is text an attacker could have written into the
+		// prompt, so it is not read until the folder is trusted.
+		if (!root || !vscode.workspace.isTrusted || cfg.get<boolean>('memory.enabled') === false) {
+			return undefined;
+		}
+		return new ProjectMemory(root);
+	}
+
+	/**
+	 * The memory block for a session's system prompt, read once per session and then reused.
+	 * The system prompt is the prefix a caching backend matches on, so a block that changed
+	 * mid-conversation (a fact saved, a run journaled) would make every later turn a full
+	 * cache miss. What a session saves shows up in the next one.
+	 */
+	private async memoryBlock(sessionId?: string): Promise<string> {
+		if (sessionId && this.memorySnapshots.has(sessionId)) {
+			return this.memorySnapshots.get(sessionId)!;
+		}
+		const runs = vscode.workspace.getConfiguration('stormcoder').get<number>('memory.recentRuns');
+		const block = (await this.memoryFor()?.promptBlock(typeof runs === 'number' ? runs : undefined)) ?? '';
+		if (sessionId) {
+			if (this.memorySnapshots.size >= 50) {
+				this.memorySnapshots.delete(this.memorySnapshots.keys().next().value as string);
+			}
+			this.memorySnapshots.set(sessionId, block);
+		}
+		return block;
+	}
+
+	/** Records a run that changed files in the project journal, so the next session knows what was done. */
+	private async journalRun(messages: ReadonlyArray<{ role: string; content: string }>, workLog: WorkLog): Promise<void> {
+		const files = workLog.changedFiles();
+		const goal = goalOf(messages);
+		const memory = this.memoryFor();
+		if (!memory || !files.length || !goal) {
+			return;
+		}
+		await memory.appendJournal({ date: new Date().toISOString().slice(0, 10), goal, files, verified: workLog.verified() });
 	}
 
 	/** `base` followed by every active skill, within the combined skills budget. */
@@ -2487,7 +2539,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			// such turn ~1.9k tokens of tool schemas for the privilege.
 			const smallTalk = !!talkKind;
 			const readTools = (mode === 'ask' || mode === 'plan') && !smallTalk && !!provider.runAgentStep && this.modelToolCapable(providerId, provider, model);
-			const prompts = await this.systemPrompts(mode, !!message.inline, readTools);
+			const prompts = await this.systemPrompts(mode, !!message.inline, readTools, sessionId);
 			const assembled: ChatMessage[] = [{ role: 'system', content: prompts.full }];
 			const contextBudget = this.configuredContextTokens(model, params.maxTokens, providerId);
 			const editTarget = this.takeEditTarget(mode, !!message.inline);
@@ -2861,7 +2913,7 @@ ${context.content}` }
 				// same mid-run steering box. Stragglers from a previous run in this tab go;
 				// what was typed into this one is kept for the implementer to drain.
 				this.dropForeignSteering(sessionId, runId);
-				const base = await this.basePrompts();
+				const base = await this.basePrompts(sessionId);
 				// `stormcoder.persona.compactPrompt`, as `systemPrompts` applies it everywhere else.
 				const compactSetting = this.compactPromptSetting();
 				const autoWorkLog = new WorkLog();
@@ -2914,13 +2966,14 @@ ${context.content}` }
 				stepThinking?.flush();
 				flushPhaseText();
 				this.sessionStore.attachWorkNotes(sessionId, autoWorkLog.render());
+				await this.journalRun(history, autoWorkLog);
 			} else {
 				// Ask/Plan → planning/reasoning model; inline Edit → implementation model.
 				const role: AutoRole = mode === 'edit' ? 'code' : 'plan';
 				// Vision is a routing constraint, not a late failure: an attached image steers
 				// Auto to a model that can read it instead of erroring out on the one it picked.
 				const needs = { vision: !!history.at(-1)?.images?.length };
-				const prompts = await this.systemPrompts(mode, !!message.inline);
+				const prompts = await this.systemPrompts(mode, !!message.inline, false, sessionId);
 				const messages: ChatMessage[] = [{ role: 'system', content: prompts.full }];
 				if (contextText) {
 					messages.push(contextTurn(contextText));
@@ -3354,13 +3407,18 @@ ${context.content}` }
 					this.recordAssistantTurn(sessionId, formatted);
 				},
 				onToolStart: (call, parentCallId) => post({ type: 'toolStart', id: call.id, name: call.name, args: call.args, parentCallId }),
-				onToolEnd: (call, result, isError, parentCallId) =>
-					post({ type: 'toolEnd', id: call.id, name: call.name, result, isError, parentCallId }),
+				onToolEnd: (call, result, isError, parentCallId) => {
+					if (!parentCallId) { workLog.record(call, result, isError); }
+					post({ type: 'toolEnd', id: call.id, name: call.name, result, isError, parentCallId });
+				},
 				onNote: text => post({ type: 'info', message: text }),
 				onTodos: items => post({ type: 'todos', items }),
 			});
 		} finally {
 			saves.dispose();
+			// The digest the next turn reads (see WorkLog) and the journal the next session reads.
+			this.sessionStore.attachWorkNotes(sessionId, workLog.render());
+			await this.journalRun(messages, workLog);
 		}
 	}
 
@@ -3680,8 +3738,8 @@ ${context.content}` }
 	 * know about it: `always` makes both the compact one (and sets `force`, which also
 	 * condenses the tool schemas), `never` offers no compact one to fall back to.
 	 */
-	private async systemPrompts(mode: ChatMode, inline = false, readTools = false): Promise<{ full: string; compact: string | undefined; force: boolean }> {
-		const base = await this.basePrompts();
+	private async systemPrompts(mode: ChatMode, inline = false, readTools = false, sessionId?: string): Promise<{ full: string; compact: string | undefined; force: boolean }> {
+		const base = await this.basePrompts(sessionId);
 		const compact = this.buildSystemPrompt(mode, base.compact, inline, readTools, true);
 		const setting = this.compactPromptSetting();
 		if (setting === 'always') {

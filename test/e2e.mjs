@@ -20,6 +20,8 @@ const mock = await startMock(req => {
 const seen = mock.seen;
 const host = await startHost({ mockPort: mock.port });
 const project = host.project;
+fs.mkdirSync(path.join(project, '.stormcoder'), { recursive: true });
+fs.writeFileSync(path.join(project, '.stormcoder/memory.md'), '- [gotcha] The build needs the moon phase set. (2026-10-01)\n');
 const url = host.url;
 
 const browser = await launchChromium();
@@ -44,6 +46,15 @@ try {
 	await chat.getByText('Done: hello.txt written.').first().waitFor({ timeout: 20000 });
 	assert.equal(fs.readFileSync(path.join(project, 'hello.txt'), 'utf8'), 'hello from stormcoder\n');
 	assert.ok(seen.some(r => r.tools?.some(t => t.function?.name === 'write_file')), 'the agent request offered write_file');
+	// Project memory: a saved fact reaches the model's system prompt, and the run that changed a
+	// file is journaled for the next session.
+	assert.ok(seen.some(r => String(r.messages?.[0]?.content).includes('The build needs the moon phase set.')), 'saved memory is in the system prompt');
+	const journalFile = path.join(project, '.stormcoder/journal.jsonl');
+	for (let i = 0; i < 50 && !fs.existsSync(journalFile); i++) { await new Promise(r => setTimeout(r, 100)); }
+	assert.ok(fs.existsSync(journalFile), 'the run was journaled');
+	const journaled = JSON.parse(fs.readFileSync(journalFile, 'utf8').trim().split('\n').at(-1));
+	assert.equal(journaled.goal, 'create hello.txt');
+	assert.deepEqual(journaled.files, ['hello.txt']);
 	if (process.env.E2E_SHOT) { await page.screenshot({ path: process.env.E2E_SHOT }); }
 
 	// 3. Settings opens as its own view, and areas switch.

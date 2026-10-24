@@ -81,9 +81,7 @@
 		"stormcoder.rules": "",
 		"stormcoder.ruleFiles": [
 			".stormcoder/rules.md",
-			".stormcoder/memory.md",
 			".openvs/rules.md",
-			".openvs/memory.md",
 			"AGENTS.md",
 			"CLAUDE.md",
 			".github/copilot-instructions.md",
@@ -138,6 +136,8 @@
 		],
 		"stormcoder.mcp.servers": {},
 		"stormcoder.skills": [],
+		"stormcoder.memory.enabled": true,
+		"stormcoder.memory.recentRuns": 5,
 		"stormcoder.auto.planModel": "",
 		"stormcoder.auto.codeModel": "",
 		"stormcoder.auto.reviewModel": "",
@@ -626,6 +626,16 @@
 		"stormcoder.skills": {
 			"type": "array",
 			"description": "%config.skills%"
+		},
+		"stormcoder.memory.enabled": {
+			"type": "boolean",
+			"description": "%config.memory.enabled%"
+		},
+		"stormcoder.memory.recentRuns": {
+			"type": "number",
+			"description": "%config.memory.recentRuns%",
+			"minimum": 0,
+			"maximum": 20
 		},
 		"stormcoder.auto.planModel": {
 			"type": "string",

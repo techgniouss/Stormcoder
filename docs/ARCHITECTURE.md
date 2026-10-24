@@ -22,6 +22,10 @@ Engine requests for UI (`showInformationMessage`, `showQuickPick`, `showInputBox
 
 Opening a folder asks once whether to trust it. A trusted folder lets the agent write files and run commands and lets project MCP servers start; a read-only one does not. Changing folder restarts the engine against the new folder (state such as chats is per project; settings and secrets are global). User data lives in Electron's `userData` directory: `settings.json`, `secrets.json`, `state/`, `logs/`.
 
+## Project memory
+
+`src/memory/projectMemory.ts` keeps two files in the project's `.stormcoder/` folder: `memory.md` (typed, dated one-line facts written by the `remember` tool, or by hand) and `journal.jsonl` (one line per run that changed files: goal, files, whether a verification command passed afterwards, taken from `WorkLog`). A block built from both is added to the system prompt once per chat session and then reused, so a fact saved mid-conversation does not change the prompt prefix a caching backend matches on; it appears in the next session. The block is capped (about 1,100 tokens of facts and 300 of recent work), the compact prompt gets a smaller cut, and nothing is read in an untrusted folder. `remember` goes through the normal write approval, refuses anything that looks like a credential, and drops the oldest agent-written lines, never a user's own, when the file outgrows its budget.
+
 ## Security notes
 
 - Secrets use `safeStorage` (OS keychain). Without one, AES-256-GCM with a random key in a `0600` file: protection against copying the file, not against another process running as you.

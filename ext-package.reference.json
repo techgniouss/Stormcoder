@@ -812,9 +812,7 @@
           },
           "default": [
             ".stormcoder/rules.md",
-            ".stormcoder/memory.md",
             ".openvs/rules.md",
-            ".openvs/memory.md",
             "AGENTS.md",
             "CLAUDE.md",
             ".github/copilot-instructions.md",
@@ -998,6 +996,18 @@
               "instructions"
             ]
           }
+        },
+        "stormcoder.memory.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "%config.memory.enabled%"
+        },
+        "stormcoder.memory.recentRuns": {
+          "type": "number",
+          "default": 5,
+          "minimum": 0,
+          "maximum": 20,
+          "markdownDescription": "%config.memory.recentRuns%"
         },
         "stormcoder.auto.planModel": {
           "type": "string",

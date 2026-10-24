@@ -2310,7 +2310,7 @@ async function runAuto(agentSteps, { maxSteps = 20, history = [{ role: 'user', c
 
 // 52. Every tool's output is sized to the run's budget, not just read_file's: a result larger
 // than a small model's whole budget used to be cut to 200 characters by trimming before the
-// model saw any of it. Here an MCP tool returns ~40k characters against a 5.4k budget.
+// model saw any of it. Here an MCP tool returns ~40k characters against a 5.6k budget (the built-in toolset alone is ~2k of it).
 {
 	const huge = 'FIRST ' + 'r'.repeat(40_000) + ' LAST';
 	const mcpTool = { name: 'mcp__s__dump', description: 'dump', parameters: { type: 'object', properties: {} } };
@@ -2326,7 +2326,7 @@ async function runAuto(agentSteps, { maxSteps = 20, history = [{ role: 'user', c
 				: { content: 'done', toolCalls: [] };
 		},
 	};
-	await new AgentRunner(provider, approver, 3, { mcp, maxContextTokens: 5_400 })
+	await new AgentRunner(provider, approver, 3, { mcp, maxContextTokens: 5_600 })
 		.run([{ role: 'system', content: 'SYS' }, { role: 'user', content: 'go' }], params, noopCallbacks());
 	const result = sent[1][0];
 	assert.ok(result.startsWith('FIRST') && result.endsWith('LAST'), 'head and tail reach the model: ' + JSON.stringify([result.slice(0, 20), result.slice(-60)]));
