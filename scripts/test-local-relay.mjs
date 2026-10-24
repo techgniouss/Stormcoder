@@ -198,9 +198,16 @@ await relay.stop();
 	// The phone app cannot be framed by another site (a clickjacked Approve) or sniffed.
 	const page = await fetch(`http://127.0.0.1:${port}/p/${ROOM}`);
 	assert.deepStrictEqual(
-		['x-frame-options', 'content-security-policy', 'x-content-type-options', 'referrer-policy'].map(k => page.headers.get(k)),
-		['DENY', "frame-ancestors 'none'", 'nosniff', 'no-referrer'],
+		['x-frame-options', 'x-content-type-options', 'referrer-policy'].map(k => page.headers.get(k)),
+		['DENY', 'nosniff', 'no-referrer'],
 	);
+	// ...and may only run and load its own files: no inline or eval'd script, no framing, no <base>,
+	// no plugins, connections only back to itself (HTTP and WebSocket).
+	const csp = page.headers.get('content-security-policy') ?? '';
+	for (const directive of ["default-src 'self'", "script-src 'self'", "style-src 'self'", "object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", "connect-src 'self' ws: wss:"]) {
+		assert.ok(csp.includes(directive), `the policy has ${directive}: ${csp}`);
+	}
+	assert.doesNotMatch(csp, /unsafe-inline|unsafe-eval|\*/, 'nothing is opened up');
 	h.close();
 	await r.stop();
 }
