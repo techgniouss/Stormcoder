@@ -6,7 +6,7 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { AgentA2A, AgentMessageDelivery, AgentOptions, AgentRunner, AgentSessionInfo, RunResult } from './agent/agentRunner';
-import { MEMORY_TYPES, MemoryScope, MemoryStore, appendMemory, buildPromptBlock, buildProposalPrompt, configureMemory, goalOf, memoryEnabled, parseProposals, projectStore, userStore } from './memory/projectMemory';
+import { MEMORY_TYPES, MemoryScope, MemoryStore, appendMemory, buildPromptBlock, buildProposalPrompt, configureMemory, goalOf, memoryEnabled, parseProposals, projectStore, searchTranscripts, userStore } from './memory/projectMemory';
 import { WorkLog } from './agent/workLog';
 import { thinkingStyle } from './providers/anthropic';
 import { streamBudgeted } from './agent/budgetedStream';
@@ -758,35 +758,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		void run();
 	}
 
-	/** Past chats mentioning all-ish of `words`, as ready-to-show lines for the `recall` tool. */
+	/** Past chats mentioning any of `words`, as ready-to-show lines for the `recall` tool. */
 	private searchChats(words: string[], limit: number): string[] {
-		interface Chat { title: string; when?: string; messages: ReadonlyArray<{ role: string; content: string; kind?: string }> }
-		const chats: Chat[] = [
+		return searchTranscripts([
 			...this.sessionStore.getSessions().map(s => ({ title: s.title || 'Untitled chat', messages: s.messages })),
 			...this.sessionStore.getHistory().map(h => ({ title: h.title, when: new Date(h.savedAt).toISOString().slice(0, 10), messages: h.messages })),
-		];
-		const hits: Array<{ score: number; line: string }> = [];
-		const seen = new Set<string>();
-		for (const chat of chats) {
-			for (const m of chat.messages) {
-				if (m.kind || (m.role !== 'user' && m.role !== 'assistant') || typeof m.content !== 'string') {
-					continue;
-				}
-				const lower = m.content.toLowerCase();
-				const found = words.filter(w => lower.includes(w));
-				if (!found.length) {
-					continue;
-				}
-				const at = lower.indexOf(found[0]);
-				const snippet = m.content.slice(Math.max(0, at - 80), at + 160).replace(/\s+/g, ' ').trim();
-				const line = `- "${chat.title.slice(0, 40)}"${chat.when ? ` (${chat.when})` : ''}, ${m.role}: …${snippet}…`;
-				if (!seen.has(line)) {
-					seen.add(line);
-					hits.push({ score: found.length, line });
-				}
-			}
-		}
-		return hits.sort((a, b) => b.score - a.score).slice(0, limit).map(h => h.line);
+		], words, limit);
 	}
 
 	/** The store for a panel request's scope, or undefined when that scope is not available. */
@@ -3665,7 +3642,9 @@ ${context.content}` }
 			// The digest the next turn reads (see WorkLog) and the journal the next session reads.
 			this.sessionStore.attachWorkNotes(sessionId, workLog.render());
 			await this.journalRun(messages, workLog);
-			this.proposeMemory(provider, params, messages, workLog, sessionId, post);
+			if (!params.signal.aborted) {
+				this.proposeMemory(provider, params, messages, workLog, sessionId, post);
+			}
 		}
 	}
 

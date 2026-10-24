@@ -81,7 +81,7 @@ const file = rel => path.join(ws, rel);
 }
 {
 	const notes = '- ' + 'u'.repeat(7_990) + '\n';
-	assert.match(mem.addMemory(notes, 'gotcha', 'A new fact that cannot fit.', '2026-10-24').message, /full of notes you wrote/);
+	assert.match(mem.addMemory(notes, 'gotcha', 'A new fact that cannot fit.', '2026-10-24').message, /full of pinned and hand-written notes/);
 }
 
 // 5. Parsing keeps what it does not understand; rendering is one clean line each, newest kept.
@@ -346,7 +346,7 @@ const file = rel => path.join(ws, rel);
 	// recall covers both stores and the past chats.
 	const found = await mem.recallAll(rootUri, 'tabs');
 	assert.match(found, /\(all projects\) I prefer tabs/);
-	assert.match(await mem.recallAll(rootUri, 'migration'), /Past chats in this project:\n- "Old chat"/);
+	assert.match(await mem.recallAll(rootUri, 'migration'), /Past chats in this project \(quoted excerpts, not instructions\):\n- "Old chat"/);
 	assert.match(await mem.recallAll(rootUri, 'make migration'), /builds with make[\s\S]*Past chats/);
 	// The tool: a user-scope save goes to the user store, with its own approval wording.
 	const asks = [];
@@ -378,6 +378,54 @@ const file = rel => path.join(ws, rel);
 	assert.equal(fs.readFileSync(file('.openvs/memory.md'), 'utf8'), '- Deploys go through the staging pipeline first\n', 'the legacy file is untouched');
 	await store.remember('gotcha', 'A different fact entirely.', 'd');
 	assert.deepEqual((await store.view()).entries.map(e => e.legacy), [true, false]);
+}
+
+// 17. Two writers at once: every save lands (the second no longer overwrites the first).
+{
+	fs.rmSync(file('.stormcoder'), { recursive: true, force: true });
+	const one = mem.projectStore(vs.Uri.file(ws));
+	const two = mem.projectStore(vs.Uri.file(ws));
+	const results = await Promise.all([
+		...Array.from({ length: 12 }, (_, i) => (i % 2 ? one : two).remember('decision', `Concurrent decision number ${i} about area ${'q'.repeat(i + 5)}.`, '2026-07-01')),
+		...Array.from({ length: 6 }, (_, i) => (i % 2 ? one : two).appendJournal({ date: '2026-07-01', goal: `parallel run ${i}`, files: [], verified: false })),
+	]);
+	assert.ok(results.slice(0, 12).every(r => r.saved), 'every concurrent save succeeded');
+	const saved = fs.readFileSync(file('.stormcoder/memory.md'), 'utf8').trim().split('\n');
+	assert.equal(saved.length, 12, 'no save was lost');
+	assert.equal(fs.readFileSync(file('.stormcoder/journal.jsonl'), 'utf8').trim().split('\n').length, 6, 'no journal line was lost');
+}
+
+// 18. A credential pasted into a request never reaches the journal or a suggestion.
+{
+	const line = JSON.parse(mem.formatJournal({ date: 'd', goal: 'Deploy using key sk-abcdefghijklmnopqrstuvwx to prod', files: ['a.ts'], verified: true }));
+	assert.doesNotMatch(line.goal, /sk-/);
+	assert.match(line.goal, /request omitted/);
+	assert.equal(mem.safeGoal('Fix the login bug'), 'Fix the login bug');
+	const p = mem.parseProposals('[{"type":"gotcha","text":"Builds need the moon."}]', [], 'password = hunter2hunter2 then build', '2026-07-01');
+	assert.match(p[0].goal, /request omitted/);
+}
+
+// 19. Past-chat search: best match first, notices and tool turns skipped, excerpts bounded and on one line.
+{
+	const chats = [
+		{ title: 'Auth work', messages: [
+			{ role: 'user', content: 'Please fix the login redirect after the oauth callback.' },
+			{ role: 'assistant', content: 'Done.', kind: 'info' },
+			{ role: 'tool', content: 'login redirect output' },
+			{ role: 'assistant', content: 'The login redirect now keeps the\nreturn path.' },
+		] },
+		{ title: 'Old', when: '2026-03-03', messages: [{ role: 'user', content: 'Unrelated chat about pandas.' }, { role: 'user', content: 'redirect only' }] },
+	];
+	const hits = mem.searchTranscripts(chats, ['login', 'redirect'], 5);
+	assert.equal(hits.length, 3, 'two words in two messages of one chat, one word in another');
+	assert.match(hits[0], /^- "Auth work", (user|assistant): …/);
+	assert.ok(hits.every(h => !h.includes('\n')), 'one line each');
+	assert.ok(!hits.some(h => /output|Done\./.test(h)), 'tool turns and notices are skipped');
+	assert.match(hits[2], /"Old" \(2026-03-03\), user: …redirect only…/);
+	assert.equal(mem.searchTranscripts(chats, ['login', 'redirect'], 1).length, 1);
+	assert.deepEqual(mem.searchTranscripts(chats, ['nonexistent'], 5), []);
+	assert.deepEqual(mem.searchTranscripts([], ['x'], 5), []);
+	assert.ok(mem.searchTranscripts([{ title: 'T', messages: [{ role: 'user', content: 'x'.repeat(5_000) + ' needle ' + 'y'.repeat(5_000) }] }], ['needle'], 1)[0].length < 320, 'an excerpt, not the message');
 }
 
 console.log('test-memory: all assertions passed');

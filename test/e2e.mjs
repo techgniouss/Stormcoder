@@ -22,6 +22,10 @@ const host = await startHost({ mockPort: mock.port });
 const project = host.project;
 fs.mkdirSync(path.join(project, '.stormcoder'), { recursive: true });
 fs.writeFileSync(path.join(project, '.stormcoder/memory.md'), '- [gotcha] The build needs the moon phase set. (2026-10-01)\n');
+fs.writeFileSync(path.join(project, '.stormcoder/proposals.json'), JSON.stringify([
+	{ id: 'p1', type: 'gotcha', text: 'Seeded suggestion about the tide table.', goal: 'Fix the build', date: '2026-10-01' },
+	{ id: 'p2', type: 'command', text: 'Seeded suggestion to dismiss.', goal: 'Fix the build', date: '2026-10-01' },
+]));
 const url = host.url;
 
 const browser = await launchChromium();
@@ -104,11 +108,32 @@ try {
 	await settings.locator('#memoryAddBtn').click();
 	await settings.locator('#memoryUser .mem-row', { hasText: 'small, focused commits' }).waitFor({ timeout: 10000 });
 	assert.ok(fs.readdirSync(path.join(host.data, 'storage', 'memory')).includes('memory.md'), 'personal notes live in the app data, not the project');
+	// Suggestions queued by a finished run: accept one (it becomes a saved fact), dismiss the other.
+	const tide = settings.locator('#memorySuggestions .mem-row', { hasText: 'tide table' });
+	await tide.waitFor({ timeout: 10000 });
+	await tide.getByRole('button', { name: 'Accept' }).click();
+	await settings.locator('#memoryProject .mem-row', { hasText: 'tide table' }).waitFor({ timeout: 10000 });
+	assert.match(fs.readFileSync(memFile, 'utf8'), /\[gotcha\] Seeded suggestion about the tide table\./);
+	await settings.locator('#memorySuggestions .mem-row', { hasText: 'to dismiss' }).getByRole('button', { name: 'Dismiss' }).click();
+	await settings.locator('#memorySuggestions .mem-row').first().waitFor({ state: 'detached', timeout: 10000 });
+	assert.doesNotMatch(fs.readFileSync(memFile, 'utf8'), /to dismiss/, 'a dismissed suggestion is not saved');
+	assert.deepEqual(JSON.parse(fs.readFileSync(path.join(project, '.stormcoder/proposals.json'), 'utf8')), [], 'no suggestions are left waiting');
 	// A secret is refused with the reason shown.
 	await settings.locator('#memoryNewText').fill('password = hunter2hunter2');
 	await settings.locator('#memoryAddBtn').click();
 	await settings.locator('#memoryNotice', { hasText: 'credential' }).waitFor({ timeout: 10000 });
 	await settings.locator('#memoryNewText').fill('');
+
+	// /memory in the chat: status, and a quick save.
+	await page.click('[data-view=chat]');
+	await chat.locator('#input').fill('/memory');
+	await chat.locator('#input').press('Enter');
+	await chat.getByText('Project memory is on', { exact: false }).first().waitFor({ timeout: 15000 });
+	await chat.locator('#input').fill('/memory add user Prefer early returns over nested ifs.');
+	await chat.locator('#input').press('Enter');
+	await chat.getByText('Remembered [note]', { exact: false }).first().waitFor({ timeout: 15000 });
+	assert.match(fs.readFileSync(path.join(host.data, 'storage', 'memory', 'memory.md'), 'utf8'), /Prefer early returns over nested ifs\./);
+
 
 	// 4. The palette opens and filters.
 	await page.keyboard.press('Control+k');
