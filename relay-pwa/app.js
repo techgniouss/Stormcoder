@@ -1273,6 +1273,8 @@ function openPickerSheet(select) {
 	backdrop.appendChild(sheet);
 	document.body.appendChild(backdrop);
 	pickerSheet = backdrop;
+	// What is behind the sheet cannot be reached by keyboard or screen reader while it is open.
+	if (els.app) { els.app.inert = true; }
 	if (current) { current.scrollIntoView({ block: 'center' }); }
 	(current || list.querySelector('button'))?.focus();
 }
@@ -1282,6 +1284,7 @@ function closePickerSheet() {
 	if (!pickerSheet) { return false; }
 	pickerSheet.remove();
 	pickerSheet = null;
+	if (els.app) { els.app.inert = false; }
 	if (pickerReturnFocus instanceof HTMLElement) { pickerReturnFocus.focus(); }
 	pickerReturnFocus = null;
 	return true;
