@@ -18,6 +18,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
+import { GitIgnore } from './gitignore';
 import * as path from 'path';
 import { host, quarantineFile, readJsonFileChecked, ViewId, writeJsonFile } from './env';
 import CONFIG_DEFAULTS from './config-defaults.json';
@@ -616,14 +617,40 @@ async function findFiles(include: GlobPattern, exclude?: GlobPattern | null, max
 	const results: Uri[] = [];
 	const pruneDirs = /(^|\/)(node_modules|\.git)$/;
 	for (const root of roots) {
-		const stack = [''];
-		while (stack.length && results.length < limit) {
-			const rel = stack.pop() as string;
+		// Breadth first, so a capped result holds the shallow files (the project's own source)
+		// rather than whatever the deepest-last directory happened to contain.
+		const queue = [''];
+		// `.gitignore` files met on the way down, keyed by the directory holding each.
+		const ignores = new Map<string, GitIgnore>();
+		const ignored = (childRel: string, isDir: boolean): boolean => {
+			let dir = childRel;
+			// The nearest `.gitignore` that has an opinion decides, as git does.
+			for (;;) {
+				const cut = dir.lastIndexOf('/');
+				dir = cut < 0 ? '' : dir.slice(0, cut);
+				const verdict = ignores.get(dir)?.ignores(dir ? childRel.slice(dir.length + 1) : childRel, isDir);
+				if (verdict !== undefined) {
+					return verdict;
+				}
+				if (!dir) {
+					return false;
+				}
+			}
+		};
+		while (queue.length && results.length < limit) {
+			const rel = queue.shift() as string;
 			let entries: fs.Dirent[];
 			try {
 				entries = await fs.promises.readdir(path.join(root.dir, rel), { withFileTypes: true });
 			} catch {
 				continue;
+			}
+			if (entries.some(e => e.name === '.gitignore')) {
+				try {
+					ignores.set(rel, new GitIgnore(await fs.promises.readFile(path.join(root.dir, rel, '.gitignore'), 'utf8')));
+				} catch {
+					// Unreadable: treated as absent.
+				}
 			}
 			for (const e of entries) {
 				const childRel = rel ? `${rel}/${e.name}` : e.name;
@@ -636,10 +663,10 @@ async function findFiles(include: GlobPattern, exclude?: GlobPattern | null, max
 					isFile = target?.isFile() === true;
 				}
 				if (isDir) {
-					if (!pruneDirs.test(childRel) && !(excludeRe && excludeRe.test(`${childRel}/x`))) {
-						stack.push(childRel);
+					if (!pruneDirs.test(childRel) && !(excludeRe && excludeRe.test(`${childRel}/x`)) && !ignored(childRel, true)) {
+						queue.push(childRel);
 					}
-				} else if (isFile && includeRe.test(childRel) && !(excludeRe && excludeRe.test(childRel))) {
+				} else if (isFile && includeRe.test(childRel) && !(excludeRe && excludeRe.test(childRel)) && !ignored(childRel, false)) {
 					results.push(Uri.file(path.join(root.dir, childRel)));
 					if (results.length >= limit) {
 						break;

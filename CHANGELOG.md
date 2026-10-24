@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+Agent effectiveness audit.
+
+- Code discovery: `search_files` and `glob_files` now honour `.gitignore`, walk breadth-first (project source before deep trees) and skip `venv`, `env`, `site-packages`, `Pods`, `obj`, `.terraform` and similar. In a Python project with a `venv/`, searching for a symbol that existed returned "No matches". `search_files` also takes `caseSensitive`, `context` and `filesOnly`.
+- Follow-up turns keep the previous run's tool activity (files read and changed, commands run and the end of their output) as a hidden digest on the assistant turn, instead of only the prose.
+- Auto: the planner reads the repository with read-only tools before planning, and a review that ends `VERDICT: ISSUES` sends the implementer back for one fix round.
+- Safety: the default approval policy is `auto-edits` (commands ask). The deny-list now covers `git reset --hard`, `git clean -f`, `git checkout -- .`, interpreter one-liners that delete trees, `npm/cargo publish`, piping secrets or files to `curl`/`nc`, and shell writes to `.env`, `*.pem`, `*.key`, `.git/` and `.ssh/`.
+- `run_command` takes `background: true` for servers and watchers, with a new `command_output` tool to read or stop them. New `web_search` tool (DuckDuckGo, through the same per-host approval as `fetch_url`).
+- `CLAUDE.md` is read as a rules file by default. Anthropic models get a 16k output allowance when `maxTokens` is left at the 8192 default.
+- Tests: `scripts/test-discovery.mjs`; the browser test helper also finds `chrome-linux64`.
+
 ## 1.3.5
 
 Audit pass over the thinking-line work.

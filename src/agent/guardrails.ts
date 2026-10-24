@@ -20,14 +20,15 @@ export type ApprovalPolicy = 'always' | 'auto-edits' | 'yolo';
 /**
  * The shipped policy, used for an unset or unrecognized setting.
  *
- * `yolo` because a confirmation card in front of every build, test and git command is the
- * difference between an agent that finishes a task and one that stalls waiting on a click
- * the user never noticed. Nothing here is unguarded: the deny-list, the protected paths,
+ * `auto-edits`: file edits inside the workspace flow, while commands (which can do anything a
+ * deny-list of regular expressions did not think of) are confirmed once and can then be
+ * allowed for the run. `yolo` is one setting away for anyone who wants no cards at all.
+ * Nothing here is unguarded: the deny-list, the protected paths,
  * workspace-root confinement and the untrusted-workspace block are all enforced in code
  * regardless of policy, and the agent still has `ask_user` for decisions that are genuinely
  * the user's. Tighten it with `openvsChat.guardrails.approval`.
  */
-export const DEFAULT_APPROVAL: ApprovalPolicy = 'yolo';
+export const DEFAULT_APPROVAL: ApprovalPolicy = 'auto-edits';
 
 /** Every policy the setting and the webview picker accept, strictest first. */
 export const APPROVAL_POLICIES: readonly ApprovalPolicy[] = ['always', 'auto-edits', 'yolo'];
@@ -136,6 +137,17 @@ export const DEFAULT_DENIED_COMMANDS: readonly string[] = [
 	'(^|[\\s;&|(])(su|doas|pkexec)\\s+(\\S+\\s+)*?-c\\b|\\b(doas|pkexec)\\b',
 	'\\bfind\\b[^;&|\\n]*(\\s-delete\\b|-exec(dir)?\\s+rm\\b)',
 	'<\\(\\s*(curl|wget)\\b|\\b(eval|source|(ba|z|da)?sh\\s+-c)\\s+["\\\']?\\$\\(\\s*(curl|wget)\\b',
+	'\\bgit\\b[^;&|\\n]*\\breset\\b[^;&|\\n]*--hard\\b',
+	'\\bgit\\b[^;&|\\n]*\\bclean\\b[^;&|\\n]*\\s-[a-z]*f',
+	'\\bgit\\b[^;&|\\n]*\\b(checkout|restore)\\b[^;&|\\n]*(\\s--\\s+\\.|\\s\\.\\s*($|[;&|]))',
+	'\\bgit\\b[^;&|\\n]*\\bstash\\b[^;&|\\n]*\\b(drop|clear)\\b',
+	'\\b(python[0-9.]*|node|nodejs|perl|ruby|php|deno|bun)\\b[^&|\\n]*(rmtree|rmSync|rmdirSync|rm_rf|remove_tree|unlinkSync|shutil\\.rm|rm\\s+-[a-z]*r)',
+	'\\b(npm|yarn|pnpm|cargo|twine|gem)\\s+publish\\b|\\btwine\\s+upload\\b',
+	'(\\.ssh|\\.aws|\\.gnupg|\\.netrc|\\.npmrc|\\.env\\b|id_rsa|credentials)[^;&\\n]*\\|\\s*(curl|wget|nc|ncat|socat)\\b',
+	'\\b(env|printenv|set)\\s*\\|\\s*(curl|wget|nc|ncat|socat)\\b',
+	'\\b(curl|wget)\\b[^;&\\n]*(\\s(-d|--data[a-z-]*|-F|--form|--upload-file|-T)\\s*[\\"\']?[\\w.-]*=?@)',
+	'>>?\\s*[\\"\']?[^\\s;&|\\"\']*(\\.env(\\.[\\w-]+)?|\\.pem|\\.key|id_rsa|\\.ssh/[^\\s;&|]*|\\.git/[^\\s;&|]*)[\\"\']?(\\s|$|[;&|])',
+	'\\btee\\b[^;&|\\n]*(\\.env(\\.[\\w-]+)?|\\.pem|\\.key|id_rsa|\\.ssh/|\\.git/)',
 ];
 
 export const DEFAULT_PROTECTED_PATHS: readonly string[] = [

@@ -1156,7 +1156,9 @@ let lastPlanRequest;
  */
 async function runAuto(agentSteps, { maxSteps = 20, history = [{ role: 'user', content: 'do it' }], limitTokens } = {}) {
 	let reviewPrompt = '';
-	let streamPhase = 0; // 0 = plan, 1 = review (the implementer uses runAgentStep)
+	// The planner now explores with read-only tools, so it runs through runAgentStep (recognised
+	// by the absence of write tools); only the review phase is left on streamChat.
+	let streamPhase = 1; // 0 = plan, 1 = review
 	const provider = {
 		info: { id: 'fake', label: 'Fake', supportsTools: true, toolModelPatterns: [], visionModelPatterns: [] },
 		async listModels() { return []; },
@@ -1169,7 +1171,14 @@ async function runAuto(agentSteps, { maxSteps = 20, history = [{ role: 'user', c
 			request.onToken('1. do the thing');
 			return { truncated: false, finishReason: 'stop' };
 		},
-		async runAgentStep() { return agentSteps.shift() ?? { content: 'implemented', toolCalls: [] }; },
+		async runAgentStep(request) {
+			if (!request.tools.some(t => t.name === 'write_file')) {
+				lastPlanRequest = request;
+				request.onToken?.('1. do the thing');
+				return { content: '1. do the thing', toolCalls: [] };
+			}
+			return agentSteps.shift() ?? { content: 'implemented', toolCalls: [] };
+		},
 	};
 	const registry = {
 		getMaxTokens: () => 1000,
@@ -2242,7 +2251,7 @@ async function runAuto(agentSteps, { maxSteps = 20, history = [{ role: 'user', c
 		info: { id: 'fake', label: 'Fake', supportsTools: true, toolModelPatterns: [], visionModelPatterns: [] },
 		async listModels() { return []; },
 		async streamChat(request) { request.onToken('1. do the thing'); return { finishReason: 'stop' }; },
-		async runAgentStep(request) { implementerSystem ||= request.messages[0].content; return { content: 'implemented', toolCalls: [] }; },
+		async runAgentStep(request) { if (request.tools.some(t => t.name === 'write_file')) { implementerSystem ||= request.messages[0].content; } return { content: 'implemented', toolCalls: [] }; },
 	};
 	const registry = {
 		getMaxTokens: () => 1000, getProvider: () => provider, async getApiKey() { return 'k'; }, getBaseUrl: () => 'u',
@@ -2258,6 +2267,45 @@ async function runAuto(agentSteps, { maxSteps = 20, history = [{ role: 'user', c
 	assert.match(implementerSystem, /Never guess a file path/);
 	assert.match(implementerSystem, /IMPLEMENTER/);
 	assert.ok(!/require user approval/.test(implementerSystem));
+}
+
+// 51b. Auto's planner explores with read-only tools only, and a review that ends
+// "VERDICT: ISSUES" sends the implementer back once (never twice) with the findings.
+{
+	const planTools = [];
+	const implementerGoals = [];
+	let reviews = 0;
+	const provider = {
+		info: { id: 'fake', label: 'Fake', supportsTools: true, toolModelPatterns: [], visionModelPatterns: [] },
+		async listModels() { return []; },
+		async streamChat(request) { reviews++; request.onToken('Missing null check.\nVERDICT: ISSUES'); return { finishReason: 'stop' }; },
+		async runAgentStep(request) {
+			if (!request.tools.some(t => t.name === 'write_file')) {
+				planTools.push(request.tools.map(t => t.name));
+				return { content: '1. edit src/real.ts', toolCalls: [] };
+			}
+			implementerGoals.push(request.messages.at(-1).content);
+			return { content: 'implemented', toolCalls: [] };
+		},
+	};
+	const registry = {
+		getMaxTokens: () => 1000, getProvider: () => provider, async getApiKey() { return 'k'; }, getBaseUrl: () => 'u',
+		async rotateApiKey() { return false; }, noteApiKeySuccess() { },
+		cooldowns: { markCooldown() { }, isCoolingDown: () => false, clear() { } },
+	};
+	const noop = () => { };
+	const notes = [];
+	await new AutoOrchestrator(registry, autoRouter, approver, 5).run(
+		{ history: [{ role: 'user', content: 'do it' }], baseSystemPrompt: 'base', signal: new AbortController().signal },
+		{ phase: noop, token: noop, agentStepStart: noop, agentStepEnd: noop, onToolStart: noop, onToolEnd: noop, note: t => notes.push(t) },
+	);
+	assert.strictEqual(planTools.length, 1, 'the plan was made by a tool-using run');
+	assert.ok(!planTools[0].some(n => ['write_file', 'edit_file', 'run_command'].includes(n)), 'the planner cannot write or run anything');
+	assert.ok(planTools[0].includes('read_file') && planTools[0].includes('search_files'));
+	assert.strictEqual(reviews, 1, 'one review');
+	assert.ok(implementerGoals.some(g => /Implement this plan now/.test(g)), 'the implementer ran the plan');
+	assert.ok(implementerGoals.some(g => /Missing null check/.test(g)), 'the fix round was handed the reviewer\'s findings');
+	assert.strictEqual(notes.filter(n => /one fix round/.test(n)).length, 1, 'exactly one fix round, no loop');
 }
 
 // 52. Every tool's output is sized to the run's budget, not just read_file's: a result larger

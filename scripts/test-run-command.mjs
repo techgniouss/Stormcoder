@@ -17,7 +17,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openvs-cmd-'));
-const settings = { 'agent.commandTimeoutMs': 60_000 };
+const settings = { 'agent.commandTimeoutMs': 60_000, 'guardrails.approval': 'yolo' };
 const vscodeStub = {
 	workspace: {
 		workspaceFolders: [{ uri: { fsPath: workspace }, name: 'repo' }],
@@ -37,7 +37,7 @@ Module._load = function (request, ...rest) {
 
 const { executeTool } = await import('../out/agent/tools.js');
 
-// Never consulted: the default approval policy is `yolo`, so commands run unprompted.
+// Never consulted: this suite runs under `yolo`, so commands run unprompted (the shipped default asks).
 let approvals = 0;
 const approver = {
 	confirm: async () => { approvals++; return { approved: true }; },
@@ -95,8 +95,7 @@ fs.writeFileSync(noisy, [
 	assert.match(res.result, /did NOT fail on its own/);
 }
 
-// 5. Nothing above prompted: `yolo` is the shipped default, so the agent is not waiting on
-//    a card for every build and test it runs.
+// 5. Nothing above prompted: under `yolo` the agent is not waiting on a card for every command.
 assert.strictEqual(approvals, 0);
 
 // Stop reaches a running command: the call ends as a cancellation at once, and the process

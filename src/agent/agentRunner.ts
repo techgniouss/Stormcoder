@@ -1156,6 +1156,10 @@ export class AgentRunner {
 			this.ranCommands = [];
 		} else if (call.name === 'run_command') {
 			const command = commandTextOf(call.args);
+			// A command left running in the background has not finished, so it checked nothing.
+			if (asBoolean(call.args.background)) {
+				return;
+			}
 			this.ranCommands.push(command);
 			if (isVerificationCommand(command)) {
 				this.unverifiedWrites = false;

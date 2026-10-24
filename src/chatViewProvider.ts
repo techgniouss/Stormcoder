@@ -6,13 +6,15 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { AgentA2A, AgentMessageDelivery, AgentOptions, AgentRunner, AgentSessionInfo, RunResult } from './agent/agentRunner';
+import { WorkLog } from './agent/workLog';
+import { thinkingStyle } from './providers/anthropic';
 import { streamBudgeted } from './agent/budgetedStream';
 import { describeRestore, FileWrite, RunCheckpoint } from './agent/checkpoint';
 import { CACHED_COMPACT_TRIGGER, COMPACT_MARKER, COMPACT_TRIGGER, SUMMARY_MAX_TOKENS, compactMessages, shouldCompact } from './agent/compaction';
 import { contextTurn, estimateTokens, needsCompactPrompt, unfittableRequest, withSystemPrompt } from './agent/context';
 import { contextWindowFor, requestBudgets } from './agent/contextWindow';
 import { APPROVAL_POLICIES, ApprovalPolicy, applyApprovalFloor, Guardrails, loadGuardrails, parseApprovalPolicy, RunOrigin } from './agent/guardrails';
-import { ApprovalRequest, ApprovalResult, ToolApprover, UserQuestion } from './agent/tools';
+import { ApprovalRequest, ApprovalResult, ToolApprover, UserQuestion, stopBackgroundCommands } from './agent/tools';
 import { AutoOrchestrator, describePinnedModelError, fallbackNote, isModelError, nextCandidate } from './auto/orchestrator';
 import { AUTO_ROLES, AutoRole, RoleAssignment, RoleRouter } from './auto/router';
 import { WebAuthManager } from './auth';
@@ -2804,6 +2806,7 @@ ${context.content}` }
 				const base = await this.basePrompts();
 				// `openvsChat.persona.compactPrompt`, as `systemPrompts` applies it everywhere else.
 				const compactSetting = this.compactPromptSetting();
+				const autoWorkLog = new WorkLog();
 				await orchestrator.run(
 					{
 						history, contextText, signal: controller.signal,
@@ -2842,13 +2845,17 @@ ${context.content}` }
 							this.recordAssistantTurn(sessionId, formatted);
 						},
 						onToolStart: (call, parentCallId) => post({ type: 'toolStart', id: call.id, name: call.name, args: call.args, parentCallId }),
-						onToolEnd: (call, result, isError, parentCallId) => post({ type: 'toolEnd', id: call.id, name: call.name, result, isError, parentCallId }),
+						onToolEnd: (call, result, isError, parentCallId) => {
+							if (!parentCallId) { autoWorkLog.record(call, result, isError); }
+							post({ type: 'toolEnd', id: call.id, name: call.name, result, isError, parentCallId });
+						},
 						note: text => post({ type: 'info', message: text }),
 						onTodos: items => post({ type: 'todos', items }),
 					},
 				);
 				stepThinking?.flush();
 				flushPhaseText();
+				this.sessionStore.attachWorkNotes(sessionId, autoWorkLog.render());
 			} else {
 				// Ask/Plan → planning/reasoning model; inline Edit → implementation model.
 				const role: AutoRole = mode === 'edit' ? 'code' : 'plan';
@@ -3214,7 +3221,8 @@ ${context.content}` }
 			...this.compactPromptOptions(provider, params.model, post, compactSystem),
 		});
 		let stepThinking: ThinkingStreamParser | undefined;
-		return runner.run(messages, params, {
+		const workLog = new WorkLog();
+		const outcome = await runner.run(messages, params, {
 			onStepStart: () => { stepThinking = new ThinkingStreamParser(text => post({ type: 'token', delta: text })); post({ type: 'agentStepStart' }); },
 			onToken: delta => stepThinking?.push(delta),
 			onStepEnd: content => {
@@ -3227,9 +3235,11 @@ ${context.content}` }
 			},
 			onToolStart: (call, parentCallId) => post({ type: 'toolStart', id: call.id, name: call.name, args: call.args, parentCallId }),
 			onToolEnd: (call, result, isError, parentCallId) =>
-				post({ type: 'toolEnd', id: call.id, name: call.name, result, isError, parentCallId }),
+				{ if (!parentCallId) { workLog.record(call, result, isError); } post({ type: 'toolEnd', id: call.id, name: call.name, result, isError, parentCallId }); },
 			onNote: text => post({ type: 'info', message: text }),
 		});
+		this.sessionStore.attachWorkNotes(sessionId, workLog.render());
+		return outcome;
 	}
 
 	private async runAgent(
@@ -3267,6 +3277,7 @@ ${context.content}` }
 		});
 		let stepThinking: ThinkingStreamParser | undefined;
 		post({ type: 'todos', items: [] });
+		const workLog = new WorkLog();
 		// The agent reads from disk, so a save by the user is a change it cannot otherwise
 		// see: its repeat-read guard would answer the re-read with "nothing has changed
 		// since". Deliberately only saves — a file watcher would also fire for every artifact
@@ -3581,7 +3592,12 @@ ${context.content}` }
 	 */
 	private effectiveMaxTokens(mode: ChatMode, inline: boolean, providerId?: string, model?: string): number {
 		const configured = this.registry.getMaxTokens();
-		const wanted = mode === 'edit' && !inline ? Math.max(configured, 8192) : configured;
+		// Current Claude models take far more output than the 8192 default, and thinking tokens are
+		// charged to the same allowance: at 8192 a mid-sized file write is cut off and has to be
+		// redone in pieces. Raised only for them, and only from the default — other providers cap
+		// output lower and reject a larger request outright.
+		const claudeFloor = providerId === 'anthropic' && model && thinkingStyle(model) !== 'none' && configured <= 8192 ? 16_384 : 0;
+		const wanted = Math.max(claudeFloor, mode === 'edit' && !inline ? Math.max(configured, 8192) : configured);
 		// A backend that states a per-request token allowance charges the *reservation*
 		// against it, not just the prompt: on Groq's 8k free tier the default 8192 exceeds
 		// the whole allowance before a single character of conversation is added, so no
@@ -3997,6 +4013,7 @@ ${CHAT_APP_HTML}
 	 * only to make sure no run is left waiting on a promise that will never settle.
 	 */
 	dispose(): void {
+		stopBackgroundCommands();
 		this.cancelEscalations();
 		this.promptRegistry.settleAllUnanswered();
 	}
