@@ -254,6 +254,18 @@ export const AGENT_TOOLS: ToolSpec[] = [
 		},
 	},
 	{
+		name: 'recall',
+		description: 'Search saved project memory and the journal of past runs by keyword. The prompt shows only the newest; use this to find older facts or what was done before.',
+		parameters: {
+			type: 'object',
+			properties: {
+				query: { type: 'string', description: 'Words to look for; empty lists the newest.' },
+				limit: { type: 'number', description: 'Most results (default 8).' },
+			},
+			required: [],
+		},
+	},
+	{
 		name: 'remember',
 		description: `Save one durable project fact for future sessions (quirk, convention, command, decision), one line under ${MAX_ENTRY_CHARS} characters. No secrets or progress notes. Requires approval.`,
 		parameters: {
@@ -281,7 +293,7 @@ export const AGENT_TOOLS: ToolSpec[] = [
  * which lives in `chatViewProvider.ts` — see `AgentOptions.a2a`), so it never reaches the
  * generic dispatch below; it is listed here purely for this classification.
  */
-export const READ_ONLY_TOOL_NAMES = ['read_file', 'list_dir', 'search_files', 'glob_files', 'fetch_url', 'web_search', 'list_agent_sessions'];
+export const READ_ONLY_TOOL_NAMES = ['read_file', 'list_dir', 'search_files', 'glob_files', 'fetch_url', 'web_search', 'recall', 'list_agent_sessions'];
 
 /**
  * Every name the model can call as a tool, including the ones the agent loop handles
@@ -756,7 +768,9 @@ export async function executeTool(rawCall: ToolCall, approver: ToolApprover, gua
 					? await runCommand(found.target.uri, found.target.display, command, approver, g, signal, background)
 					: { result: found.error, isError: true };
 			}
-			case 'remember':
+			case 'recall':
+					return await recallFacts(root, asString(call.args.query), asNumber(call.args.limit));
+				case 'remember':
 					return await rememberFact(root, asString(call.args.type), asString(call.args.text), approver, g);
 				case 'command_output':
 				return await readBackgroundCommand(asString(call.args.id).trim(), asBoolean(call.args.stop), asNumber(call.args.waitMs));
@@ -778,6 +792,14 @@ export async function executeTool(rawCall: ToolCall, approver: ToolApprover, gua
 		}
 		return { result: `Tool "${call.name}" failed: ${err instanceof Error ? err.message : String(err)}`, isError: true };
 	}
+}
+
+/** Searches project memory. Read-only, but not offered where memory is off or the folder is untrusted. */
+async function recallFacts(root: vscode.Uri, query: string, limit?: number): Promise<ToolResult> {
+	if (!vscode.workspace.isTrusted || vscode.workspace.getConfiguration('stormcoder').get<boolean>('memory.enabled') === false) {
+		return { result: 'Project memory is not available here (it is off, or this workspace is not trusted).', isError: false };
+	}
+	return { result: await new ProjectMemory(root).recall(query, limit), isError: false };
 }
 
 /**

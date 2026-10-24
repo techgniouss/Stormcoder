@@ -258,6 +258,8 @@ await equivalent('edit_file replaceAll', { name: 'edit_file', args: { path: 'src
 	covered.add('edit_notebook');
 	// remember: the vocabulary check and the secret refusal need no approval or file.
 	covered.add('remember');
+	covered.add('recall');
+	assert.strictEqual((await run('recall', { query: 'nothing here' })).isError, false);
 	const badType = await run('remember', { type: 'novel', text: 'x' });
 	assert.strictEqual(badType.isError, true);
 	assert.match(badType.result, /Unknown memory type/);
@@ -288,7 +290,7 @@ await equivalent('edit_file replaceAll', { name: 'edit_file', args: { path: 'src
 	assert.deepStrictEqual(cases.map(c => c.isError), [true, true, true]);
 	assert.match(cases[0].result, /"content" belongs to write_file/);
 	assert.match(cases[1].result, /supplied no arguments besides the path/);
-	assert.match(cases[2].result, /read_file, list_dir, glob_files, search_files, write_file, edit_file, edit_notebook, fetch_url, web_search, run_command, command_output, remember/);
+	assert.match(cases[2].result, /read_file, list_dir, glob_files, search_files, write_file, edit_file, edit_notebook, fetch_url, web_search, run_command, command_output, recall, remember/);
 }
 
 // 10. Completeness: a tool added later without a case here fails this suite rather than

@@ -201,4 +201,35 @@ const file = rel => path.join(ws, rel);
 	assert.deepEqual(log.changedFiles(), ['a.ts', 'c.ts']);
 }
 
+// 11. recall: finds older items than the prompt block carries, ranks by matching words, stays bounded.
+{
+	const entries = mem.parseMemory([
+		'- [command] Run the linter with npm run lint. (2026-01-01)',
+		'- [gotcha] Windows needs cmd.exe for the build script. (2026-01-02)',
+		'- [decision] Chose sqlite over postgres for the local cache because it needs no server. (2026-01-03)',
+	].join('\n'));
+	const records = mem.parseJournal([
+		mem.formatJournal({ date: '2026-02-01', goal: 'Add sqlite cache layer', files: ['src/cache.ts'], verified: true }),
+		mem.formatJournal({ date: '2026-02-02', goal: 'Fix the login redirect', files: ['src/login.ts'], verified: false }),
+	].join('\n'));
+	const hit = mem.recallMemory(entries, records, 'sqlite cache');
+	const lines = hit.split('\n').slice(1);
+	assert.equal(lines.length, 2);
+	assert.match(lines[0], /sqlite/i);
+	assert.match(hit, /Chose sqlite over postgres/);
+	assert.match(hit, /Add sqlite cache layer\. Changed: src\/cache\.ts\. Verified\./);
+	assert.doesNotMatch(hit, /login/);
+	assert.match(mem.recallMemory(entries, records, 'login'), /Fix the login redirect\. Changed: src\/login\.ts\. Not verified\./);
+	assert.match(mem.recallMemory(entries, records, 'src/cache.ts'), /Add sqlite cache layer/, 'a changed path is searchable');
+	assert.match(mem.recallMemory(entries, records, 'kubernetes'), /Nothing in project memory matches "kubernetes"/);
+	assert.equal(mem.recallMemory(entries, records, '', 2).split('\n').length, 3, 'an empty query lists the newest, limited');
+	assert.match(mem.recallMemory(entries, records, '').split('\n')[1], /Fix the login redirect/, 'newest first');
+	const big = Array.from({ length: 200 }, (_, i) => ({ raw: 'x', type: 'gotcha', text: `shared word item ${i} ${'q'.repeat(200)}` }));
+	assert.ok(mem.recallMemory(big, [], 'shared', 20).length < 3_000, 'the answer is bounded');
+	const tool = await tools.executeTool({ id: '1', name: 'recall', args: { query: 'linter' } }, { confirm: async () => ({ approved: false }), ask: async () => '' });
+	assert.equal(tool.isError, false);
+	assert.match(tool.result, /No|Nothing|matches/, 'the tool answers even with no memory file');
+	assert.ok(tools.READ_ONLY_TOOL_NAMES.includes('recall'), 'Ask and Plan can recall');
+}
+
 console.log('test-memory: all assertions passed');
