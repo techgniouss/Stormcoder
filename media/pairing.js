@@ -128,6 +128,7 @@
 		});
 		toggle.appendChild(toggleInput);
 		toggle.appendChild(el('span', 'remote-toggle-text', 'On'));
+		// Drawn first (`order` in main.css): the switch, then the state it controls.
 		statusRow.appendChild(toggle);
 		deps.container.appendChild(statusRow);
 
@@ -220,9 +221,17 @@
 			}
 			for (const device of active) {
 				const row = el('div', 'remote-device-row');
-				row.appendChild(el('span', 'remote-device-name', device.name));
-				row.appendChild(el('span', 'remote-device-lastseen', relDeviceTime(device.lastSeenAt)));
-				const revokeButton = el('button', 'mini-button', 'Revoke');
+				// The name, then when it was paired and last seen, stacked: a list of phones is
+				// told apart by those two facts, not by a bare name and a time.
+				const info = el('div', 'remote-device-info');
+				info.appendChild(el('span', 'remote-device-name', device.name.replace(/ \(Stormcoder (?:PWA|app)\)$/, '')));
+				const meta = el('div', 'remote-device-meta');
+				if (device.createdAt) { meta.appendChild(el('span', undefined, `Paired ${relDeviceTime(device.createdAt)} · `)); }
+				meta.appendChild(el('span', undefined, 'last seen '));
+				meta.appendChild(el('span', 'remote-device-lastseen', relDeviceTime(device.lastSeenAt)));
+				info.appendChild(meta);
+				row.appendChild(info);
+				const revokeButton = el('button', 'mini-button remote-revoke', 'Revoke');
 				revokeButton.addEventListener('click', () => {
 					// No follow-up `listDevices` here: `chatViewProvider.ts`'s `case
 					// 'revokeDevice':` now awaits the relay's confirmation and pushes the
@@ -251,17 +260,29 @@
 
 			const card = el('div', 'remote-pairing-card');
 			card.appendChild(el('div', 'remote-pairing-title', 'Pair a device'));
-			card.appendChild(el('div', 'hint', 'Scan with the Stormcoder PWA, or open the link on your phone. The pairing key never leaves this link.'));
+			card.appendChild(el('div', 'hint', 'Scan the code with the Stormcoder app, or open the link on your phone. The pairing key never leaves the link.'));
+
+			// The code on the left, the key and the clock on the right; they stack when the panel is narrow.
+			const body = el('div', 'remote-pairing-body');
 			try {
-				card.appendChild(buildQrSvg(pairing.url));
+				body.appendChild(buildQrSvg(pairing.url));
 			} catch {
 				// A long tunnel address can outgrow the small QR encoder: the link below still works.
-				card.appendChild(el('div', 'hint', 'The link is too long for a QR code. Copy the link below instead.'));
+				body.appendChild(el('div', 'hint', 'The link is too long for a QR code. Copy the link below instead.'));
 			}
-
-			card.appendChild(el('div', 'hint', 'Pairing key'));
+			const side = el('div', 'remote-pairing-side');
+			side.appendChild(el('div', 'hint', 'Pairing key'));
 			const codeRow = el('div', 'remote-pairing-code', pairing.code);
-			card.appendChild(codeRow);
+			side.appendChild(codeRow);
+			const expiry = el('div', 'remote-pairing-expiry');
+			side.appendChild(expiry);
+			// The time left as a line that shortens, so it can be read without reading the number.
+			const timer = el('div', 'remote-pairing-timer');
+			const timerFill = el('div', 'remote-pairing-timer-fill');
+			timer.appendChild(timerFill);
+			side.appendChild(timer);
+			body.appendChild(side);
+			card.appendChild(body);
 
 			// The link as text too: the QR needs a camera, and a phone that cannot scan (or a
 			// code read off another screen) needs the address to type or paste.
@@ -291,17 +312,17 @@
 				card.appendChild(el('div', 'hint remote-pairing-hint', pairing.hint));
 			}
 
-			const expiry = el('div', 'remote-pairing-expiry');
-			card.appendChild(expiry);
-
+			const totalMs = Math.max(1, pairing.expiresAt - now());
 			function tick() {
 				const remainingMs = pairing.expiresAt - now();
 				if (remainingMs <= 0) {
 					expiry.textContent = 'Expired — request a new pairing key.';
+					timerFill.style.transform = 'scaleX(0)';
 					clearCountdown();
 					return;
 				}
 				expiry.textContent = `Expires in ${Math.ceil(remainingMs / 1000)}s`;
+				timerFill.style.transform = `scaleX(${Math.min(1, remainingMs / totalMs)})`;
 			}
 			tick();
 			countdownTimer = setInterval(tick, 1000);

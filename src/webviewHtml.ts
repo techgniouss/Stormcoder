@@ -129,8 +129,12 @@ export const CHAT_APP_HTML = `
 
 			<div class="area" data-area="remote">
 						<div class="settings-header"><h2>Remote control</h2></div>
-			<p class="hint">Pair a phone to drive this chat panel from anywhere: send messages, switch and create chats, steer runs, and answer approval prompts. Turn it on below. By default Stormcoder runs the relay on this computer and reaches your phone through Cloudflare Tunnel (installed for you if needed), so there is nothing to deploy. To use a relay you deployed to Cloudflare instead, set <code>stormcoder.remote.relayUrl</code>.</p>
+			<p class="hint">Drive Stormcoder from your phone: send messages, steer runs and answer approvals. Messages are end-to-end encrypted, so the relay only passes them along.</p>
 			<div id="remotePanel"></div>
+			<details class="provider-advanced">
+				<summary>Which relay is used?</summary>
+				<p class="hint">By default Stormcoder runs the relay on this computer and reaches your phone through Cloudflare Tunnel (installed for you if needed), so there is nothing to deploy. To use a relay you deployed to Cloudflare instead, set <code>stormcoder.remote.relayUrl</code>.</p>
+			</details>
 			</div>
 		</section>
 

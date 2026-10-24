@@ -22,6 +22,7 @@ class El {
 		this.attributes = {};
 		this.listeners = {};
 		this.value = '';
+		this.style = {};
 		this._text = '';
 		const classes = new Set();
 		this.classList = {
@@ -173,7 +174,7 @@ const pairing = {
 	h.api.update({ enabled: true, connected: true, pairing });
 	const card = h.container.find('remote-pairing-card');
 	assert.ok(card, 'the pairing card is rendered');
-	const svg = card.children.find(c => c.tagName === 'SVG');
+	const svg = card.find('remote-pairing-body').children.find(c => c.tagName === 'SVG');
 	assert.ok(svg, 'the QR code is an inline <svg>');
 	assert.ok(Number(svg.getAttribute('width')) > 0, 'the QR has real dimensions');
 	assert.ok(svg.children.some(c => c.tagName === 'RECT'), 'the QR is built from <rect> modules, not an image');

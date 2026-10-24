@@ -249,9 +249,9 @@ try {
 	}, { room: roomId, code: relayCode });
 	assert.ok(reuse >= 400, `a used code is refused (got ${reuse})`);
 	// The desktop lists the new device.
-	await settings.locator('.remote-device-row', { hasText: 'iPhone · Safari (Stormcoder PWA)' }).waitFor({ timeout: 15000 }).catch(async () => {
+	await settings.locator('.remote-device-row', { hasText: 'iPhone · Safari' }).waitFor({ timeout: 15000 }).catch(async () => {
 		await settings.getByRole('button', { name: 'Refresh' }).click();
-		await settings.locator('.remote-device-row', { hasText: 'iPhone · Safari (Stormcoder PWA)' }).waitFor({ timeout: 15000 });
+		await settings.locator('.remote-device-row', { hasText: 'iPhone · Safari' }).waitFor({ timeout: 15000 });
 	});
 
 	// The Stop button is toggled with the `hidden` attribute (read as a property: the page's CSS gives it a display that overrides the attribute).
@@ -491,13 +491,13 @@ try {
 	step('desktop: revoke the device, phone is locked out');
 	const savedToken = await phone.evaluate(room => JSON.parse(localStorage.getItem(`openvsRelay.device.${room}`)).token, roomId);
 	await settings.getByRole('button', { name: 'Refresh' }).click();
-	const row = settings.locator('.remote-device-row', { hasText: 'iPhone · Safari (Stormcoder PWA)' });
+	const row = settings.locator('.remote-device-row', { hasText: 'iPhone · Safari' });
 	await row.first().waitFor({ timeout: 15000 });
 	await row.first().getByRole('button', { name: 'Revoke' }).click();
 	await phone.locator('#pairScreen:not([hidden])').waitFor({ timeout: 20000 });
 	assert.match(await phone.locator('#pairError').textContent(), /revoked/i);
 	assert.equal(await phone.locator('#app').evaluate(e => e.hidden), true);
-	await settings.locator('.remote-device-row', { hasText: 'iPhone · Safari (Stormcoder PWA)' }).waitFor({ state: 'detached', timeout: 15000 });
+	await settings.locator('.remote-device-row', { hasText: 'iPhone · Safari' }).waitFor({ state: 'detached', timeout: 15000 });
 	// The old token no longer opens a socket, and the phone forgot it.
 	const rejected = await new Promise(resolve => {
 		const ws = new WebSocket(`ws://127.0.0.1:${relayPort}/ws/client?room=${encodeURIComponent(roomId)}&token=${encodeURIComponent(savedToken)}`);
