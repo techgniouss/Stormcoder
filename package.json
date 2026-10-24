@@ -11,7 +11,7 @@
 		"typecheck": "tsc -p tsconfig.json --noEmit && npm run typecheck:webview",
 		"build": "node scripts/build.mjs",
 		"start": "npm run build && electron .",
-		"test": "npm run typecheck && npm run build && node scripts/build-tests.mjs && node scripts/run-tests.mjs && node bench/validate.mjs && node bench/run.mjs --provider oracle --tasks 01 10 12 && node test/e2e.mjs && xvfb-run -a node test/electron-smoke.mjs && xvfb-run -a node test/bench-appkeys.mjs",
+		"test": "npm run typecheck && npm run build && node scripts/build-tests.mjs && node scripts/run-tests.mjs && node bench/validate.mjs && node bench/run.mjs --provider oracle --tasks 01 10 12 && node test/e2e.mjs && node test/remote-e2e.mjs && xvfb-run -a node test/electron-smoke.mjs && xvfb-run -a node test/bench-appkeys.mjs",
 		"build:tests": "node scripts/build-tests.mjs",
 		"dist": "npm run build && electron-builder",
 		"dist:dir": "npm run build && electron-builder --dir",
