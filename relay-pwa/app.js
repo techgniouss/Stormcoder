@@ -125,6 +125,7 @@ const els = {
 	attachImageBtn: document.getElementById('attachImageBtn'),
 	attachActiveBtn: document.getElementById('attachActiveBtn'),
 	pairForm: document.getElementById('pairForm'),
+	scanBtn: document.getElementById('scanBtn'),
 	pairCode: /** @type {HTMLInputElement} */ (document.getElementById('pairCode')),
 	pairError: document.getElementById('pairError'),
 	app: document.getElementById('app'),
@@ -223,6 +224,21 @@ let attachedContext = null;
 
 // ---- Storage (bearer-token-only for this phase; the non-extractable ECDSA key binding from
 // the plan's Auth step 5 is Phase 7 work, tracked in src/room.ts's upgradeClient comment) -------
+
+/**
+ * The native shell (android/), when this page runs inside one. It sets `globalThis.StormcoderNative`
+ * before this file loads: `{ platform, scanQr?() }`. In a browser it is undefined and nothing below
+ * changes. A shell serves this app from its own bundle, so the relay is not the page's origin and
+ * its address is learned from the pairing link and remembered with the device.
+ */
+const native = globalThis.StormcoderNative;
+/** The relay's origin when the app is bundled in a native shell (`https://host`); unused in a browser. */
+let nativeOrigin = '';
+
+/** Where the relay is: the page's own origin in a browser, the paired relay's in a native shell. */
+function relayBase() {
+	return native ? nativeOrigin : location.origin;
+}
 
 function storageKey(room) {
 	return `openvsRelay.device.${room}`;
@@ -432,6 +448,7 @@ async function resetPairing(message) {
 	if (dead) { try { dead.close(); } catch { /* already closed */ } }
 	const room = roomId;
 	deviceToken = '';
+	nativeOrigin = '';
 	e2eKeys = null;
 	if (pendingHs) { pendingHs.ps.fill(0); }
 	pendingHs = null;
@@ -524,7 +541,7 @@ async function syncAuthToServiceWorker(room, token) {
 	} catch {
 		// See this function's doc — not fatal, sw.js's own read just misses this update.
 	}
-	if (!('serviceWorker' in navigator)) { return; }
+	if (native || !('serviceWorker' in navigator)) { return; }
 	try {
 		const registration = await navigator.serviceWorker.ready;
 		if (registration.active) {
@@ -537,7 +554,8 @@ async function syncAuthToServiceWorker(room, token) {
 
 /** Registers `/sw.js`, if this browser supports service workers at all. Idempotent — a second registration for the same script/scope is a no-op per the spec. */
 function registerServiceWorker() {
-	if ('serviceWorker' in navigator) {
+	// A native shell serves the app from its bundle: no worker to cache it, no Web Push to receive.
+	if (!native && 'serviceWorker' in navigator) {
 		navigator.serviceWorker.register('/sw.js').catch(() => { /* offline-support is best-effort */ });
 	}
 }
@@ -568,7 +586,7 @@ async function claim(room, ps) {
 	const name = deviceName();
 	const code = await deriveCode(ps);
 	const proof = await makeClaim(ps, name);
-	const res = await fetch(`/pair/claim?room=${encodeURIComponent(room)}`, {
+	const res = await fetch(`${relayBase()}/pair/claim?room=${encodeURIComponent(room)}`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ code, name, pub: proof.pub, mac: proof.mac }),
@@ -592,7 +610,7 @@ async function claim(room, ps) {
 	pendingHs = { deviceId: body.deviceId, ps: Uint8Array.from(ps), privateKey: proof.privateKey, phonePub: proof.phonePub };
 	recvGuard = new ReplayGuard();
 	await e2ePut('pending', room, pendingHs);
-	saveDevice(room, { deviceId: body.deviceId, token: body.token });
+	saveDevice(room, { deviceId: body.deviceId, token: body.token, ...(native ? { origin: nativeOrigin } : {}) });
 	// Fire-and-forget, not awaited: `syncAuthToServiceWorker` is explicitly best-effort (see its
 	// own doc) and — critically — `navigator.serviceWorker.ready` never rejects or times out on
 	// its own. On a first-ever pairing no service worker has registered yet at this point
@@ -611,12 +629,13 @@ async function claim(room, ps) {
  * (`https://host/p/<room>#<key>`), the part after the `#`, or just the key, with or without
  * spaces and hyphens.
  * @param {string} input
- * @returns {{ ps: Uint8Array, room?: string }}
+ * @returns {{ ps: Uint8Array, room?: string, origin?: string }}
  * @throws {Error} with a message fit to show
  */
 function parsePairingInput(input) {
 	let text = String(input).trim();
 	let room;
+	let origin;
 	const hash = text.lastIndexOf('#');
 	if (hash >= 0) {
 		const link = text.slice(0, hash);
@@ -624,7 +643,14 @@ function parsePairingInput(input) {
 		if (/^[a-z][a-z0-9+.-]*:\/\//i.test(link)) {
 			let url;
 			try { url = new URL(link); } catch { throw new Error('That link is not valid. Paste the whole pairing link from the desktop.'); }
-			if (url.origin !== location.origin) { throw new Error('That pairing link is for a different relay than this page.'); }
+			if (native) {
+				// The shell has no relay of its own: the link says where it is. Only https, so the
+				// pairing claim and token never cross the network in the clear.
+				if (url.protocol !== 'https:') { throw new Error('That pairing link is not an https link.'); }
+				origin = url.origin;
+			} else if (url.origin !== location.origin) {
+				throw new Error('That pairing link is for a different relay than this page.');
+			}
 			const m = /^\/p\/([^/]+)/.exec(url.pathname);
 			if (m) { room = decodeURIComponent(m[1]); }
 		}
@@ -638,7 +664,7 @@ function parsePairingInput(input) {
 	let ps;
 	try { ps = b32decode(compact); } catch { throw new Error('That is not a pairing key. Paste the pairing link, or type the key shown under the QR code.'); }
 	if (ps.length !== 16) { throw new Error('That key is the wrong length. Paste the whole pairing link, or type all 26 characters of the key.'); }
-	return { ps, room };
+	return { ps, room, origin };
 }
 
 // ---- Wire send helpers ----------------------------------------------------------------------
@@ -2179,8 +2205,9 @@ function handleMissedPong() {
 
 function connect() {
 	if (!deviceToken) { return; }
-	const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-	const url = `${scheme}//${location.host}/ws/client?room=${encodeURIComponent(roomId)}&token=${encodeURIComponent(deviceToken)}`;
+	const base = new URL(relayBase());
+	const scheme = base.protocol === 'https:' ? 'wss:' : 'ws:';
+	const url = `${scheme}//${base.host}/ws/client?room=${encodeURIComponent(roomId)}&token=${encodeURIComponent(deviceToken)}`;
 	setStatus('Connecting…', 'status-warn');
 	const sock = new WebSocket(url);
 	ws = sock;
@@ -2292,7 +2319,7 @@ async function pairWith(room, ps) {
 		if (els.pairError) { els.pairError.textContent = err instanceof Error ? err.message : String(err); }
 		return false;
 	}
-	try { history.replaceState(null, '', `/p/${encodeURIComponent(room)}`); } catch { /* cosmetic */ }
+	if (!native) { try { history.replaceState(null, '', `/p/${encodeURIComponent(room)}`); } catch { /* cosmetic */ } }
 	armHandshakeTimer();
 	startApp();
 	return true;
@@ -2314,6 +2341,7 @@ async function boot() {
 			linkError = 'This pairing link is not valid. Paste the full link, or type the key shown under the QR code.';
 		}
 	}
+	if (native && stored && typeof stored.origin === 'string') { nativeOrigin = stored.origin; }
 	const usable = !!(stored && stored.token && (e2eKeys || (pendingHs && pendingHs.deviceId === stored.deviceId)));
 	// A fresh link scanned over an unfinished pairing starts over; over a finished one it is ignored.
 	if (usable && (!ps || e2eKeys)) {
@@ -2323,7 +2351,7 @@ async function boot() {
 		// cache) — re-post every boot, not just the first pairing. Not awaited — see `claim()`:
 		// `navigator.serviceWorker.ready` can hang indefinitely.
 		void syncAuthToServiceWorker(roomId, deviceToken);
-		if (secret) { try { history.replaceState(null, '', `/p/${encodeURIComponent(roomId)}`); } catch { /* cosmetic */ } }
+		if (secret && !native) { try { history.replaceState(null, '', `/p/${encodeURIComponent(roomId)}`); } catch { /* cosmetic */ } }
 		if (!e2eKeys) { armHandshakeTimer(); }
 		startApp();
 		return;
@@ -2402,24 +2430,61 @@ if (els.attachImageBtn && els.attachImageInput) {
 	});
 }
 if (els.attachActiveBtn) { els.attachActiveBtn.addEventListener('click', () => sendApp({ type: 'attachActive' })); }
+/**
+ * Pairs from what was pasted, typed, scanned or handed over by the native shell (a deep link).
+ * @param {string} input a pairing link or key
+ * @returns {Promise<boolean>} whether the claim was accepted
+ */
+async function pairFromInput(input) {
+	let parsed;
+	try {
+		parsed = parsePairingInput(input);
+	} catch (err) {
+		if (els.pairError) { els.pairError.textContent = err instanceof Error ? err.message : String(err); }
+		return false;
+	}
+	if (parsed.room) { roomId = parsed.room; }
+	if (parsed.origin) { nativeOrigin = parsed.origin; }
+	if (!roomId || (native && !nativeOrigin)) {
+		if (els.pairError) {
+			els.pairError.textContent = native
+				? 'Paste the whole pairing link from the desktop (or scan its QR code) so the app knows which desktop to pair with.'
+				: 'Open the pairing link from the desktop (or scan its QR code) so this page knows which desktop to pair with.';
+		}
+		return false;
+	}
+	return pairWith(roomId, parsed.ps);
+}
+
 if (els.pairForm) {
 	els.pairForm.addEventListener('submit', async event => {
 		event.preventDefault();
 		if (!els.pairCode) { return; }
-		let parsed;
-		try {
-			parsed = parsePairingInput(els.pairCode.value);
-		} catch (err) {
-			if (els.pairError) { els.pairError.textContent = err instanceof Error ? err.message : String(err); }
-			return;
-		}
-		if (parsed.room) { roomId = parsed.room; }
-		if (!roomId) {
-			if (els.pairError) { els.pairError.textContent = 'Open the pairing link from the desktop (or scan its QR code) so this page knows which desktop to pair with.'; }
-			return;
-		}
-		if (await pairWith(roomId, parsed.ps)) { els.pairCode.value = ''; }
+		if (await pairFromInput(els.pairCode.value)) { els.pairCode.value = ''; }
 	});
+}
+if (native) {
+	// "Add to Home Screen" advice is for browsers; this is already an installed app.
+	const note = document.querySelector('.pair-note');
+	if (note) { note.hidden = true; }
+	// The shell hands over a pairing link (opened from the camera or a message) as an event, so this
+	// file needs no knowledge of how Android delivers it.
+	window.addEventListener('stormcoder:pairing-link', event => {
+		const link = /** @type {CustomEvent} */ (event).detail;
+		if (typeof link === 'string' && link.length < 2048) { void pairFromInput(link); }
+	});
+	if (typeof native.scanQr === 'function' && els.scanBtn) {
+		const scanBtn = els.scanBtn;
+		scanBtn.hidden = false;
+		scanBtn.addEventListener('click', async () => {
+			try {
+				const text = await native.scanQr();
+				if (typeof text === 'string' && text) { await pairFromInput(text); }
+			} catch (err) {
+				if (els.pairError) { els.pairError.textContent = err instanceof Error ? err.message : 'Could not scan.'; }
+			}
+		});
+	}
 }
 if (els.unpairBtn) {
 	els.unpairBtn.addEventListener('click', () => {

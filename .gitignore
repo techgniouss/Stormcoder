@@ -7,3 +7,5 @@ release/
 .taste-skill/inspect/
 .taste-skill/assets/
 bench/results/
+android/node_modules/
+android/www/

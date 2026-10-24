@@ -1,0 +1,22 @@
+{
+	"name": "stormcoder-android",
+	"version": "1.0.0",
+	"private": true,
+	"description": "Android shell for the Stormcoder Remote phone app. Self-contained: nothing outside this folder imports it, and the desktop app, relay and root npm scripts do not depend on it.",
+	"license": "MIT",
+	"scripts": {
+		"web": "node scripts/build-web.mjs",
+		"sync": "npm run web && cap sync android",
+		"open": "cap open android",
+		"build:debug": "npm run sync && cd android && ./gradlew assembleDebug",
+		"build:release": "npm run sync && cd android && ./gradlew bundleRelease"
+	},
+	"dependencies": {
+		"@capacitor-mlkit/barcode-scanning": "^8.2.1",
+		"@capacitor/android": "^8.5.3",
+		"@capacitor/core": "^8.5.3"
+	},
+	"devDependencies": {
+		"@capacitor/cli": "^8.5.3"
+	}
+}

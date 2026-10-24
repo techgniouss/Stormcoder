@@ -250,6 +250,8 @@ input:focus-visible, textarea:focus-visible { outline: none; border-color: var(-
 	color: var(--accent-ink);
 }
 #pairForm button:active { filter: brightness(.92); }
+.pair-scan { margin-top: 12px; min-height: 44px; padding: 0 20px; border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: transparent; color: var(--text); font: inherit; }
+.pair-scan[hidden] { display: none; }
 
 .pair-screen .pair-error { color: var(--pill-negative-ink); min-height: 1.5em; font-size: var(--fs-small); }
 .pair-screen .pair-note { color: var(--muted); font-size: var(--fs-small); margin-top: 20px; }
