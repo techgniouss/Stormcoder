@@ -83,6 +83,13 @@ const hold = name => new Promise(resolve => { gates[name] = resolve; });
 const release = name => { gates[name]?.(); delete gates[name]; };
 
 const mock = await startMock(async req => {
+	const out = await script(req);
+	// The agent's completion gate may nudge after a write; answer the nudge differently so a final answer is not repeated.
+	const said = req.messages.some(m => m.role === 'assistant' && typeof out === 'string' && out.length > 12 && String(m.content).includes(out));
+	return said ? 'Nothing more to do.' : out;
+}, { chunkDelay: 40 });
+/** The scripted model: what to say for one request. */
+async function script(req) {
 	const msgs = req.messages;
 	const lastTag = msgs.map((m, i) => ({ m, i })).filter(({ m }) => m.role === 'user' && /SCN:\w+/.test(String(m.content))).at(-1);
 	const scn = lastTag ? /SCN:(\w+)/.exec(String(lastTag.m.content))[1] : '';
@@ -133,7 +140,7 @@ const mock = await startMock(async req => {
 		return 'The slow answer arrived in full after the link came back.';
 	}
 	return 'Okay.';
-}, { chunkDelay: 40 });
+}
 const seen = mock.seen;
 
 // ---- Desktop ------------------------------------------------------------------------------------
@@ -212,6 +219,11 @@ try {
 	});
 	const phone = await context.newPage();
 	phone.on('pageerror', e => phoneErrors.push(e.message));
+	// The phone app ships a strict Content-Security-Policy (no inline script or style): a violation
+	// means a file or a feature the policy would block, which must show up here and not on a user's phone.
+	phone.on('console', m => { if (/Content[- ]Security[- ]Policy|violates the following/i.test(m.text())) { phoneErrors.push(m.text()); } });
+	let documentCsp = '';
+	phone.on('response', r => { if (r.request().resourceType() === 'document' && !documentCsp) { documentCsp = r.headers()['content-security-policy'] ?? ''; } });
 	phone.on('websocket', ws => ws.on('framereceived', f => { if (typeof f.payload === 'string') { frames.push(f.payload); } }));
 	// The relay refuses a room it does not know, so a wrong code must fail first.
 	await phone.goto(`${phoneOrigin}/p/${encodeURIComponent(roomId)}`);
@@ -271,6 +283,8 @@ try {
 	assert.equal(fs.existsSync(path.join(project, 'remote-e2e.txt')), false, 'nothing is written before approval');
 	await approval.locator('.prompt-allow').tap();
 	await waitAssistant('Wrote remote-e2e.txt.');
+	await phone.locator('#stopBtn').evaluate(e => e.hidden).then(() => stopGone(20000));
+	assert.equal((await assistantText()).filter(t => t.includes('Wrote remote-e2e.txt.')).length, 1, 'the final answer of an agent run is shown once');
 	await phone.locator('.tool .tool-name', { hasText: 'write_file' }).first().waitFor();
 	assert.equal(fs.readFileSync(path.join(project, 'remote-e2e.txt'), 'utf8'), 'written from the phone\n');
 	await phone.locator('.prompt-card.prompt-answered').first().waitFor();
@@ -353,6 +367,7 @@ try {
 	await phone.locator('.prompt-card.prompt-approval.prompt-open .prompt-allow').first().tap();
 	await phone.locator('.undo-bar button', { hasText: 'Undo' }).waitFor({ timeout: 20000 });
 	assert.ok(fs.existsSync(path.join(project, 'remote-e2e.txt')));
+	await stopGone(20000);
 	await send('/undo');
 	await until('/undo to remove the file the run created', () => !fs.existsSync(path.join(project, 'remote-e2e.txt')), 15000);
 	await until('the undo bar to clear', async () => (await phone.locator('.undo-bar').count()) === 0, 15000);
@@ -483,12 +498,13 @@ try {
 	assert.equal(await phone.locator('#app').evaluate(e => e.hidden), true, 'a reload does not get back in');
 	// The desktop still works after a revoke.
 	await desktop.click('[data-view=chat]');
-	const replies = async () => ((await desktopChat.locator('#messages').textContent()).match(/Hello from the mock model\./g) || []).length;
-	const repliesBefore = await replies();
+	const replied = async () => { const t = await desktopChat.locator('#messages').textContent(); const k = t.lastIndexOf('SCN:plain hello phone desktop'); return k >= 0 && /Hello from the mock model\.|Nothing more to do\./.test(t.slice(k)); };
 	await desktopChat.locator('#input').fill('SCN:plain hello phone desktop');
 	await desktopChat.locator('#input').press('Enter');
-	await until('the desktop to get a reply after the revoke', async () => (await replies()) > repliesBefore);
+	await until('the desktop to get a reply after the revoke', replied);
 
+	assert.match(documentCsp, /script-src 'self'/, 'the phone app is served with a Content-Security-Policy');
+	assert.doesNotMatch(documentCsp, /unsafe-inline|unsafe-eval/);
 	assert.deepEqual(phoneErrors, [], 'no uncaught errors in the phone app');
 	assert.deepEqual(desktopErrors, [], 'no uncaught errors on the desktop');
 	console.log('remote-e2e: ok');

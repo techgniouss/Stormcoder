@@ -65,7 +65,8 @@ const MAX_BODY_BYTES = 16 * 1024;
  */
 const STATIC_SECURITY_HEADERS: Record<string, string> = {
 	'X-Frame-Options': 'DENY',
-	'Content-Security-Policy': "frame-ancestors 'none'",
+	// The app has no inline script or style, so nothing but its own files may run or load.
+	'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ws: wss:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
 	'X-Content-Type-Options': 'nosniff',
 	'Referrer-Policy': 'no-referrer',
 };

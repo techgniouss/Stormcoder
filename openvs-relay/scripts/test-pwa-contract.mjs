@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const url = p => new URL(p, import.meta.url);
-const EXT = '../../extensions/openvs-chat';
+const EXT = '../..';
 
 /** Same helper as test-webview.mjs/test-remote-policy.mjs: concatenates fixed files with every `.ts` directly under each dir. */
 function readSourceSet(fixed, dirs) {

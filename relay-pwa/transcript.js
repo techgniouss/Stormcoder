@@ -49,7 +49,10 @@ function el(tag, className, text) {
  * bare URL. Code comes first so nothing reaches inside a code span; a link before emphasis so
  * `[**x**](url)` stays one link.
  */
-const INLINE_RE = /(`[^`\n]+`)|(\[[^\]\n]+\]\([^)\s]+\))|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(~~[^~\n]+~~)|(\*[^*\n]+\*|\b_[^_\n]+_\b)|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g;
+const INLINE_RE = /(`[^`\n]{1,500}`)|(\[[^\]\n]{1,300}\]\([^)\s]{1,2000}\))|(\*\*[^*\n]{1,500}\*\*|__[^_\n]{1,500}__)|(~~[^~\n]{1,500}~~)|(\*[^*\n]{1,500}\*|\b_[^_\n]{1,500}_\b)|(https?:\/\/[^\s<>()]{1,2000}[^\s<>().,;:!?'"])/g;
+
+/** Longest line parsed for inline markdown. */
+const MAX_INLINE_LINE = 4000;
 
 /** Only these link targets are ever put into an `href` — `javascript:`, `data:` and relative URLs render as plain text. */
 const SAFE_HREF = /^(https?:\/\/|mailto:)/i;
@@ -75,6 +78,12 @@ function link(href, label) {
  * @param {boolean} [links] false inside a link's own label
  */
 function renderInline(container, text, links = true) {
+	// A line this long is not prose, and scanning it for markdown is where a hostile reply could make
+	// the page crawl: it is shown as written.
+	if (text.length > MAX_INLINE_LINE) {
+		container.appendChild(document.createTextNode(text));
+		return;
+	}
 	let last = 0;
 	for (const match of text.matchAll(INLINE_RE)) {
 		const index = match.index ?? 0;

@@ -305,6 +305,21 @@ function openAuthDb() {
 	});
 }
 
+/** Removes the `{room, token}` record the service worker reads. Best-effort, like every write to it. */
+async function clearAuthRecord() {
+	try {
+		const db = await openAuthDb();
+		await new Promise((resolve, reject) => {
+			const tx = db.transaction(AUTH_STORE_NAME, 'readwrite');
+			tx.objectStore(AUTH_STORE_NAME).delete(AUTH_RECORD_KEY);
+			tx.oncomplete = () => resolve(undefined);
+			tx.onerror = () => reject(tx.error);
+		});
+	} catch {
+		// Not fatal: the token it holds is revoked, so it opens nothing.
+	}
+}
+
 /**
  * Writes `{room, token}` to the shared auth store, then — for an already-running service worker
  * — also posts it directly so a live worker doesn't have to wait for a restart to see it.
@@ -347,6 +362,18 @@ function registerServiceWorker() {
 // ---- Pairing claim ------------------------------------------------------------------------
 
 /**
+ * A name that tells this phone apart from the others in the desktop's device list ("Pixel 8",
+ * "iPhone", "Mac · Chrome") instead of every device being the same string.
+ */
+function deviceName() {
+	const ua = navigator.userAgent || '';
+	const device = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android[^;]*;\s*([^;)]+)/.exec(ua)?.[1]?.replace(/\s*Build.*$/, '').trim()
+		|| (/Android/.test(ua) ? 'Android' : /Macintosh/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows PC' : /Linux/.test(ua) ? 'Linux' : 'Phone');
+	const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /(Chrome|CriOS)\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : '';
+	return `${device}${browser ? ` · ${browser}` : ''} (Stormcoder PWA)`.slice(0, 80);
+}
+
+/**
  * Exchanges a pairing code for a device token via POST /pair/claim (plan's Auth step 4).
  * @param {string} room
  * @param {string} code
@@ -355,7 +382,7 @@ async function claim(room, code) {
 	const res = await fetch(`/pair/claim?room=${encodeURIComponent(room)}`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ code, name: 'Stormcoder Remote (PWA)' }),
+		body: JSON.stringify({ code, name: deviceName() }),
 	});
 	if (!res.ok) {
 		// `room.ts`'s handlePairClaim responds with a plain-text reason (`code expired`, `invalid
@@ -449,6 +476,7 @@ function renderTabs() {
 		// silently drop that for the switch half.
 		const title = el('button', 'tab-title', session.title || 'Chat');
 		title.type = 'button';
+		if (session.id === activeSessionId) { title.setAttribute('aria-current', 'true'); }
 		title.addEventListener('click', () => switchSession(session.id));
 		const close = el('button', 'tab-close');
 		close.type = 'button';
@@ -962,7 +990,7 @@ function loadEarlier() {
 function refreshStatus() {
 	if (!ws || ws.readyState !== WebSocket.OPEN) { return; }
 	if (hostOnline === false) {
-		setStatus('VS Code is offline — open it to continue', 'status-warn');
+		setStatus('Stormcoder is closed on your computer — open it to continue', 'status-warn');
 	} else {
 		setStatus('Connected', 'status-ok');
 	}
@@ -1785,6 +1813,10 @@ function handleRevoked() {
 	if (roomId) {
 		try { localStorage.removeItem(storageKey(roomId)); } catch { /* best-effort */ }
 	}
+	// The copies a revoked token must not outlive: the "last room" pointer, and the record the
+	// service worker reads to fetch pending notifications.
+	try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* best-effort */ }
+	void clearAuthRecord();
 	setStatus('This device was revoked.', 'status-warn');
 	if (els.app) { els.app.hidden = true; }
 	if (els.pairScreen) { els.pairScreen.hidden = false; }
