@@ -1,0 +1,100 @@
+// Runs the benchmark against a live model (or the scripted oracle) through the real engine.
+//
+//   node bench/run.mjs --provider anthropic --model claude-sonnet-5 --out results/sonnet.json
+//   node bench/run.mjs --provider custom --base-url http://localhost:11434/v1 --model qwen3-coder
+//   node bench/run.mjs --provider oracle                       # no model: checks the pipeline itself
+//   node bench/run.mjs --provider oracle --oracle idle         # claims success, changes nothing: every task must fail
+//
+// Keys come from the environment, as the app reads them (ANTHROPIC_API_KEY, OPENAI_API_KEY, ...).
+// Options: --tasks <substring ...>  --repeat N  --approval yolo|auto-edits  --max-steps N
+//          --timeout-scale X  --label text  --out file.json
+//          --engine <dir>   a different checkout (with dist/ built) to run the tasks against
+import fs from 'node:fs';
+import path from 'node:path';
+import { startEngine } from './lib/engine.mjs';
+import { startOracle } from './lib/oracle.mjs';
+import { report } from './lib/report.mjs';
+import { applySolution, loadTasks, materialize, runCheck } from './lib/tasks.mjs';
+
+const args = parseArgs(process.argv.slice(2));
+const provider = args.provider ?? 'anthropic';
+const tasks = loadTasks(args.tasks ?? []);
+if (!tasks.length) { console.error('no tasks match'); process.exit(2); }
+const repeat = Number(args.repeat ?? 1);
+const scale = Number(args['timeout-scale'] ?? 1);
+
+if (provider !== 'oracle' && provider !== 'custom') {
+	const envName = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY', groq: 'GROQ_API_KEY', openrouter: 'OPENROUTER_API_KEY' }[provider];
+	if (envName && !process.env[envName]) { console.error(`${envName} is not set; cannot run against ${provider}.`); process.exit(2); }
+}
+
+const runs = [];
+for (const task of tasks) {
+	for (let n = 1; n <= repeat; n++) {
+		process.stdout.write(`${task.id} #${n} ... `);
+		const ws = await materialize(task);
+		let oracle;
+		let engine;
+		try {
+			const settings = { 'openvsChat.guardrails.approval': args.approval ?? 'yolo', 'openvsChat.agent.maxSteps': Number(args['max-steps'] ?? 60), 'openvsChat.agent.maxRunMinutes': 0 };
+			let model = args.model;
+			if (provider === 'oracle') {
+				oracle = await startOracle(task, ws, { idle: args.oracle === 'idle' });
+				Object.assign(settings, { 'openvsChat.defaultProvider': 'custom', 'openvsChat.custom.baseUrl': `http://127.0.0.1:${oracle.port}/v1`, 'openvsChat.custom.model': 'oracle' });
+				model = 'oracle';
+			} else if (provider === 'custom') {
+				Object.assign(settings, { 'openvsChat.defaultProvider': 'custom', 'openvsChat.custom.baseUrl': args['base-url'], 'openvsChat.custom.model': model });
+			} else {
+				settings['openvsChat.defaultProvider'] = provider;
+			}
+			engine = await startEngine({ project: ws.dir, settings, engineRoot: args.engine ? path.resolve(args.engine) : undefined });
+			const turns = [];
+			for (const text of task.prompts) {
+				turns.push(await engine.send({ sessionId: 'bench', mode: task.mode, provider: provider === 'oracle' ? 'custom' : provider, model, text, timeoutMs: (task.timeoutSec ?? 300) * 1000 * scale }));
+			}
+			const answer = turns.at(-1).text;
+			const check = await runCheck(task, ws, { answer });
+			const sum = f => turns.reduce((a, t) => a + t[f], 0);
+			const merged = {};
+			turns.forEach(t => Object.entries(t.tools).forEach(([k, v]) => { merged[k] = (merged[k] ?? 0) + v; }));
+			runs.push({
+				task: task.id, category: task.category, attempt: n, pass: check.pass, notes: check.notes,
+				steps: sum('steps'), toolCalls: sum('toolCalls'), toolErrors: sum('toolErrors'), asked: sum('asked'),
+				estInputTokens: sum('estInputTokens'), requests: sum('requests'), ms: sum('ms'),
+				timedOut: turns.some(t => t.timedOut), errors: turns.flatMap(t => t.errors), tools: merged,
+				perPrompt: turns.map(t => ({ steps: t.steps, toolCalls: t.toolCalls, estInputTokens: t.estInputTokens, ms: t.ms })),
+				answer: answer.slice(0, 600),
+			});
+			const r = runs.at(-1);
+			console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.steps} steps  ${r.toolCalls} tools  ${(r.ms / 1000).toFixed(0)}s${r.pass ? '' : '  ' + r.notes.join('; ').slice(0, 140)}`);
+		} catch (err) {
+			runs.push({ task: task.id, category: task.category, attempt: n, pass: false, notes: [`harness error: ${err instanceof Error ? err.message : String(err)}`], steps: 0, toolCalls: 0, toolErrors: 0, asked: 0, estInputTokens: 0, requests: 0, ms: 0, timedOut: false, errors: [], tools: {}, perPrompt: [], answer: '' });
+			console.log(`ERROR ${runs.at(-1).notes[0].slice(0, 160)}`);
+		} finally {
+			await engine?.stop();
+			oracle?.close();
+			ws.dispose();
+		}
+	}
+}
+
+const meta = { label: args.label ?? `${provider}${args.model ? ':' + args.model : ''}`, provider, model: args.model ?? null, approval: args.approval ?? 'yolo', repeat, date: new Date().toISOString() };
+console.log('\n' + report(meta, runs));
+if (args.out) {
+	fs.mkdirSync(path.dirname(path.resolve(args.out)), { recursive: true });
+	fs.writeFileSync(args.out, JSON.stringify({ meta, runs }, null, 2));
+	console.log(`\nwrote ${args.out}`);
+}
+process.exit(0);
+
+function parseArgs(argv) {
+	const out = {};
+	for (let i = 0; i < argv.length; i++) {
+		if (!argv[i].startsWith('--')) { continue; }
+		const key = argv[i].slice(2);
+		const values = [];
+		while (argv[i + 1] && !argv[i + 1].startsWith('--')) { values.push(argv[++i]); }
+		out[key] = key === 'tasks' ? values : (values[0] ?? true);
+	}
+	return out;
+}

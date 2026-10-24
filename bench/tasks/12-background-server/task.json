@@ -1,0 +1,11 @@
+{
+  "id": "12-background-server",
+  "title": "Start a server, call it, then stop it",
+  "category": "processes",
+  "mode": "agent",
+  "prompts": [
+    "Start the server in server.js (it listens on port 4791), request http://127.0.0.1:4791/ping, tell me exactly what it replied, and then stop the server so nothing is left running."
+  ],
+  "timeoutSec": 240,
+  "referenceAnswer": "The server replied pong-4791 and I stopped it."
+}

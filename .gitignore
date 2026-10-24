@@ -6,3 +6,4 @@ release/
 *.log
 .taste-skill/inspect/
 .taste-skill/assets/
+bench/results/

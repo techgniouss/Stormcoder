@@ -1,0 +1,10 @@
+{
+  "id": "07-json-config",
+  "title": "Edit a JSON manifest without disturbing it",
+  "category": "config",
+  "mode": "agent",
+  "prompts": [
+    "In package.json add a `lint` script that runs `eslint src`, and bump the version to 1.4.0. Leave everything else as it is."
+  ],
+  "timeoutSec": 180
+}

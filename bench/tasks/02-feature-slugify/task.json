@@ -1,0 +1,10 @@
+{
+  "id": "02-feature-slugify",
+  "title": "Add a function in the existing style",
+  "category": "feature",
+  "mode": "agent",
+  "prompts": [
+    "Add a `slugify(text)` function to src/strings.js: lowercase it, trim it, replace each run of non-alphanumeric characters with a single `-`, and strip leading and trailing `-`. Export it from src/index.js like the other helpers, and follow the existing style."
+  ],
+  "timeoutSec": 240
+}

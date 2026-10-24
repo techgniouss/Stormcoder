@@ -1,0 +1,10 @@
+{
+  "id": "09-extract-helper",
+  "title": "Extract duplicated logic into one helper",
+  "category": "refactor",
+  "mode": "agent",
+  "prompts": [
+    "The same key-building expression is copy-pasted in three files under src/. Extract it into a single helper `makeKey` in src/key.js and use it from all three. Behaviour must not change; `npm test` must pass."
+  ],
+  "timeoutSec": 240
+}

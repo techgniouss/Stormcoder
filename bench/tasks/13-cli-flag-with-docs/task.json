@@ -1,0 +1,10 @@
+{
+  "id": "13-cli-flag-with-docs",
+  "title": "Feature across code, docs and tests",
+  "category": "feature",
+  "mode": "agent",
+  "prompts": [
+    "Add a `--json` flag to cli.js. With it, `node cli.js --json 2 3` must print {\"sum\":5} (compact JSON) instead of the text line. Document the flag in README.md and add a test for it."
+  ],
+  "timeoutSec": 300
+}

@@ -1,0 +1,11 @@
+{
+  "id": "04-find-in-big-tree",
+  "title": "Locate one constant among hundreds of files and a huge ignored folder",
+  "category": "discovery",
+  "mode": "agent",
+  "prompts": [
+    "Raise the default HTTP request timeout from 30 seconds to 60 seconds. Change only that."
+  ],
+  "timeoutSec": 300,
+  "setup": "setup.mjs"
+}

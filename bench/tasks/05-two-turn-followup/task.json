@@ -1,0 +1,11 @@
+{
+  "id": "05-two-turn-followup",
+  "title": "Second request depends on what the first run read",
+  "category": "multi-turn",
+  "mode": "agent",
+  "prompts": [
+    "Read src/orders.js and explain in two sentences how calculateTotal applies discounts. Do not change anything.",
+    "Now fix the rounding problem you would expect there: totals must be rounded to 2 decimal places."
+  ],
+  "timeoutSec": 300
+}

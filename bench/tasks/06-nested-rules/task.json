@@ -1,0 +1,10 @@
+{
+  "id": "06-nested-rules",
+  "title": "Follow a rule that lives only in a subfolder's AGENTS.md",
+  "category": "rules",
+  "mode": "agent",
+  "prompts": [
+    "Add a GET /health route module at packages/api/src/routes/health.js that returns { ok: true }. Look at how the other routes in that folder are written."
+  ],
+  "timeoutSec": 240
+}

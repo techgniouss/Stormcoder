@@ -1,0 +1,11 @@
+{
+  "id": "10-ask-no-change",
+  "title": "Answer a question about the code without touching it",
+  "category": "understanding",
+  "mode": "ask",
+  "prompts": [
+    "What does `retry` in src/retry.js do when the callback throws on every attempt? Answer in two sentences."
+  ],
+  "timeoutSec": 120,
+  "referenceAnswer": "It retries up to 3 times with growing delays; if every attempt throws, it rethrows the last error."
+}
