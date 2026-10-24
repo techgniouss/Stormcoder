@@ -842,6 +842,45 @@ h5.md-heading, h6.md-heading { font-size: 14px; color: var(--text-2); }
 }
 #modeSelect { flex: 0 0 auto; }
 .controls-row select[hidden] { display: none; }
+/* The picker sheet: an in-app list for touch phones, with every name in full. */
+.sheet-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 30;
+	display: flex;
+	align-items: flex-end;
+	justify-content: center;
+	background: var(--scrim);
+}
+.sheet {
+	display: flex;
+	flex-direction: column;
+	width: 100%;
+	max-width: 560px;
+	max-height: 70dvh;
+	padding: 8px var(--gutter) calc(12px + env(safe-area-inset-bottom));
+	background: var(--raised);
+	border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+	box-shadow: var(--shadow-float); /* taste-skill-ignore: floating sheet */
+	animation: sheet-in var(--t-hover) var(--ease-out);
+}
+@keyframes sheet-in { from { translate: 0 24px; opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .sheet { animation: none; } }
+.sheet-title { margin: 8px 0; font-size: var(--fs-small); font-weight: 600; color: var(--muted); }
+.sheet-list { overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 2px; }
+.sheet-option {
+	min-height: var(--hit);
+	padding: 10px 14px;
+	border: none;
+	border-radius: var(--radius-card);
+	background: transparent;
+	color: var(--text);
+	text-align: left;
+	overflow-wrap: anywhere;
+}
+.sheet-option:active { background: var(--active-bg); }
+.sheet-option[aria-selected="true"] { background: var(--accent-soft); color: var(--accent-text); }
+.sheet-option:disabled { color: var(--muted); }
 .seg { display: inline-flex; flex: 0 0 auto; gap: 2px; padding: 3px; border-radius: var(--radius-control); background: var(--surface); }
 .seg-btn {
 	min-height: 38px;
@@ -856,7 +895,7 @@ h5.md-heading, h6.md-heading { font-size: 14px; color: var(--text-2); }
 .seg-btn:active { background: var(--active-bg); }
 /* The row wraps: with one provider the model sits beside the mode; with several the provider takes that place and the model gets a row of its own. */
 #providerSelect { flex: 1 1 0; min-width: 8em; }
-#modelSelect { flex: 1 1 0; min-width: 8em; }
+#modelSelect { flex: 1 1 100%; }
 .controls-row select.select-warn { border-color: var(--warning); }
 
 .skills-panel { font-size: var(--fs-small); color: var(--text-2); }

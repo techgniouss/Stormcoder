@@ -151,13 +151,31 @@ try {
 	await push({ type: 'transcript', sessionId: 's1', from: 0, total: 1, truncated: false, messages: [{ role: 'assistant', content: '```js\nconst a = 1;\n```' }] });
 	await phone.locator('#status', { hasText: '· demo-project' }).waitFor({ timeout: 10000 });
 	assert.equal(await phone.locator('#tabs .tab').count(), 0, 'one chat shows no tab strip');
-	assert.equal(await phone.locator('#providerSelect').isVisible(), false, 'one provider shows no provider picker');
+	assert.equal(await phone.locator('#providerSelect').isVisible(), true, 'the provider picker is always there: provider on top, model below');
+	const rows = async sel => (await phone.locator(sel).boundingBox());
+	assert.ok((await rows('#modelSelect')).y > (await rows('#providerSelect')).y, 'the model picker sits below the provider picker');
 	assert.equal(await phone.locator('#modeSeg .seg-btn[aria-checked=true]').textContent(), 'Ask');
 	received.length = 0;
 	await phone.locator('#modeSeg .seg-btn', { hasText: 'Plan' }).tap();
 	for (let i = 0; i < 50 && !received.some(m => m.type === 'setMode'); i++) { await new Promise(r => setTimeout(r, 100)); }
 	assert.ok(received.some(m => m.type === 'setMode' && m.mode === 'plan'), 'the segmented control changes the mode');
 	assert.equal(await phone.locator('.md-code .md-copy').count(), 1, 'a code block has a Copy button');
+	// The model list is an in-app sheet with full names, not the OS popup.
+	await push({ type: 'models', provider: 'p', models: [{ id: 'm1', tools: true }, { id: 'a-very-long-model-identifier-2026-10-24-preview', tools: true }] });
+	await phone.locator('#modelSelect').tap();
+	await phone.locator('.sheet [role=option]').first().waitFor({ timeout: 5000 });
+	const names = await phone.locator('.sheet [role=option]').allTextContents();
+	assert.ok(names.some(n => n.includes('a-very-long-model-identifier-2026-10-24-preview')), 'a long model id is shown in full');
+	assert.equal(await phone.locator('.sheet [aria-selected=true]').count(), 1, 'the current model is marked');
+	received.length = 0;
+	await phone.locator('.sheet [role=option]', { hasText: 'a-very-long' }).tap();
+	await phone.locator('.sheet').waitFor({ state: 'detached' });
+	for (let i = 0; i < 50 && !received.some(m => m.type === 'setModel'); i++) { await new Promise(r => setTimeout(r, 100)); }
+	assert.ok(received.some(m => m.type === 'setModel' && /a-very-long/.test(m.model)), 'choosing a model tells the desktop');
+	await phone.locator('#providerSelect').tap();
+	await phone.locator('.sheet').waitFor();
+	assert.equal(await phone.evaluate(() => { const d = { handled: false }; window.dispatchEvent(new CustomEvent('stormcoder:back', { detail: d })); return d.handled; }), true, 'Back closes the sheet');
+	assert.equal(await phone.locator('.sheet').count(), 0);
 	// The Back button closes what is open before it would leave the app.
 	const back = () => phone.evaluate(() => { const detail = { handled: false }; window.dispatchEvent(new CustomEvent('stormcoder:back', { detail })); return detail.handled; });
 	assert.equal(await back(), false, 'nothing open: the shell may leave the app');

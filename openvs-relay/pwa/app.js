@@ -966,8 +966,6 @@ function clearOptions(select) {
 
 function renderProviderSelect() {
 	if (!els.providerSelect) { return; }
-	// With one provider there is nothing to choose, so the control is not shown.
-	els.providerSelect.hidden = providers.length < 2;
 	clearOptions(els.providerSelect);
 	for (const provider of providers) {
 		// A provider with no credential can't answer; say so in the list rather than let a pick
@@ -1206,6 +1204,90 @@ function syncModeSeg() {
 		button.setAttribute('aria-checked', String(/** @type {HTMLElement} */ (button).dataset.mode === els.modeSelect.value));
 	}
 }
+
+// ---- Picker sheet ------------------------------------------------------------------------------
+// On a touch phone the OS draws a select's list: a small system dialog that clips long model ids
+// and looks different on every device. There the list is an in-app sheet instead, with the full
+// names. A pointer device keeps the styled popover from styles.css.
+
+/** The open sheet's backdrop, if any. @type {HTMLElement | null} */
+let pickerSheet = null;
+/** What had focus before the sheet opened. @type {Element | null} */
+let pickerReturnFocus = null;
+
+/**
+ * Routes a select's opening to {@link openPickerSheet} on touch devices.
+ * @param {HTMLSelectElement | null} select
+ */
+function enableSheetPicker(select) {
+	if (!select) { return; }
+	const touch = window.matchMedia('(hover: none)');
+	const open = (/** @type {Event} */ event) => {
+		if (!touch.matches || select.disabled) { return; }
+		event.preventDefault();
+		openPickerSheet(select);
+	};
+	select.addEventListener('mousedown', open);
+	select.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { open(event); } });
+}
+
+/**
+ * A bottom sheet listing every option of `select`, the current one marked. Choosing one sets the
+ * select and fires its `change`, so every handler written for the select still runs.
+ * @param {HTMLSelectElement} select
+ */
+function openPickerSheet(select) {
+	closePickerSheet();
+	pickerReturnFocus = document.activeElement;
+	const title = select.getAttribute('aria-label') || 'Choose';
+	const backdrop = el('div', 'sheet-backdrop');
+	backdrop.addEventListener('click', event => { if (event.target === backdrop) { closePickerSheet(); } });
+	const sheet = el('div', 'sheet');
+	sheet.setAttribute('role', 'dialog');
+	sheet.setAttribute('aria-modal', 'true');
+	sheet.setAttribute('aria-label', title);
+	sheet.appendChild(el('h2', 'sheet-title', title));
+	const list = el('div', 'sheet-list');
+	list.setAttribute('role', 'listbox');
+	/** @type {HTMLElement | null} */
+	let current = null;
+	for (const option of select.querySelectorAll('option')) {
+		const item = el('button', 'sheet-option', option.textContent || option.value);
+		item.type = 'button';
+		item.setAttribute('role', 'option');
+		item.dataset.value = option.value;
+		const selected = option.value === select.value;
+		item.setAttribute('aria-selected', String(selected));
+		if (option.disabled) { item.disabled = true; }
+		if (selected) { current = item; }
+		item.addEventListener('click', () => {
+			closePickerSheet();
+			if (select.value !== option.value) {
+				select.value = option.value;
+				select.dispatchEvent(new Event('change'));
+			}
+		});
+		list.appendChild(item);
+	}
+	sheet.appendChild(list);
+	backdrop.appendChild(sheet);
+	document.body.appendChild(backdrop);
+	pickerSheet = backdrop;
+	if (current) { current.scrollIntoView({ block: 'center' }); }
+	(current || list.querySelector('button'))?.focus();
+}
+
+/** Closes the sheet, if open, and returns focus to where it was. */
+function closePickerSheet() {
+	if (!pickerSheet) { return false; }
+	pickerSheet.remove();
+	pickerSheet = null;
+	if (pickerReturnFocus instanceof HTMLElement) { pickerReturnFocus.focus(); }
+	pickerReturnFocus = null;
+	return true;
+}
+
+document.addEventListener('keydown', event => { if (event.key === 'Escape') { closePickerSheet(); } });
 
 function historyPanelOpen() {
 	return !!els.historyPanel && !els.historyPanel.hidden;
@@ -2442,6 +2524,8 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('pagehide', persistRecvState);
 
 buildModeSeg();
+enableSheetPicker(els.providerSelect);
+enableSheetPicker(els.modelSelect);
 withSelectButton(els.modeSelect);
 withSelectButton(els.providerSelect);
 withSelectButton(els.modelSelect);
@@ -2520,7 +2604,8 @@ if (native) {
 	// The Android Back button: close what is open first, and only leave the app from a plain screen.
 	window.addEventListener('stormcoder:back', event => {
 		let handled = false;
-		if (historyPanelOpen()) { closeHistoryPanel(); handled = true; }
+		if (closePickerSheet()) { handled = true; }
+		else if (historyPanelOpen()) { closeHistoryPanel(); handled = true; }
 		else if (els.slashMenu && !els.slashMenu.hidden) { els.slashMenu.hidden = true; handled = true; }
 		const detail = /** @type {CustomEvent} */ (event).detail;
 		if (detail && typeof detail === 'object') { detail.handled = handled; }
