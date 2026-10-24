@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
@@ -51,8 +51,6 @@ const MAX_FAILED_CLAIMS = 10;
 const FAILED_CLAIM_WINDOW_MS = 10 * 60_000;
 /** The most distinct sources tracked at once. */
 const MAX_TRACKED_SOURCES = 1000;
-/** Mirrors `openvs-relay/src/pairing.ts` — Crockford base32 minus the ambiguous I, L, O, U. */
-const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 /** Mirrors `openvs-relay/src/room.ts`'s `HEARTBEAT_PONG_JSON`. */
 const PONG_JSON = JSON.stringify({ v: 1, t: 'c', seq: 0, p: { c: 'pong' } });
 /** The largest request body read (a pairing claim is a few dozen bytes). */
@@ -91,7 +89,20 @@ export interface DeviceRecord {
 	readonly createdAt: number;
 	lastSeenAt: number | null;
 	revokedAt: number | null;
+	/**
+	 * The phone's end-to-end public key and the proof that it knew the pairing secret
+	 * (`docs/REMOTE-E2E.md`). The relay only stores and forwards them: it cannot check the proof,
+	 * and cannot make a valid one.
+	 */
+	pub?: string;
+	mac?: string;
 }
+
+/** The shape of a base64url public key (65 bytes) and MAC (32 bytes) the relay accepts, without decoding either. */
+const E2E_PUB_PATTERN = /^[A-Za-z0-9_-]{87}$/;
+const E2E_MAC_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+/** What a pairing code looks like: eight characters of the Crockford base32 alphabet. */
+const PAIRING_CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{8}$/;
 
 /** Everything the relay persists — per room, its paired devices. */
 export interface RelayState {
@@ -370,7 +381,7 @@ export class LocalRelay {
 			reply(res, 404, 'unknown room');
 			return;
 		}
-		let body: { code?: unknown; name?: unknown };
+		let body: { code?: unknown; name?: unknown; pub?: unknown; mac?: unknown };
 		try {
 			body = JSON.parse(await this.readBody(req)) ?? {};
 		} catch {
@@ -379,6 +390,12 @@ export class LocalRelay {
 		}
 		if (typeof body.code !== 'string' || !body.code) {
 			reply(res, 400, 'missing code');
+			return;
+		}
+		// Pairing is end-to-end encrypted or it does not happen: an app that sends no key (an old
+		// cached copy) is told to update rather than being paired into a connection with no keys.
+		if (typeof body.pub !== 'string' || !E2E_PUB_PATTERN.test(body.pub) || typeof body.mac !== 'string' || !E2E_MAC_PATTERN.test(body.mac)) {
+			reply(res, 400, 'this app version cannot pair: reload the page to update it');
 			return;
 		}
 		const source = this.sourceOf(req);
@@ -412,15 +429,20 @@ export class LocalRelay {
 		const deviceId = randomUUID();
 		const issuedAt = this.now();
 		const token = `${deviceId}.${createHmac('sha256', this.options.pepper).update(`${deviceId}|${roomId}|${issuedAt}`).digest('base64url')}`;
+		const name = typeof body.name === 'string' && body.name ? body.name.slice(0, 80) : 'Unnamed device';
 		(devicesOf(this.state, roomId) ?? (this.state.rooms[roomId] = { devices: [] }).devices).push({
 			id: deviceId,
-			name: typeof body.name === 'string' && body.name ? body.name.slice(0, 80) : 'Unnamed device',
+			name,
 			tokenHash: hmacHex(this.options.pepper, `${roomId}|${token}`),
 			createdAt: issuedAt,
 			lastSeenAt: null,
 			revokedAt: null,
+			pub: body.pub,
+			mac: body.mac,
 		});
 		this.save();
+		// The desktop turns this into the device's keys (and drops the device if the proof is wrong).
+		this.sendControl(this.peersOf(roomId, 'host'), { c: 'deviceClaimed', deviceId, name, pub: body.pub, mac: body.mac });
 		reply(res, 200, JSON.stringify({ deviceId, token }), 'application/json');
 	}
 
@@ -464,7 +486,7 @@ export class LocalRelay {
 		}
 		const devices = [...(devicesOf(this.state, roomId) ?? [])]
 			.sort((a, b) => b.createdAt - a.createdAt)
-			.map(({ id, name, createdAt, lastSeenAt, revokedAt }) => ({ id, name, createdAt, lastSeenAt, revokedAt }));
+			.map(({ id, name, createdAt, lastSeenAt, revokedAt, pub, mac }) => ({ id, name, createdAt, lastSeenAt, revokedAt, pub, mac }));
 		reply(res, 200, JSON.stringify({ devices }), 'application/json');
 	}
 
@@ -588,7 +610,7 @@ export class LocalRelay {
 
 	/** Routes one frame — `room.ts`'s `webSocketMessage`. App messages are relayed verbatim, never parsed beyond the envelope. */
 	private handleMessage(peer: Peer, raw: string): void {
-		let env: { v?: unknown; t?: unknown; seq?: unknown; p?: { c?: unknown; deviceId?: unknown; reason?: unknown } };
+		let env: { v?: unknown; t?: unknown; seq?: unknown; p?: { c?: unknown; deviceId?: unknown; reason?: unknown; code?: unknown } };
 		try {
 			env = JSON.parse(raw);
 		} catch {
@@ -618,7 +640,7 @@ export class LocalRelay {
 				return;
 			case 'pair':
 				if (peer.role === 'host') {
-					this.mintCode(peer);
+					this.registerCode(peer, env.p.code);
 				}
 				return;
 			case 'revoke':
@@ -636,11 +658,14 @@ export class LocalRelay {
 		}
 	}
 
-	private mintCode(host: Peer): void {
-		const bytes = randomBytes(8);
-		let code = '';
-		for (const byte of bytes) {
-			code += ALPHABET[byte % ALPHABET.length];
+	/**
+	 * Registers the pairing code the desktop derived from its pairing secret. The relay no longer
+	 * invents codes: a code it picked would let it pair a device of its own choosing, and one
+	 * derived from the secret is what lets the phone find the code from the link alone.
+	 */
+	private registerCode(host: Peer, code: unknown): void {
+		if (typeof code !== 'string' || !PAIRING_CODE_PATTERN.test(code)) {
+			return;
 		}
 		const expiresAt = this.now() + PAIRING_TTL_MS;
 		this.codes.set(`${host.room}|${hmacHex(this.options.pepper, code)}`, { expiresAt, attempts: 0 });

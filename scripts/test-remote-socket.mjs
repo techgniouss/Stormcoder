@@ -45,7 +45,7 @@ import {
 {
 	assert.deepStrictEqual(buildHelloEnvelope(1, 'tok123'), { v: 1, t: 'c', seq: 1, p: { c: 'hello', role: 'host', roomToken: 'tok123' } });
 	assert.deepStrictEqual(buildPingEnvelope(2), { v: 1, t: 'c', seq: 2, p: { c: 'ping' } });
-	assert.deepStrictEqual(buildPairEnvelope(3), { v: 1, t: 'c', seq: 3, p: { c: 'pair' } });
+	assert.deepStrictEqual(buildPairEnvelope(3, 'ABCD1234'), { v: 1, t: 'c', seq: 3, p: { c: 'pair', code: 'ABCD1234' } });
 	assert.deepStrictEqual(buildRevokeEnvelope(4, 'device-9'), { v: 1, t: 'c', seq: 4, p: { c: 'revoke', deviceId: 'device-9' } });
 	assert.deepStrictEqual(buildByeEnvelope(5), { v: 1, t: 'c', seq: 5, p: { c: 'bye' } });
 	assert.deepStrictEqual(buildByeEnvelope(6, 'dispose'), { v: 1, t: 'c', seq: 6, p: { c: 'bye', reason: 'dispose' } });

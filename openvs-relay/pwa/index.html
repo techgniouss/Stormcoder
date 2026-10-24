@@ -28,10 +28,10 @@
 <div id="pairScreen" class="pair-screen">
 	<img class="pair-mark" src="/icon.svg" alt="" width="72" height="72">
 	<h1>Stormcoder Remote</h1>
-	<p>Enter the pairing code shown in the Stormcoder chat panel.</p>
+	<p>Paste the pairing link from the desktop, or type the key shown under the QR code.</p>
 	<form id="pairForm">
-		<label for="pairCode" class="sr-only">Pairing code</label>
-		<input id="pairCode" type="text" inputmode="text" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go" placeholder="8-character code" maxlength="8">
+		<label for="pairCode" class="sr-only">Pairing link or key</label>
+		<input id="pairCode" type="text" inputmode="text" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go" placeholder="Pairing link or key">
 		<button type="submit">Pair</button>
 	</form>
 	<p id="pairError" class="pair-error" role="alert"></p>
@@ -89,6 +89,9 @@
 		<button id="historyCloseBtn" class="icon-btn" type="button" aria-label="Close history"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
 	</div>
 	<div id="historyList" class="history-list"></div>
+	<div class="history-footer">
+		<button id="unpairBtn" class="unpair-btn" type="button">Unpair this phone</button>
+	</div>
 </div>
 
 <script type="module" src="/app.js"></script>

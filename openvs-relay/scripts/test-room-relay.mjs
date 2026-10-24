@@ -137,9 +137,13 @@ function fakeSql() {
 			const [id] = params;
 			return result(device.filter(r => r.id === id).map(r => ({ name: r.name, lastSeenAt: r.lastSeenAt })));
 		}
-		if (/^SELECT id, name, createdAt, lastSeenAt, revokedAt FROM device ORDER BY createdAt DESC/.test(s)) {
+		if (/^SELECT id, name, createdAt, lastSeenAt, revokedAt, pubkeyJwk FROM device ORDER BY createdAt DESC/.test(s)) {
 			const sorted = [...device].sort((a, b) => b.createdAt - a.createdAt);
-			return result(sorted.map(r => ({ id: r.id, name: r.name, createdAt: r.createdAt, lastSeenAt: r.lastSeenAt, revokedAt: r.revokedAt })));
+			return result(sorted.map(r => ({ id: r.id, name: r.name, createdAt: r.createdAt, lastSeenAt: r.lastSeenAt, revokedAt: r.revokedAt, pubkeyJwk: r.pubkeyJwk })));
+		}
+		if (/^SELECT pubkeyJwk FROM device WHERE id = \?/.test(s)) {
+			const [id] = params;
+			return result(device.filter(r => r.id === id).map(r => ({ pubkeyJwk: r.pubkeyJwk })));
 		}
 		if (/^UPDATE device SET lastSeenAt/.test(s)) {
 			const [lastSeenAt, id] = params;
@@ -430,7 +434,7 @@ const FAKE_ENV = { RELAY_PEPPER: 'x', VAPID_PUBLIC: '', VAPID_PRIVATE: '', VAPID
 	);
 	state.storage.sql.exec(
 		'INSERT INTO device (id, name, tokenHash, pubkeyJwk, createdAt, lastSeenAt, revokedAt) VALUES (?, ?, ?, ?, ?, ?, NULL)',
-		'device-newer', 'Newer phone', 'secret-hash-2', '{"kty":"EC"}', 5000, null,
+		'device-newer', 'Newer phone', 'secret-hash-2', JSON.stringify({ pub: 'P'.repeat(87), mac: 'M'.repeat(43) }), 5000, null,
 	);
 	state.storage.sql.exec('UPDATE device SET revokedAt = ? WHERE id = ?', 9000, 'device-older');
 
@@ -447,10 +451,10 @@ const FAKE_ENV = { RELAY_PEPPER: 'x', VAPID_PUBLIC: '', VAPID_PRIVATE: '', VAPID
 	const body = await ok.json();
 	assert.deepEqual(body, {
 		devices: [
-			{ id: 'device-newer', name: 'Newer phone', createdAt: 5000, lastSeenAt: null, revokedAt: null },
+			{ id: 'device-newer', name: 'Newer phone', createdAt: 5000, lastSeenAt: null, revokedAt: null, pub: 'P'.repeat(87), mac: 'M'.repeat(43) },
 			{ id: 'device-older', name: 'Older phone', createdAt: 1000, lastSeenAt: 2000, revokedAt: 9000 },
 		],
-	}, 'devices are returned newest-first with no pubkeyJwk/tokenHash in the response shape');
+	}, 'devices are returned newest-first with the end-to-end key and proof (for the host) but never the token hash');
 
 	const wrong = await room.fetch(new Request(devicesUrl, { headers: { Authorization: 'Bearer some-other-token' } }));
 	assert.equal(wrong.status, 403, '/api/devices with a token that mismatches the already-claimed host token is rejected');
@@ -617,7 +621,7 @@ const FAKE_ENV = { RELAY_PEPPER: 'x', VAPID_PUBLIC: '', VAPID_PRIVATE: '', VAPID
 	const room = new WorkspaceRoom(state, FAKE_ENV);
 	const live = 'ABCDEFGH';
 	state.storage.sql.exec('INSERT OR REPLACE INTO pairing (codeHash, expiresAt, usedAt) VALUES (?, ?, NULL)', await hashCode(live, FAKE_ENV.RELAY_PEPPER), Date.now() + PAIRING_TTL_MS);
-	const claim = (code, ip, extra = {}) => room.fetch(new Request('https://relay.example/pair/claim?room=R', { method: 'POST', headers: { 'CF-Connecting-IP': ip }, body: JSON.stringify({ code, ...extra }) }));
+	const claim = (code, ip, extra = {}) => room.fetch(new Request('https://relay.example/pair/claim?room=R', { method: 'POST', headers: { 'CF-Connecting-IP': ip }, body: JSON.stringify({ code, pub: 'P'.repeat(87), mac: 'M'.repeat(43), ...extra }) }));
 	const statuses = [];
 	for (let i = 0; i < 10; i++) {
 		statuses.push((await claim(`WRONG00${i}`, '203.0.113.9')).status);
@@ -626,10 +630,45 @@ const FAKE_ENV = { RELAY_PEPPER: 'x', VAPID_PUBLIC: '', VAPID_PRIVATE: '', VAPID
 	assert.equal((await claim(live, '203.0.113.9')).status, 429, 'the guessing source stays refused, even with the right code');
 	const [row] = state.storage.sql.exec('SELECT codeHash, expiresAt, usedAt FROM pairing WHERE codeHash = ?', await hashCode(live, FAKE_ENV.RELAY_PEPPER)).toArray();
 	assert.equal(row.usedAt, null, 'the live code was not withdrawn');
-	const ok = await claim(live, '198.51.100.7', { name: 'x'.repeat(500) });
+	const keys = { pub: 'P'.repeat(87), mac: 'M'.repeat(43) };
+	const ok = await claim(live, '198.51.100.7', { name: 'x'.repeat(500), ...keys });
 	assert.equal(ok.status, 200, 'a legitimate claim from another source still succeeds');
-	const big = await claim('WHATEVER', '198.51.100.8', { pubkeyJwk: { x: 'y'.repeat(5000) } });
-	assert.equal(big.status, 400, 'an oversized public key is refused');
+	assert.equal((await claim('WHATEVER', '198.51.100.8', { ...keys, pub: 'short' })).status, 400, 'a public key of the wrong shape is refused');
+	assert.equal((await claim('WHATEVER', '198.51.100.8', { ...keys, mac: 'y'.repeat(5000) })).status, 400, 'an oversized proof is refused');
+}
+
+// Pairing is end to end encrypted or it does not happen: a claim with no key is told to update, the
+// device record keeps the key and proof, and the host is told about the claim.
+{
+	const { hashCode, PAIRING_TTL_MS } = await import('../src/pairing.ts');
+	const state = new FakeDurableObjectState();
+	const room = new WorkspaceRoom(state, FAKE_ENV);
+	const host = new FakeWebSocket('host');
+	state.acceptWebSocket(host, [HOST_TAG]);
+	// The host registers a code derived from its pairing secret; the relay does not invent one.
+	await room.webSocketMessage(host, JSON.stringify({ v: 1, t: 'c', seq: 1, p: { c: 'pair', code: 'ABCD1234' } }));
+	const paired = JSON.parse(host.sent.at(-1));
+	assert.deepEqual(paired.p, { c: 'paired', code: 'ABCD1234', expiresAt: paired.p.expiresAt });
+	host.sent.length = 0;
+	await room.webSocketMessage(host, JSON.stringify({ v: 1, t: 'c', seq: 2, p: { c: 'pair' } }));
+	await room.webSocketMessage(host, JSON.stringify({ v: 1, t: 'c', seq: 3, p: { c: 'pair', code: 'lowercase' } }));
+	await room.webSocketMessage(host, JSON.stringify({ v: 1, t: 'c', seq: 4, p: { c: 'pair', code: 'TOOLONG123' } }));
+	assert.deepEqual(host.sent, [], 'a pair request without a valid code registers nothing and gets no answer');
+	const claim = body => room.fetch(new Request('https://relay.example/pair/claim?room=R', { method: 'POST', headers: { 'CF-Connecting-IP': '198.51.100.1' }, body: JSON.stringify(body) }));
+	const noKey = await claim({ code: 'ABCD1234', name: 'Old app' });
+	assert.equal(noKey.status, 400);
+	assert.match(await noKey.text(), /reload the page to update/);
+	const [unburnt] = state.storage.sql.exec('SELECT codeHash, expiresAt, usedAt FROM pairing WHERE codeHash = ?', await hashCode('ABCD1234', FAKE_ENV.RELAY_PEPPER)).toArray();
+	assert.equal(unburnt.usedAt, null, 'a claim refused for lacking a key does not spend the code');
+	const keys = { pub: 'A'.repeat(87), mac: 'B'.repeat(43) };
+	const ok = await claim({ code: 'ABCD1234', name: 'My phone', ...keys });
+	assert.equal(ok.status, 200);
+	const { deviceId } = await ok.json();
+	const claimed = host.sent.map(m => JSON.parse(m).p).find(p => p.c === 'deviceClaimed');
+	assert.deepEqual(claimed, { c: 'deviceClaimed', deviceId, name: 'My phone', ...keys }, 'the host is handed the phone\'s key and proof');
+	const [row] = state.storage.sql.exec('SELECT pubkeyJwk FROM device WHERE id = ?', deviceId).toArray();
+	assert.deepEqual(JSON.parse(row.pubkeyJwk), keys);
+	void PAIRING_TTL_MS;
 }
 
 // A client's hello claiming role 'host' must not evict the real host; only a host-tagged socket may.

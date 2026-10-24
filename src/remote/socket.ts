@@ -88,9 +88,9 @@ export function buildPingEnvelope(seq: number): Envelope {
 	return { v: 1, t: 'c', seq, p: { c: 'ping' } };
 }
 
-/** Builds a `pair` control envelope. */
-export function buildPairEnvelope(seq: number): Envelope {
-	return { v: 1, t: 'c', seq, p: { c: 'pair' } };
+/** Builds a `pair` control envelope carrying the code derived from the pairing secret. */
+export function buildPairEnvelope(seq: number, code: string): Envelope {
+	return { v: 1, t: 'c', seq, p: { c: 'pair', code } };
 }
 
 /** Builds a `revoke` control envelope. */
@@ -257,9 +257,9 @@ export class RemoteSocket {
 		this.send({ v: 1, t: 'c', seq: this.nextSeq(), p: frame });
 	}
 
-	/** Requests a fresh pairing code; the reply arrives as a `paired` control frame via {@link onMessage}. */
-	requestPairingCode(): void {
-		this.sendControl({ c: 'pair' });
+	/** Registers a pairing code with the relay; its confirmation arrives as a `paired` control frame via {@link onMessage}. */
+	requestPairingCode(code: string): void {
+		this.sendControl({ c: 'pair', code });
 	}
 
 	/** Tears down the socket: sends `bye`, stops every timer, and refuses any further `connect()`. */

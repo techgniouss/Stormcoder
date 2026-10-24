@@ -20,6 +20,12 @@ const pwaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stormcoder-pwa-'));
 fs.writeFileSync(path.join(pwaDir, 'index.html'), '<!doctype html><title>Stormcoder Remote</title>');
 fs.writeFileSync(path.join(pwaDir, 'app.js'), 'console.log(1);');
 
+/** What a phone sends with its claim: the shape of its end-to-end key and proof (the relay checks shape only). */
+const KEYS = { pub: 'P'.repeat(87), mac: 'M'.repeat(43) };
+/** A fresh valid pairing code each time, as the desktop derives one from its pairing secret. */
+let codeCounter = 0;
+const nextCode = () => `ABCD${String(1000 + codeCounter++)}`;
+
 const ROOM = 'ROOM1';
 const HOST_TOKEN = 'host-token';
 const store = memoryStore();
@@ -55,7 +61,7 @@ function open(url, init) {
 }
 const control = (ws, p, seq = 1) => ws.send(JSON.stringify({ v: 1, t: 'c', seq, p }));
 const isC = verb => env => env.t === 'c' && env.p?.c === verb;
-const claim = code => fetch(`${base}/pair/claim?room=${ROOM}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, name: 'Test phone' }) });
+const claim = code => fetch(`${base}/pair/claim?room=${ROOM}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, name: 'Test phone', ...KEYS }) });
 
 // The phone app is served, with /p/<room> routed to its index like the cloud relay's SPA assets.
 assert.equal((await fetch(`${base}/app.js`)).status, 200);
@@ -75,9 +81,11 @@ await host.next(isC('pong'));
 // Pairing: an unknown room and a wrong code are refused; a minted code works exactly once.
 assert.equal((await fetch(`${base}/pair/claim?room=NOPE`, { method: 'POST', body: '{"code":"X"}' })).status, 404);
 assert.equal((await claim('WRONGCODE')).status, 403);
-control(host, { c: 'pair' });
+control(host, { c: 'pair', code: nextCode() });
 const paired = await host.next(isC('paired'));
 assert.match(paired.p.code, /^[0-9A-HJKMNP-TV-Z]{8}$/);
+// The relay registers the code the desktop sent; it does not invent one.
+assert.match(paired.p.code, /^ABCD1\d{3}$/);
 const claimed = await claim(paired.p.code.toLowerCase());
 assert.equal(claimed.status, 200, 'codes are accepted case-insensitively, as typed on a phone');
 const { deviceId, token } = await claimed.json();
@@ -157,9 +165,9 @@ await relay.stop();
 	first.registerRoom(ROOM, HOST_TOKEN);
 	const p1 = await first.start();
 	const h = await open(`ws://127.0.0.1:${p1}/ws/host?room=${ROOM}`, { headers: { Authorization: `Bearer ${HOST_TOKEN}` } });
-	control(h, { c: 'pair' });
+	control(h, { c: 'pair', code: nextCode() });
 	const code = (await h.next(isC('paired'))).p.code;
-	const res = await fetch(`http://127.0.0.1:${p1}/pair/claim?room=${ROOM}`, { method: 'POST', body: JSON.stringify({ code }) });
+	const res = await fetch(`http://127.0.0.1:${p1}/pair/claim?room=${ROOM}`, { method: 'POST', body: JSON.stringify({ code, ...KEYS }) });
 	const saved = (await res.json()).token;
 	h.close();
 	await first.stop();
@@ -181,8 +189,8 @@ await relay.stop();
 	r.registerRoom(ROOM, HOST_TOKEN);
 	const port = await r.start();
 	const h = await open(`ws://127.0.0.1:${port}/ws/host?room=${ROOM}`, { headers: { Authorization: `Bearer ${HOST_TOKEN}` } });
-	const claimAt = (code, ip) => fetch(`http://127.0.0.1:${port}/pair/claim?room=${ROOM}`, { method: 'POST', headers: { 'Cf-Connecting-Ip': ip }, body: JSON.stringify({ code }) });
-	control(h, { c: 'pair' });
+	const claimAt = (code, ip) => fetch(`http://127.0.0.1:${port}/pair/claim?room=${ROOM}`, { method: 'POST', headers: { 'Cf-Connecting-Ip': ip }, body: JSON.stringify({ code, ...KEYS }) });
+	control(h, { c: 'pair', code: nextCode() });
 	const first = (await h.next(isC('paired'))).p.code;
 	const statuses = [];
 	for (let i = 0; i < 10; i++) {
@@ -224,9 +232,9 @@ await relay.stop();
 	const portB = await b.start();
 	const pairOn = async (relay, port, room, token) => {
 		const host = await open(`ws://127.0.0.1:${port}/ws/host?room=${room}`, { headers: { Authorization: `Bearer ${token}` } });
-		control(host, { c: 'pair' });
+		control(host, { c: 'pair', code: nextCode() });
 		const code = (await host.next(isC('paired'))).p.code;
-		const res = await fetch(`http://127.0.0.1:${port}/pair/claim?room=${room}`, { method: 'POST', body: JSON.stringify({ code, name: 'phone' }) });
+		const res = await fetch(`http://127.0.0.1:${port}/pair/claim?room=${room}`, { method: 'POST', body: JSON.stringify({ code, name: 'phone', ...KEYS }) });
 		assert.equal(res.status, 200);
 		return { host, ...(await res.json()) };
 	};

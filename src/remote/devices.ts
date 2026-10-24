@@ -26,6 +26,9 @@ export interface DeviceInfo {
 	readonly createdAt: number;
 	readonly lastSeenAt: number | null;
 	readonly revokedAt: number | null;
+	/** The phone's end-to-end public key and pairing proof, when the relay holds them (`docs/REMOTE-E2E.md`). */
+	readonly pub?: string;
+	readonly mac?: string;
 }
 
 /** Type guard for one element of `GET /api/devices`'s `devices` array — the relay is a separately deployed service, so its response shape is validated, not trusted. */

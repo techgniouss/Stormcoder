@@ -61,7 +61,8 @@ assert.equal(
 {
 	const controls = [];
 	const socket = { onRtt() {}, send() {}, sendControl: f => controls.push(f), dispose() {} };
-	const sink = new RemoteSink('r', socket);
+	const e2e = { sealForAll: async () => [], handshakeFor: () => undefined };
+	const sink = new RemoteSink('r', socket, e2e);
 	sink.post({ type: 'approvalRequest', id: 'a', sessionId: 's1', kind: 'command', title: 'rm -rf /home/me/secret-project' });
 	sink.post({ type: 'error', sessionId: 's2', message: 'e'.repeat(500) });
 	assert.doesNotMatch(controls[0].body, /rm -rf/);

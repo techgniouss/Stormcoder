@@ -21,7 +21,7 @@
 // v5: renamed with the product. The old caches are removed on activate (see below).
 const CACHE_NAME = 'stormcoder-remote-shell-v5';
 const SHELL_ASSETS = [
-	'/', '/index.html', '/app.js', '/transcript.js', '/cards.js', '/styles.css', '/manifest.webmanifest',
+	'/', '/index.html', '/app.js', '/e2e.js', '/transcript.js', '/cards.js', '/styles.css', '/manifest.webmanifest',
 	'/public-sans-latin-wght-normal.woff2', '/icon.svg', '/icon-192.png', '/icon-512.png', '/icon-512-maskable.png', '/apple-touch-icon.png',
 ];
 

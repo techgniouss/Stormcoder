@@ -11,6 +11,7 @@ import {
 } from './config';
 import { DeviceInfo, fetchDevices, shouldDisconnectForIdle, shouldRevokeForTokenAge } from './devices';
 import { getRelayMode, LocalHosting } from './local/localHosting';
+import { groupSecret, HostE2E } from './e2e';
 import { buildPairingUrl, PairingResult, requestPairing, revokeDevice } from './pairing';
 import { isRemoteAllowed } from './policy';
 import { Envelope, isControlFrame } from './protocol';
@@ -81,6 +82,14 @@ export class RemoteService implements vscode.Disposable {
 	private installConsent = false;
 	/** Guards {@link start} against overlapping calls. */
 	private starting = false;
+	/** The keys and stream counters of the paired phones; alive while a connection is. */
+	private e2e?: HostE2E;
+	/** Inbound frames are opened one at a time, so they reach the host in the order they arrived. */
+	private inbound: Promise<void> = Promise.resolve();
+	/** Claims being verified, by device id: a phone's first connection must wait for its own claim. */
+	private readonly claims = new Map<string, Promise<boolean>>();
+	/** Said once per connection: a device paired before encryption existed, or an unsealed frame, was turned away. */
+	private warnedLegacy = false;
 
 	constructor(
 		private readonly context: vscode.ExtensionContext,
@@ -126,11 +135,18 @@ export class RemoteService implements vscode.Disposable {
 		}
 		const socket = this.socket;
 		const publicRoomId = this.publicRoomId;
+		const e2e = this.e2e;
+		if (!e2e) {
+			throw new Error('Remote control is not connected yet.');
+		}
 		// Local hosting: the host talks to the relay on loopback, but the phone needs the
 		// tunnel's public address — wait for the tunnel if it's still coming up.
 		const base = this.local ? await this.local.publicUrl() : this.relayUrl;
-		const { code, expiresAt } = await requestPairing(socket);
-		return { code, expiresAt, url: buildPairingUrl(base, publicRoomId, code), hint: this.pairingHint() };
+		// The secret is made here and shown only to the person at this screen (in the link's
+		// fragment, which no server receives). The relay is given just a code derived from it.
+		const pairing = await e2e.completePairing(e2e.beginPairing());
+		const { expiresAt } = await requestPairing(socket, pairing.code);
+		return { code: groupSecret(pairing.secret), expiresAt, url: buildPairingUrl(base, publicRoomId, pairing.secret), hint: this.pairingHint() };
 	}
 
 	/**
@@ -257,7 +273,9 @@ export class RemoteService implements vscode.Disposable {
 			return; // turned off while the room secret was being read
 		}
 		const socket = new RemoteSocket({ relayUrl, publicRoomId, hostToken });
-		const sink = new RemoteSink(REMOTE_SINK_ID, socket);
+		const e2e = new HostE2E(this.context.secrets, this.context.workspaceState);
+		const sink = new RemoteSink(REMOTE_SINK_ID, socket, e2e);
+		this.e2e = e2e;
 		this.socket = socket;
 		this.sink = sink;
 		this.relayUrl = relayUrl;
@@ -274,7 +292,11 @@ export class RemoteService implements vscode.Disposable {
 		this.view.setPairingHandler(() => this.pair());
 		this.view.setDevicesHandler({
 			list: () => fetchDevices(relayUrl, publicRoomId, hostToken),
-			revoke: deviceId => revokeDevice(socket, deviceId),
+			revoke: async deviceId => {
+				const confirmed = await revokeDevice(socket, deviceId);
+				await e2e.remove(deviceId);
+				return confirmed;
+			},
 		});
 		this.view.setRemoteStatus(true, false);
 		socket.connect();
@@ -301,6 +323,9 @@ export class RemoteService implements vscode.Disposable {
 		}
 		this.sink = undefined;
 		this.socket = undefined;
+		this.e2e = undefined;
+		this.claims.clear();
+		this.warnedLegacy = false;
 		this.relayUrl = undefined;
 		this.publicRoomId = undefined;
 		this.hostToken = undefined;
@@ -353,6 +378,7 @@ export class RemoteService implements vscode.Disposable {
 		this.view.setRemoteStatus(true, status === 'connected');
 		if (status === 'connected') {
 			this.sendCatchUp();
+			void this.reconcileDevices();
 		} else if (status === 'unavailable') {
 			if (!this.reportedUnavailable) {
 				this.reportedUnavailable = true;
@@ -391,19 +417,40 @@ export class RemoteService implements vscode.Disposable {
 			this.handleControlFrame(envelope);
 			return;
 		}
-		if (envelope.t !== 'm' || !this.sink) {
+		if (envelope.t !== 'm' || !this.sink || !this.e2e) {
 			return;
 		}
 		const payload = envelope.p;
-		if (typeof payload !== 'object' || payload === null || typeof (payload as Record<string, unknown>).type !== 'string') {
+		this.inbound = this.inbound.then(() => this.handleSealed(payload)).catch(() => { /* one bad frame never stops the next */ });
+	}
+
+	/**
+	 * Opens one `t: 'm'` payload and, if it is a fresh frame from a device the desktop holds keys
+	 * for, dispatches the message it carried. Anything else is dropped without a reply: a frame
+	 * that is not sealed (the key-agreement reply is the only unsealed frame, and it goes the other
+	 * way), is for an unknown device, fails authentication or repeats an old one gets nothing back,
+	 * so the relay learns nothing from probing.
+	 */
+	private async handleSealed(payload: unknown): Promise<void> {
+		const e2e = this.e2e;
+		const sink = this.sink;
+		if (!e2e || !sink) {
 			return;
 		}
-		const message = payload as Record<string, unknown> & { type: string };
-		if (!isRemoteAllowed(message.type)) {
-			this.view.postToSink(this.sink.id, { type: 'error', message: `"${message.type}" is not permitted from a remote client.` });
+		const opened = await e2e.openFrom(payload);
+		if (!opened) {
 			return;
 		}
-		this.view.dispatchRemoteMessage(message, this.sink.id);
+		const message = opened.message;
+		if (typeof message !== 'object' || message === null || typeof (message as Record<string, unknown>).type !== 'string') {
+			return;
+		}
+		const typed = message as Record<string, unknown> & { type: string };
+		if (!isRemoteAllowed(typed.type)) {
+			this.view.postToSink(sink.id, { type: 'error', message: `"${typed.type}" is not permitted from a remote client.` });
+			return;
+		}
+		this.view.dispatchRemoteMessage(typed, sink.id);
 	}
 
 	/**
@@ -414,7 +461,19 @@ export class RemoteService implements vscode.Disposable {
 	 * background) is deliberately silent, per the frame's own doc on spam avoidance.
 	 */
 	private handleControlFrame(envelope: Envelope): void {
-		if (!isControlFrame(envelope.p) || envelope.p.c !== 'deviceConnected' || !envelope.p.firstConnect) {
+		if (!isControlFrame(envelope.p)) {
+			return;
+		}
+		if (envelope.p.c === 'deviceClaimed') {
+			const { deviceId, name, pub, mac } = envelope.p;
+			void this.claimDevice(deviceId, name, pub, mac);
+			return;
+		}
+		if (envelope.p.c !== 'deviceConnected') {
+			return;
+		}
+		void this.deviceConnected(envelope.p.deviceId);
+		if (!envelope.p.firstConnect) {
 			return;
 		}
 		const { deviceId, name } = envelope.p;
@@ -422,12 +481,126 @@ export class RemoteService implements vscode.Disposable {
 			if (choice === 'Revoke' && this.socket) {
 				// Someone revoking a device they did not expect to see needs to know it worked.
 				revokeDevice(this.socket, deviceId).then(
+					async confirmed => {
+						await this.e2e?.remove(deviceId);
+						return confirmed;
+					}).then(
 					confirmed => confirmed
 						? vscode.window.showInformationMessage(`${name} was revoked.`)
 						: vscode.window.showWarningMessage(`The relay did not confirm revoking ${name}. Check the device list in Stormcoder settings.`),
 					err => vscode.window.showErrorMessage(err instanceof Error ? err.message : String(err)));
 			}
 		});
+	}
+
+	/**
+	 * A phone has claimed a pairing: checks its proof against the pairings on screen and, if it
+	 * matches, derives its keys and sends the key-agreement reply. A device that cannot prove it
+	 * saw the pairing secret (someone who got the code from the relay, or a relay trying its own
+	 * key) is revoked on the spot.
+	 */
+	private claimDevice(deviceId: string, name: string, pub: string, mac: string): Promise<boolean> {
+		const e2e = this.e2e;
+		if (!e2e) {
+			return Promise.resolve(false);
+		}
+		// One verdict per device. A second look at the same claim (the relay repeating it, or the
+		// list read after reconnecting) must not run again: the pairing secret is spent by the first,
+		// so the second would find no match and revoke a phone that had just paired properly.
+		const earlier = this.claims.get(deviceId);
+		if (earlier) {
+			return earlier;
+		}
+		const claim = (async () => {
+			const accepted = await e2e.acceptDevice(deviceId, name, pub, mac);
+			if (accepted) {
+				this.sendHandshakes(deviceId);
+			} else {
+				void this.rejectDevice(deviceId, `"${name}" tried to pair without the key shown on this screen, so it was removed.`);
+			}
+			return accepted;
+		})().catch(() => false);
+		this.claims.set(deviceId, claim);
+		return claim;
+	}
+
+	/** Revokes a device that cannot be trusted, forgets any keys, and says why. */
+	private async rejectDevice(deviceId: string, why: string): Promise<void> {
+		await this.e2e?.remove(deviceId);
+		if (this.socket) {
+			revokeDevice(this.socket, deviceId).catch(() => undefined);
+		}
+		void vscode.window.showWarningMessage(why);
+	}
+
+	/**
+	 * A phone connected. One that pairs but has no keys (it was paired before encryption, or never
+	 * finished) is revoked; one with keys gets a new outgoing stream and, until it proves it holds
+	 * the keys by sending its first sealed frame, the key-agreement reply (repeated a few times:
+	 * the first can arrive before the phone has attached).
+	 */
+	private async deviceConnected(deviceId: string): Promise<void> {
+		const e2e = this.e2e;
+		if (!e2e) {
+			return;
+		}
+		await this.claims.get(deviceId);
+		if (!e2e.has(deviceId)) {
+			if (!this.warnedLegacy) {
+				this.warnedLegacy = true;
+				void vscode.window.showWarningMessage('A phone that was paired before remote control was encrypted tried to connect. It was removed: pair it again from Settings > Remote control.');
+			}
+			await this.rejectDeviceQuietly(deviceId);
+			return;
+		}
+		await e2e.newStream(deviceId);
+		this.sendHandshakes(deviceId);
+	}
+
+	private async rejectDeviceQuietly(deviceId: string): Promise<void> {
+		await this.e2e?.remove(deviceId);
+		if (this.socket) {
+			revokeDevice(this.socket, deviceId).catch(() => undefined);
+		}
+	}
+
+	/** Sends the key-agreement reply to a device now and a few times over the next seconds, until it has answered with a sealed frame. */
+	private sendHandshakes(deviceId: string): void {
+		for (const delay of [0, 1500, 4000, 9000]) {
+			setTimeout(() => {
+				const handshake = this.e2e?.handshakeFor(deviceId);
+				if (handshake && this.sink) {
+					this.sink.sendHandshake(handshake);
+				}
+			}, delay).unref?.();
+		}
+	}
+
+	/**
+	 * After connecting: any device the relay lists that the desktop holds no keys for either
+	 * claimed a pairing while the desktop was away (verified now, if its pairing is still on
+	 * screen) or was paired before encryption. The first may be completed; everything else is revoked.
+	 */
+	private async reconcileDevices(): Promise<void> {
+		const e2e = this.e2e;
+		if (!e2e || !this.relayUrl || !this.publicRoomId || !this.hostToken) {
+			return;
+		}
+		let devices: DeviceInfo[];
+		try {
+			devices = await fetchDevices(this.relayUrl, this.publicRoomId, this.hostToken);
+		} catch {
+			return;
+		}
+		for (const device of devices) {
+			if (device.revokedAt !== null || e2e.has(device.id) || this.claims.has(device.id)) {
+				continue;
+			}
+			if (device.pub && device.mac && await this.claimDevice(device.id, device.name, device.pub, device.mac)) {
+				continue;
+			}
+			await this.rejectDeviceQuietly(device.id);
+		}
 	}
 
 	/**
@@ -465,7 +638,7 @@ export class RemoteService implements vscode.Disposable {
 			if (shouldRevokeForTokenAge(device.createdAt, deviceTokenDays, now)) {
 				console.log(`Stormcoder remote: revoking device "${device.name}" (${device.id}) — its token is older than ${deviceTokenDays}d.`);
 				// The next sweep retries whatever this one could not revoke.
-				revokeDevice(socket, device.id).catch(err => console.warn(`Stormcoder remote: could not revoke "${device.name}".`, err));
+				revokeDevice(socket, device.id).then(() => this.e2e?.remove(device.id), err => console.warn(`Stormcoder remote: could not revoke "${device.name}".`, err));
 			}
 		}
 	}

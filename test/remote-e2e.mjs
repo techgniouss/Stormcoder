@@ -204,12 +204,16 @@ try {
 	const card = settings.locator('.remote-pairing-card');
 	await card.waitFor({ timeout: 90000 });
 	const code = (await card.locator('.remote-pairing-code').textContent()).trim();
-	assert.match(code, /^[A-Z0-9]{8}$/, 'an 8-character code is shown');
+	const secret = code.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
+	assert.equal(secret.length, 26, 'the 26-character pairing key is shown (in groups)');
 	assert.equal(await card.locator('svg.remote-pairing-qr').count(), 1, 'a QR code is drawn');
 	const pairingUrl = hostFrames.map(f => { try { return JSON.parse(f).payload?.message; } catch { return undefined; } })
 		.filter(p => p?.type === 'remote' && p.pairing).at(-1).pairing.url;
-	assert.match(pairingUrl, /^https:\/\/e2e-fake\.trycloudflare\.com\/p\/[^/#]+#/, 'the QR link carries the tunnel address, room and code');
+	assert.match(pairingUrl, /^https:\/\/e2e-fake\.trycloudflare\.com\/p\/[^/#]+#[0-9A-Z]{26}$/, 'the QR link carries the tunnel address, room and the pairing key in the fragment');
 	const roomId = decodeURIComponent(new URL(pairingUrl).pathname.split('/')[2]);
+	assert.equal(new URL(pairingUrl).hash.slice(1), secret, 'the link and the typed key are the same secret');
+	const { deriveCode, b32decode } = await import(new URL('../out/remote/e2e.js', import.meta.url));
+	const relayCode = await deriveCode(b32decode(secret));
 
 	// ---- Phone ------------------------------------------------------------------------------------
 	step('phone: open the app at a phone viewport and enter the code');
@@ -228,7 +232,7 @@ try {
 	// The relay refuses a room it does not know, so a wrong code must fail first.
 	await phone.goto(`${phoneOrigin}/p/${encodeURIComponent(roomId)}`);
 	await phone.locator('#pairScreen:not([hidden])').waitFor();
-	await phone.fill('#pairCode', 'WRONGCDE');
+	await phone.fill('#pairCode', 'WRONG-KEY');
 	await phone.tap('#pairForm button[type=submit]');
 	await phone.locator('#pairError', { hasText: /\S/ }).waitFor({ timeout: 10000 });
 	assert.equal(await phone.locator('#app').evaluate(e => e.hidden), true, 'a wrong code does not pair');
@@ -240,9 +244,9 @@ try {
 	assert.equal(await phone.evaluate(() => matchMedia('(pointer: coarse)').matches), true, 'the context is a touch phone');
 	// The code is single-use.
 	const reuse = await phone.evaluate(async ({ room, code }) => {
-		const r = await fetch(`/pair/claim?room=${encodeURIComponent(room)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, name: 'again' }) });
+		const r = await fetch(`/pair/claim?room=${encodeURIComponent(room)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, name: 'again', pub: 'P'.repeat(87), mac: 'M'.repeat(43) }) });
 		return r.status;
-	}, { room: roomId, code });
+	}, { room: roomId, code: relayCode });
 	assert.ok(reuse >= 400, `a used code is refused (got ${reuse})`);
 	// The desktop lists the new device.
 	await settings.locator('.remote-device-row', { hasText: 'iPhone · Safari (Stormcoder PWA)' }).waitFor({ timeout: 15000 }).catch(async () => {
@@ -328,8 +332,9 @@ try {
 		assert.ok(!wire.includes(secret), `the ${name} secret never crossed the relay`);
 		assert.ok(!phoneText.includes(secret), `the ${name} secret is not on the phone`);
 	}
-	assert.ok(wire.includes('plain line stays'), 'ordinary file content still arrives');
-	assert.ok(/redacted/.test(wire), 'redaction markers are on the wire');
+	assert.ok(!wire.includes('plain line stays'), 'and not even ordinary file content is readable on the wire (it is sealed)');
+	assert.ok(phoneText.includes('plain line stays'), 'ordinary file content still arrives on the phone');
+	assert.ok(/redacted/.test(phoneText), 'redaction markers reach the phone');
 	// ...while the desktop (the trusted side) sees the file as it is.
 	assert.ok(hostFrames.some(f => f.includes(SECRETS.aws)), 'the desktop itself still sees the raw tool output');
 
@@ -411,6 +416,9 @@ try {
 	// ---- Desktop-only messages are refused -----------------------------------------------------------------
 	step('phone: desktop-only messages are rejected');
 	const before = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+	// Plaintext never works any more: every frame must be sealed with the device key, which only the
+	// phone's page holds. So a hostile client with a valid token (or the relay itself) that sends
+	// these in the clear gets no answer and changes nothing.
 	const denied = await phone.evaluate(async ({ room }) => {
 		const stored = JSON.parse(localStorage.getItem(`openvsRelay.device.${room}`));
 		const ws = new WebSocket(`ws://${location.host}/ws/client?room=${encodeURIComponent(room)}&token=${encodeURIComponent(stored.token)}`);
@@ -435,7 +443,7 @@ try {
 		const leaked = got.filter(d => /"type":"(remote|memory\w*)"/.test(d) && !/"type":"error"/.test(d)).length;
 		return { errors, leaked, count: types.length };
 	}, { room: roomId });
-	assert.equal(denied.errors.filter(m => /not permitted from a remote client/.test(m)).length, denied.count, 'every desktop-only or unknown message is refused with an error');
+	assert.equal(denied.errors.length, 0, 'plaintext messages are ignored, not answered');
 	assert.equal(denied.leaked, 0, 'no pairing, device or memory data came back');
 	const after = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
 	assert.equal(after['stormcoder.guardrails.approval'], before['stormcoder.guardrails.approval'], 'approval policy unchanged');
@@ -508,6 +516,15 @@ try {
 	await desktopChat.locator('#input').press('Enter');
 	await until('the desktop to get a reply after the revoke', replied, 40000);
 
+	// Nothing readable crossed the relay: every app message on the wire is a sealed frame.
+	const appFrames = frames.map(f => { try { return JSON.parse(f); } catch { return null; } }).filter(f => f && f.t === 'm');
+	assert.ok(appFrames.length > 20, 'the run produced app traffic');
+	// The only unsealed app frame is the pairing handshake: a public key and a proof, no message.
+	const handshakes = appFrames.filter(f => f.p && f.p.e === 0);
+	assert.ok(handshakes.every(f => Object.keys(f.p).sort().join() === 'd,e,hk,hm'), 'a handshake carries only keys and a proof');
+	assert.ok(handshakes.length <= 3, 'the handshake is not repeated once the phone has its keys');
+	assert.ok(appFrames.filter(f => f.p && f.p.e !== 0).every(f => f.p.e === 1 && typeof f.p.c === 'string' && !('type' in f.p)), 'every app message reached the phone sealed');
+	assert.ok(!frames.some(f => f.includes('Hello from the mock model.') || f.includes('SCN:')), 'no message text is visible on the relay');
 	assert.match(documentCsp, /script-src 'self'/, 'the phone app is served with a Content-Security-Policy');
 	assert.doesNotMatch(documentCsp, /unsafe-inline|unsafe-eval/);
 	assert.deepEqual(phoneErrors, [], 'no uncaught errors in the phone app');

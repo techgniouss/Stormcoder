@@ -79,9 +79,13 @@ export interface PongFrame {
 	readonly c: 'pong';
 }
 
-/** Sent by the host to mint a new pairing code for this room. */
+/**
+ * Sent by the host to register a pairing code for this room. The code is derived from the
+ * pairing secret (`docs/REMOTE-E2E.md`), so the relay no longer invents one.
+ */
 export interface PairFrame {
 	readonly c: 'pair';
+	readonly code: string;
 }
 
 /** Answers `pair` with the freshly minted code and its expiry. */
@@ -146,6 +150,19 @@ export interface DeviceConnectedFrame {
 	readonly firstConnect: boolean;
 }
 
+/**
+ * Sent by the relay to the host when a phone has claimed a pairing code: the phone's end-to-end
+ * public key and the proof it knew the pairing secret. The relay can neither check nor make the
+ * proof; the host does (`docs/REMOTE-E2E.md`).
+ */
+export interface DeviceClaimedFrame {
+	readonly c: 'deviceClaimed';
+	readonly deviceId: string;
+	readonly name: string;
+	readonly pub: string;
+	readonly mac: string;
+}
+
 /** The full control-frame vocabulary a `t: 'c'` envelope's `p` may hold. */
 export type ControlFrame =
 	| HelloFrame
@@ -161,12 +178,13 @@ export type ControlFrame =
 	| PushFrame
 	| ByeFrame
 	| DeviceConnectedFrame
+	| DeviceClaimedFrame
 	| HostStatusFrame;
 
 /** The full set of valid `ControlFrame['c']` values, used by {@link isControlFrame}. */
 const CONTROL_VERBS: ReadonlySet<string> = new Set([
 	'hello', 'welcome', 'resume', 'snapshotNeeded', 'ping', 'pong', 'pair', 'paired', 'revoke', 'revoked', 'push', 'bye',
-	'deviceConnected', 'hostStatus',
+	'deviceConnected', 'deviceClaimed', 'hostStatus',
 ]);
 
 /** Type guard for {@link Envelope}. Checks shape only — `p`'s inner shape is validated separately by `isControlFrame` when `t === 'c'`. */

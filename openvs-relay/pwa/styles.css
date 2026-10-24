@@ -924,6 +924,20 @@ h5.md-heading, h6.md-heading { font-size: 14px; color: var(--text-2); }
 	flex-direction: column;
 	gap: 8px;
 }
+.history-footer {
+	padding: 8px var(--gutter) calc(8px + env(safe-area-inset-bottom));
+	border-top: 1px solid var(--rule);
+}
+.unpair-btn {
+	min-height: var(--hit);
+	padding: 0 14px;
+	background: transparent;
+	color: var(--negative);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-control);
+	font: inherit;
+	font-size: var(--fs-small);
+}
 .history-empty { color: var(--text-2); font-size: var(--fs-small); padding: 8px 0; }
 .history-row {
 	display: flex;

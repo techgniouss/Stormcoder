@@ -186,7 +186,7 @@ const pairing = {
 {
 	const h = harness();
 	h.api.update({ enabled: true, connected: true, pairing: { ...pairing, expiresAt: Date.now() - 5_000 } });
-	assert.strictEqual(h.container.find('remote-pairing-expiry').textContent, 'Expired — request a new code.');
+	assert.strictEqual(h.container.find('remote-pairing-expiry').textContent, 'Expired — request a new pairing key.');
 }
 
 // 6. The expiry countdown reads from the injected clock, not the wall clock — so this test

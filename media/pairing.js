@@ -251,9 +251,15 @@
 
 			const card = el('div', 'remote-pairing-card');
 			card.appendChild(el('div', 'remote-pairing-title', 'Pair a device'));
-			card.appendChild(el('div', 'hint', 'Scan with the Stormcoder PWA, or enter the code by hand.'));
-			card.appendChild(buildQrSvg(pairing.url));
+			card.appendChild(el('div', 'hint', 'Scan with the Stormcoder PWA, or open the link on your phone. The pairing key never leaves this link.'));
+			try {
+				card.appendChild(buildQrSvg(pairing.url));
+			} catch {
+				// A long tunnel address can outgrow the small QR encoder: the link below still works.
+				card.appendChild(el('div', 'hint', 'The link is too long for a QR code. Copy the link below instead.'));
+			}
 
+			card.appendChild(el('div', 'hint', 'Pairing key'));
 			const codeRow = el('div', 'remote-pairing-code', pairing.code);
 			card.appendChild(codeRow);
 
@@ -291,7 +297,7 @@
 			function tick() {
 				const remainingMs = pairing.expiresAt - now();
 				if (remainingMs <= 0) {
-					expiry.textContent = 'Expired — request a new code.';
+					expiry.textContent = 'Expired — request a new pairing key.';
 					clearCountdown();
 					return;
 				}

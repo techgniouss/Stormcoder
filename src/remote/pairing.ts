@@ -31,11 +31,12 @@ export interface PairingResult extends PairingCode {
 }
 
 /**
- * Sends `{c: 'pair'}` and resolves with the relay's `paired` reply. Rejects if the relay never
+ * Sends `{c: 'pair', code}` (the code derived from the pairing secret) and resolves with the
+ * relay's `paired` reply. Rejects if the relay never
  * answers within {@link PAIR_TIMEOUT_MS} — a pairing UI has to be able to tell "still asking"
  * from "never got an answer" rather than hang forever.
  */
-export function requestPairing(socket: RemoteSocket): Promise<PairingCode> {
+export function requestPairing(socket: RemoteSocket, code: string): Promise<PairingCode> {
 	return new Promise<PairingCode>((resolve, reject) => {
 		let timer: ReturnType<typeof setTimeout>;
 		const subscription = socket.onMessage((envelope: Envelope) => {
@@ -50,17 +51,18 @@ export function requestPairing(socket: RemoteSocket): Promise<PairingCode> {
 			subscription.dispose();
 			reject(new Error('The relay did not answer the pairing request in time.'));
 		}, PAIR_TIMEOUT_MS);
-		socket.requestPairingCode();
+		socket.requestPairingCode(code);
 	});
 }
 
 /**
- * The URL a pairing QR code encodes: `<relayUrl>/p/<publicRoomId>#<code>`. The code lives in
- * the fragment, per the plan's "Auth" section — it never reaches a request line, a Worker log,
- * or a referrer header, since the fragment is never sent to the server at all.
+ * The URL a pairing QR code encodes: `<relayUrl>/p/<publicRoomId>#<pairingSecret>`. The secret
+ * (`docs/REMOTE-E2E.md`) lives in the fragment: it never reaches a request line, a Worker log,
+ * or a referrer header, since the fragment is never sent to the server at all. That is what
+ * keeps it from the relay, and so what makes the encryption end to end.
  */
-export function buildPairingUrl(relayUrl: string, publicRoomId: string, code: string): string {
-	return `${relayUrl.replace(/\/+$/, '')}/p/${encodeURIComponent(publicRoomId)}#${encodeURIComponent(code)}`;
+export function buildPairingUrl(relayUrl: string, publicRoomId: string, secret: string): string {
+	return `${relayUrl.replace(/\/+$/, '')}/p/${encodeURIComponent(publicRoomId)}#${encodeURIComponent(secret)}`;
 }
 
 /** How long {@link revokeDevice} waits for the relay's `revoked` ack before giving up. */
