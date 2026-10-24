@@ -29,8 +29,13 @@ if (provider !== 'oracle' && provider !== 'custom') {
 }
 
 const runs = [];
+// A rejected key or an unknown model fails every task the same way; running the other twelve
+// would only produce twelve identical errors, so the first one ends the benchmark.
+const AUTH_OR_MODEL_ERROR = /\b(401|403)\b|unauthori[sz]ed|invalid.{0,20}api.?key|incorrect api key|authentication|permission denied|model.{0,30}(not found|does not exist|not available)|no api key/i;
+let aborted;
 for (const task of tasks) {
-	for (let n = 1; n <= repeat; n++) {
+	if (aborted) { break; }
+	for (let n = 1; n <= repeat && !aborted; n++) {
 		process.stdout.write(`${task.id} #${n} ... `);
 		const ws = await materialize(task);
 		let oracle;
@@ -66,6 +71,8 @@ for (const task of tasks) {
 				answer: answer.slice(0, 600),
 			});
 			const r = runs.at(-1);
+			const fatal = r.errors.find(e => AUTH_OR_MODEL_ERROR.test(e));
+			if (fatal && !r.pass) { aborted = fatal; }
 			console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.steps} steps  ${r.toolCalls} tools  ${(r.ms / 1000).toFixed(0)}s${r.pass ? '' : '  ' + r.notes.join('; ').slice(0, 140)}`);
 		} catch (err) {
 			runs.push({ task: task.id, category: task.category, attempt: n, pass: false, notes: [`harness error: ${err instanceof Error ? err.message : String(err)}`], steps: 0, toolCalls: 0, toolErrors: 0, asked: 0, estInputTokens: 0, requests: 0, ms: 0, timedOut: false, errors: [], tools: {}, perPrompt: [], answer: '' });
@@ -76,6 +83,11 @@ for (const task of tasks) {
 			ws.dispose();
 		}
 	}
+}
+
+if (aborted) {
+	console.error(`\nStopped early: ${aborted}\nCheck the API key and model name, then run again. No results file was written.`);
+	process.exit(3);
 }
 
 const meta = { label: args.label ?? `${provider}${args.model ? ':' + args.model : ''}`, provider, model: args.model ?? null, approval: args.approval ?? 'yolo', repeat, date: new Date().toISOString() };

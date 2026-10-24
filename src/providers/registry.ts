@@ -52,6 +52,7 @@ const ENV_VARS: Record<string, string | undefined> = {
 	groq: 'GROQ_API_KEY',
 	mistral: 'MISTRAL_API_KEY',
 	cloudflare: 'CLOUDFLARE_API_TOKEN',
+	custom: 'CUSTOM_API_KEY',
 };
 
 /**

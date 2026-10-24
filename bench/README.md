@@ -17,7 +17,27 @@ check that inspects the result on disk. The model's own claims are never believe
 | a one-line change in a 900-function file | 11 |
 | starting a server, calling it, stopping it | 12 |
 
-## Run it
+## Quick start
+
+```sh
+node bench/start.mjs
+```
+
+It asks for the provider, model, API key (typed hidden, used for that run only, never saved) and
+how many times to repeat each task, builds the app if needed, runs everything, saves
+`bench/results/<label>-<time>.json`, and compares with your previous run. It stops after the
+first task if the key or model is rejected. Skip questions with flags, e.g. unattended:
+
+```sh
+ANTHROPIC_API_KEY=... node bench/start.mjs --provider anthropic --model claude-sonnet-5 --repeat 3 --yes
+node bench/start.mjs --provider custom --base-url http://localhost:11434/v1 --model qwen3-coder --yes
+node bench/start.mjs --provider oracle --yes        # no model: checks the benchmark itself
+```
+
+`--yes` asks nothing and uses defaults for anything missing (a missing API key is then an error).
+A server that needs a key for `--provider custom` reads `CUSTOM_API_KEY`.
+
+## Run it directly
 
 The runner drives the real engine (the dev host) over its WebSocket, the way the chat UI does.
 

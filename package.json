@@ -19,7 +19,8 @@
 		"dev:web": "npm run build && MJ_PORT=4800 node dist/dev-host.js",
 		"gen": "node scripts/gen-config.mjs",
 		"bench:validate": "node bench/validate.mjs",
-		"bench": "node bench/run.mjs"
+		"bench": "node bench/run.mjs",
+		"bench:go": "node bench/start.mjs"
 	},
 	"dependencies": {
 		"electron-updater": "^6.8.9",

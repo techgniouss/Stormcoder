@@ -15,7 +15,7 @@ Agent effectiveness audit.
 - Hooks: `openvsChat.hooks` runs commands before and after tool calls (`PreToolUse` exit code 2 blocks the call; `PostToolUse` exit code 2 feeds text back to the model).
 - Notebooks: `read_file` shows `.ipynb` as numbered cells and `edit_notebook` replaces, inserts or deletes a cell, keeping the file's format. `read_file` also shows pictures to vision models and reads PDFs through `pdftotext` when installed.
 - Sandbox: `openvsChat.agent.sandbox` (`workspace` or `workspace-offline`) runs commands in bubblewrap on Linux or `sandbox-exec` on macOS, read-only outside the workspace, temp and tool caches; secrets in the workspace stay read-only. Off by default; it fails closed when requested but unavailable.
-- Benchmark: `bench/` has 13 tasks with objective checks, a headless runner over the real engine (`node bench/run.mjs --provider anthropic --model ...`), a comparison tool and a validator that proves the tasks can neither be passed untouched nor by known shortcuts. `npm run bench:validate` and a three-task oracle run are part of `npm test`.
+- Benchmark: `bench/` has 13 tasks with objective checks, a headless runner over the real engine (`node bench/run.mjs --provider anthropic --model ...`), a comparison tool and a validator that proves the tasks can neither be passed untouched nor by known shortcuts. `npm run bench:go` (or `node bench/start.mjs`) is a guided runner that asks for provider, model and key. `custom` providers can take a key from `CUSTOM_API_KEY`. `npm run bench:validate` and a three-task oracle run are part of `npm test`.
 - Tests: `scripts/test-discovery.mjs`; the browser test helper also finds `chrome-linux64`.
 
 ## 1.3.5
