@@ -176,6 +176,15 @@ const file = rel => path.join(ws, rel);
 	assert.match(secret.result, /credential/);
 	assert.equal((await tools.executeTool(call({ type: 'nope', text: 'x' }), approve, yolo)).isError, true);
 
+	// Switched off in Settings: nothing is saved and nothing is searched.
+	await vs.workspace.getConfiguration('stormcoder').update('memory.enabled', false);
+	const off = await tools.executeTool(call({ type: 'gotcha', text: 'A fact while memory is off.' }), approve, yolo);
+	assert.equal(off.isError, true);
+	assert.match(off.result, /turned off in Settings/);
+	assert.doesNotMatch(fs.readFileSync(file('.stormcoder/memory.md'), 'utf8'), /while memory is off/);
+	assert.match((await tools.executeTool({ id: '1', name: 'recall', args: { query: 'thing' } }, approve, yolo)).result, /not available/);
+	await vs.workspace.getConfiguration('stormcoder').update('memory.enabled', undefined);
+
 	assert.ok(tools.AGENT_TOOLS.some(t => t.name === 'remember'));
 	assert.ok(!tools.READ_ONLY_TOOL_NAMES.includes('remember'), 'Ask and Plan cannot save memory');
 }

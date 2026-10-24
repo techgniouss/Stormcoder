@@ -808,6 +808,9 @@ async function recallFacts(root: vscode.Uri, query: string, limit?: number): Pro
  * steer later sessions and the user gets the same say over it as over an edit.
  */
 async function rememberFact(root: vscode.Uri, type: string, text: string, approver: ToolApprover, g: Guardrails): Promise<ToolResult> {
+	if (vscode.workspace.getConfiguration('stormcoder').get<boolean>('memory.enabled') === false) {
+		return { result: 'Project memory is turned off in Settings, so nothing was saved. Tell the user if they asked you to remember something.', isError: true };
+	}
 	const clean = text.replace(/\s+/g, ' ').trim();
 	if (!autoApprovesWrites(g) && clean) {
 		const { approved, feedback } = await approver.confirm({

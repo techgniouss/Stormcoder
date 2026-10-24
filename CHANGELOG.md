@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Project memory can be switched off from Settings > General, with a setting for how many recent runs are listed. When it is off, nothing is added to new chats, `remember` saves nothing and `recall` searches nothing. The toggle is desktop-only (a paired phone cannot change it) and applies to chats started afterwards.
 - `recall` tool: a read-only keyword search over all saved project facts and the whole run journal, available in Ask and Plan as well as Agent. The prompt block carries only the newest items, so memory can grow well past it without costing tokens until the model asks. Results are ranked by matching words (newest first among equals) and capped at about 2,500 characters.
 - Project memory. A `remember` tool saves short typed facts to `.stormcoder/memory.md` (deduplicated, capped, never credentials, asks for approval like a file edit), every run that changes files is journaled in `.stormcoder/journal.jsonl`, and new chats start with the saved facts and the last few runs in the system prompt, at most about 1,500 tokens. The block is read once per chat so it does not break prompt caching, nothing is read in an untrusted workspace, and the folder is git-ignored by default. Settings: `stormcoder.memory.enabled`, `stormcoder.memory.recentRuns`. A legacy `.openvs/memory.md` is still read.
 - Fixed: Agent mode never attached its tool-activity digest to the transcript, so a follow-up turn did not know which files the previous run had read or changed. It does now.

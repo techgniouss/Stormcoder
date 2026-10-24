@@ -64,6 +64,20 @@ try {
 	await settings.getByRole('button', { name: 'Agent permissions' }).click();
 	await settings.locator('.area.active[data-area=permissions]').waitFor();
 
+	// Project memory can be switched off from Settings > General, and the choice is saved.
+	await settings.getByRole('button', { name: 'General' }).click();
+	await settings.locator('.area.active[data-area=general]').waitFor();
+	const memoryToggle = settings.locator('#enableMemory');
+	assert.equal(await memoryToggle.isChecked(), true, 'memory is on by default');
+	await memoryToggle.uncheck();
+	const settingsFile = path.join(host.data, 'settings.json');
+	for (let i = 0; i < 50 && !(fs.existsSync(settingsFile) && JSON.parse(fs.readFileSync(settingsFile, 'utf8'))['stormcoder.memory.enabled'] === false); i++) { await new Promise(r => setTimeout(r, 100)); }
+	assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8'))['stormcoder.memory.enabled'], false, 'turning memory off is saved');
+	assert.equal(await settings.locator('#memoryRecentRunsInput').isDisabled(), true, 'the runs count is greyed out while memory is off');
+	await memoryToggle.check();
+	for (let i = 0; i < 50 && JSON.parse(fs.readFileSync(settingsFile, 'utf8'))['stormcoder.memory.enabled'] !== true; i++) { await new Promise(r => setTimeout(r, 100)); }
+	assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8'))['stormcoder.memory.enabled'], true, 'turning it back on is saved');
+
 	// 4. The palette opens and filters.
 	await page.keyboard.press('Control+k');
 	await page.fill('#paletteInput', 'mcp');

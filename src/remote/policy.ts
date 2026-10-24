@@ -127,6 +127,8 @@ export const REMOTE_DENIED: readonly string[] = [
 	'setMaxSteps',
 	'setMaxRunMinutes',
 	'setDecompose',
+	'setMemoryEnabled',
+	'setMemoryRecentRuns',
 	'attachContext',
 	// Opens VS Code's file dialog on the desktop — which the remote user can't see — and reads
 	// local files. A phone attaches its own images through `attachImage` instead.

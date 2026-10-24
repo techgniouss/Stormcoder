@@ -72,7 +72,7 @@
 	/** Current agent approval level (synced from `stormcoder.guardrails.approval`). */
 	let approval = 'auto-edits';
 	/** Mirrors `stormcoder.systemPrompt` / `maxTokens` / `rules` / `agent.max*`, synced on every 'config'. */
-	let generalConfig = { systemPrompt: '', maxTokens: 8192, rules: '', maxSteps: 100, maxRunMinutes: 30 };
+	let generalConfig = { systemPrompt: '', maxTokens: 8192, rules: '', maxSteps: 100, maxRunMinutes: 30, memoryEnabled: true, memoryRecentRuns: 5 };
 	/** @type {{ label: string, content: string } | null} */
 	let currentContext = null;
 	/** The DOM bubble of the active session's in-flight assistant turn (model of record is `session.pending`). */
@@ -166,6 +166,9 @@
 		saveMaxSteps: $('saveMaxSteps'),
 		maxRunMinutesInput: /** @type {HTMLInputElement} */ ($('maxRunMinutesInput')),
 		saveMaxRunMinutes: $('saveMaxRunMinutes'),
+		enableMemory: /** @type {HTMLInputElement} */ ($('enableMemory')),
+		memoryRecentRunsInput: /** @type {HTMLInputElement} */ ($('memoryRecentRunsInput')),
+		saveMemoryRecentRuns: $('saveMemoryRecentRuns'),
 		enableDecompose: /** @type {HTMLInputElement} */ ($('enableDecompose')),
 		enableReview: /** @type {HTMLInputElement} */ ($('enableReview')),
 		messages: $('messages'),
@@ -1256,6 +1259,11 @@
 		}
 		if (els.maxRunMinutesInput && document.activeElement !== els.maxRunMinutesInput) {
 			els.maxRunMinutesInput.value = String(generalConfig.maxRunMinutes);
+		}
+		if (els.enableMemory) { els.enableMemory.checked = !!generalConfig.memoryEnabled; }
+		if (els.memoryRecentRunsInput && document.activeElement !== els.memoryRecentRunsInput) {
+			els.memoryRecentRunsInput.value = String(generalConfig.memoryRecentRuns);
+			els.memoryRecentRunsInput.disabled = !generalConfig.memoryEnabled;
 		}
 		els.providerList.innerHTML = '';
 		for (const p of providers) {
@@ -2519,6 +2527,20 @@
 		generalConfig.maxRunMinutes = n;
 		vscode.postMessage({ type: 'setMaxRunMinutes', maxRunMinutes: n });
 	});
+	els.enableMemory?.addEventListener('change', () => {
+		generalConfig.memoryEnabled = els.enableMemory.checked;
+		els.memoryRecentRunsInput.disabled = !generalConfig.memoryEnabled;
+		vscode.postMessage({ type: 'setMemoryEnabled', memoryEnabled: els.enableMemory.checked });
+	});
+	els.saveMemoryRecentRuns?.addEventListener('click', () => {
+		const n = parseInt(els.memoryRecentRunsInput.value, 10);
+		if (!Number.isFinite(n) || n < 0 || n > 20) {
+			showNotice('Recent runs must be a number from 0 to 20.', true);
+			return;
+		}
+		generalConfig.memoryRecentRuns = n;
+		vscode.postMessage({ type: 'setMemoryRecentRuns', memoryRecentRuns: n });
+	});
 	els.modelSelect.addEventListener('change', () => {
 		updateModeAvailability();
 		vscode.postMessage({ type: 'setModel', provider: selectedProvider, model: els.modelSelect.value });
@@ -2785,6 +2807,8 @@
 				if (typeof msg.rules === 'string') { generalConfig.rules = msg.rules; }
 				if (typeof msg.maxSteps === 'number') { generalConfig.maxSteps = msg.maxSteps; }
 				if (typeof msg.maxRunMinutes === 'number') { generalConfig.maxRunMinutes = msg.maxRunMinutes; }
+				if (typeof msg.memoryEnabled === 'boolean') { generalConfig.memoryEnabled = msg.memoryEnabled; }
+				if (typeof msg.memoryRecentRuns === 'number') { generalConfig.memoryRecentRuns = msg.memoryRecentRuns; }
 				// Auto stays local-only (the host never persists it as `defaultProvider`), so it's
 				// never touched here. Otherwise, always follow the host's `selectedProvider`: it's
 				// the one shared setting every connected client (this tab, a detached Settings

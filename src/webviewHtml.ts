@@ -55,6 +55,14 @@ export const CHAT_APP_HTML = `
 					<input id="maxRunMinutesInput" type="number" min="1" step="1" class="settings-number" />
 					<button id="saveMaxRunMinutes" class="mini-button">Save</button>
 				</div>
+				<label class="field-label" for="enableMemory">Project memory</label>
+				<label class="review-toggle"><input type="checkbox" id="enableMemory" /> Remember this project between chats</label>
+				<p class="hint">New chats start with facts the agent saved earlier and a short list of recent runs that changed files, about 1,500 tokens at most. Applies to chats you start after changing it. Files live in <code>.stormcoder/</code> and are git-ignored by default; nothing is read in an untrusted folder.</p>
+				<label class="field-label" for="memoryRecentRunsInput">Recent runs listed at the start of a chat</label>
+				<div class="settings-row">
+					<input id="memoryRecentRunsInput" type="number" min="0" max="20" step="1" class="settings-number" />
+					<button id="saveMemoryRecentRuns" class="mini-button">Save</button>
+				</div>
 			</div>
 			</div>
 

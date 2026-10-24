@@ -183,6 +183,8 @@ interface WebviewToHost {
 	content?: string;
 	role?: string;
 	reviewEnabled?: boolean;
+	memoryEnabled?: boolean;
+	memoryRecentRuns?: number;
 	inline?: boolean;
 	/** `applyEdit` only: which stored proposal to apply (see `ChatViewProvider.editProposals`). */
 	proposalId?: string;
@@ -1668,6 +1670,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				if (typeof message.maxRunMinutes === 'number' && Number.isFinite(message.maxRunMinutes) && message.maxRunMinutes > 0) {
 					await vscode.workspace.getConfiguration('stormcoder').update(
 						'agent.maxRunMinutes', Math.floor(message.maxRunMinutes), vscode.ConfigurationTarget.Global);
+				}
+				break;
+			case 'setMemoryEnabled':
+				await vscode.workspace.getConfiguration('stormcoder').update(
+					'memory.enabled', !!message.memoryEnabled, vscode.ConfigurationTarget.Global);
+				await this.postConfig();
+				break;
+			case 'setMemoryRecentRuns':
+				if (typeof message.memoryRecentRuns === 'number' && Number.isFinite(message.memoryRecentRuns)) {
+					await vscode.workspace.getConfiguration('stormcoder').update(
+						'memory.recentRuns', Math.min(20, Math.max(0, Math.floor(message.memoryRecentRuns))), vscode.ConfigurationTarget.Global);
+					await this.postConfig();
 				}
 				break;
 			case 'setDecompose':
@@ -3894,6 +3908,8 @@ ${context.content}` }
 			rules: cfg.get<string>('rules') ?? '',
 			maxSteps: cfg.get<number>('agent.maxSteps') ?? 100,
 			maxRunMinutes: cfg.get<number>('agent.maxRunMinutes') ?? 30,
+			memoryEnabled: cfg.get<boolean>('memory.enabled') !== false,
+			memoryRecentRuns: cfg.get<number>('memory.recentRuns') ?? 5,
 		});
 		await this.postSkills();
 		this.pushAvailableModels(providers);
