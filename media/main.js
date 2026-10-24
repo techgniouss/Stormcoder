@@ -1158,17 +1158,6 @@
 	/** Sentinel value of the "Custom model id…" entry in an Auto-Routing model picker. */
 	const CUSTOM_MODEL = '__custom__';
 
-	/** Model ids to offer for a provider: the live-fetched catalog wins once it exists,
-	 * falling back to the small hardcoded `suggestedModels` list before anything has been
-	 * fetched. Shared by the main model select and the Auto-Routing role datalists so both
-	 * show the same (real) catalog instead of the latter being stuck on 1-2 suggestions. */
-	function providerModelIds(providerId) {
-		const live = fetchedModels[providerId];
-		if (live && live.length) { return live.map(e => e.id); }
-		const p = providers.find(x => x.id === providerId);
-		return (p && p.suggestedModels) || [];
-	}
-
 	/** Accepts entries or bare id strings (older host builds) and normalizes to entries. */
 	function normalizeModelEntries(models) {
 		return (models || [])
@@ -1549,7 +1538,9 @@
 				modelSel.disabled = false;
 				const p = providers.find(x => x.id === providerId);
 				const live = fetchedModels[providerId] || [];
-				const ids = providerModelIds(providerId);
+				// Only what the provider reports: hardcoded suggestions can name models the account
+				// does not have, and a pinned role never substitutes them.
+				const ids = live.map(e => e.id);
 				const add = (id, label) => {
 					const o = document.createElement('option');
 					o.value = id;
@@ -1569,11 +1560,17 @@
 					add(id, id + (modelSupportsTools(p, id) ? '  · tools' : '') + (entry && entry.free ? '  · free' : ''));
 				}
 				add(CUSTOM_MODEL, 'Custom model id…');
+				// A provider switch has no model yet; take the first one the catalog reports as
+				// soon as it arrives, so the row is never left pinned to nothing.
+				if (!pinnedModel && ids.length) {
+					pinnedModel = ids[0];
+					save();
+				}
 				modelSel.value = pinnedModel || '';
 				if (modelSel.value !== pinnedModel) { modelSel.selectedIndex = -1; }
 				modelSel.title = modelErrors[providerId]
-					? `Couldn't load models: ${modelErrors[providerId]} — showing suggested models`
-					: (live.length ? `${live.length} models from ${p ? p.label : providerId}` : 'Suggested models — the live catalog has not loaded yet');
+					? `Couldn't load models: ${modelErrors[providerId]}`
+					: (live.length ? `${live.length} models from ${p ? p.label : providerId}` : 'Loading the live catalog…');
 			};
 			const ensureLiveModels = (providerId) => {
 				if (!providerId || fetchedModels[providerId]) { return; }
@@ -1593,7 +1590,7 @@
 				// `anthropic:meta/llama-3.3-70b-instruct` 404s on the first request of every
 				// Auto run and, being pinned, is never substituted. Keep it only if the new
 				// provider offers it too, else take that provider's first model.
-				const offered = providerModelIds(provSel.value);
+				const offered = (fetchedModels[provSel.value] || []).map(e => e.id);
 				if (!provSel.value || !offered.includes(pinnedModel)) {
 					pinnedModel = provSel.value ? (offered[0] || '') : '';
 				}

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Auto Routing pickers (plan, code, review) list only the models the provider reports, loaded live like the chat model picker. The hardcoded suggestions are no longer shown, and switching provider pins the first live model once the catalog arrives.
 Agent effectiveness audit.
 
 - Code discovery: `search_files` and `glob_files` now honour `.gitignore`, walk breadth-first (project source before deep trees) and skip `venv`, `env`, `site-packages`, `Pods`, `obj`, `.terraform` and similar. In a Python project with a `venv/`, searching for a symbol that existed returned "No matches". `search_files` also takes `caseSensitive`, `context` and `filesOnly`.
