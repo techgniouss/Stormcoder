@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import { HookSpec, loadHooks } from './hooks';
+import { SandboxMode, parseSandboxMode } from './sandbox';
 
 /**
  * When the agent stops for permission, laxest last:
@@ -108,6 +110,12 @@ export interface Guardrails {
 	readonly parallelReads: boolean;
 	/** Shell `run_command` executes through; empty means the platform default. */
 	readonly shell: string;
+	/** `openvsChat.hooks`: commands run before and after tool calls. Absent means none. */
+	readonly hooks?: readonly HookSpec[];
+	/** `openvsChat.agent.sandbox`: run commands inside an OS sandbox. Absent means off. */
+	readonly sandbox?: SandboxMode;
+	/** `openvsChat.agent.sandboxWritablePaths`: extra folders a sandboxed command may write. */
+	readonly sandboxWritablePaths?: readonly string[];
 }
 
 /**
@@ -196,6 +204,9 @@ export function loadGuardrails(): Guardrails {
 		parallelResearch: cfg.get<boolean>('agent.parallelResearch') ?? true,
 		parallelReads: cfg.get<boolean>('agent.parallelReads') ?? true,
 		shell: cfg.get<string>('agent.shell')?.trim() ?? '',
+		hooks: loadHooks(),
+		sandbox: parseSandboxMode(cfg.get<string>('agent.sandbox')),
+		sandboxWritablePaths: cfg.get<string[]>('agent.sandboxWritablePaths') ?? [],
 	};
 }
 

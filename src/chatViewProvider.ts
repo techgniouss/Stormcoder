@@ -10,7 +10,7 @@ import { WorkLog } from './agent/workLog';
 import { thinkingStyle } from './providers/anthropic';
 import { streamBudgeted } from './agent/budgetedStream';
 import { describeRestore, FileWrite, RunCheckpoint } from './agent/checkpoint';
-import { CACHED_COMPACT_TRIGGER, COMPACT_MARKER, COMPACT_TRIGGER, SUMMARY_MAX_TOKENS, compactMessages, shouldCompact } from './agent/compaction';
+import { CACHED_COMPACT_TRIGGER, COMPACT_MARKER, COMPACT_TRIGGER, SUMMARY_MAX_TOKENS, canCompact, compactMessages, shouldCompact } from './agent/compaction';
 import { contextTurn, estimateTokens, needsCompactPrompt, unfittableRequest, withSystemPrompt } from './agent/context';
 import { contextWindowFor, requestBudgets } from './agent/contextWindow';
 import { APPROVAL_POLICIES, ApprovalPolicy, applyApprovalFloor, Guardrails, loadGuardrails, parseApprovalPolicy, RunOrigin } from './agent/guardrails';
@@ -2623,6 +2623,63 @@ ${context.content}` }
 	}
 
 	/**
+	 * `/compact`: summarizes the tab's older turns now, with the model the tab is set to, using
+	 * the same summarizer and store arithmetic as the automatic path in {@link compactHistory}.
+	 */
+	private async compactSession(sessionId: string, origin: string): Promise<void> {
+		const say = (message: string) => this.bus.postTo(origin, { type: 'info', sessionId, message });
+		const session = this.sessionStore.getSession(sessionId);
+		if (!session) {
+			return;
+		}
+		if (this.activeRequests.has(sessionId)) {
+			say('A run is in progress in this tab; compact once it finishes.');
+			return;
+		}
+		const providerId = session.provider && session.provider !== AUTO_PROVIDER ? session.provider : this.registry.getDefaultProviderId();
+		const provider = this.registry.getProvider(providerId);
+		if (!provider) {
+			say(`Unknown provider: ${providerId}`);
+			return;
+		}
+		const model = session.model?.trim() || this.registry.getModel(providerId);
+		const history = this.sanitizeHistory(this.sessionStore.sendableMessages(sessionId));
+		// Shaped like an assembled request ([system, …history]) so `replaced` lands in the terms
+		// the store's arithmetic expects — see SessionStore.applyCompaction.
+		const assembled: ChatMessage[] = [{ role: 'system', content: '' }, ...history];
+		const controller = new AbortController();
+		const params = {
+			model,
+			apiKey: (await this.registry.getApiKey(providerId)) ?? '',
+			baseUrl: this.registry.getBaseUrl(providerId),
+			maxTokens: this.effectiveMaxTokens('ask', false, providerId, model),
+			signal: controller.signal,
+		};
+		const trimBudget = this.configuredContextTokens(model, params.maxTokens, providerId);
+		if (!canCompact(assembled, 2)) {
+			say('Not enough conversation to compact yet.');
+			return;
+		}
+		say('Compacting this conversation…');
+		const res = await compactMessages(assembled, async (toSummarize, maxTokens) => {
+			let text = '';
+			await withProviderResilience(this.registry, providerId, model, async apiKey => {
+				await provider.streamChat({ ...params, apiKey, messages: toSummarize, maxTokens, onToken: delta => { text += delta; } });
+			});
+			return stripThinking(text);
+		}, 2, Math.max(1_000, trimBudget - SUMMARY_MAX_TOKENS));
+		if (!res) {
+			say('Could not compact the conversation (the summarizer failed). Nothing was changed.');
+			return;
+		}
+		const summary = res.messages.find(m => m.content.startsWith(COMPACT_MARKER))?.content ?? '';
+		this.sessionStore.applyCompaction(sessionId, summary, res.replaced);
+		this.persistSessionState();
+		this.bus.postTo(origin, { type: 'compacted', sessionId, summary, replaced: res.replaced });
+		say(`Compacted ${res.replaced} earlier message(s) (~${Math.round(res.before / 1000)}k → ~${Math.round(res.after / 1000)}k tokens).`);
+	}
+
+	/**
 	 * Wires {@link SlashEffects} to the same private handlers each dispatcher case already
 	 * uses, so a slash command and the equivalent standalone message can never disagree about
 	 * what it does. `skillsSnapshot` is resolved by the caller (`handleSlashCommand`) rather
@@ -2680,6 +2737,7 @@ ${context.content}` }
 			},
 			openMcpSettings: () => { this.openSettingsWindow(); },
 			reply: text => { this.bus.postTo(origin, { type: 'info', sessionId, message: text }); },
+			compact: () => { void this.compactSession(sessionId, origin); },
 			undoRun: () => { void this.undoLastRun(sessionId, origin); },
 			listSkills: () => skillsSnapshot,
 		};

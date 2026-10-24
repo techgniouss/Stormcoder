@@ -812,6 +812,7 @@
           },
           "default": [
             ".openvs/rules.md",
+            ".openvs/memory.md",
             "AGENTS.md",
             "CLAUDE.md",
             ".github/copilot-instructions.md",
@@ -882,6 +883,34 @@
           },
           "default": [],
           "description": "%config.guardrails.allowedCommands%"
+        },
+        "openvsChat.agent.sandbox": {
+          "type": "string",
+          "enum": ["off", "workspace", "workspace-offline"],
+          "enumDescriptions": ["%config.agent.sandbox.off%", "%config.agent.sandbox.workspace%", "%config.agent.sandbox.offline%"],
+          "default": "off",
+          "description": "%config.agent.sandbox%"
+        },
+        "openvsChat.agent.sandboxWritablePaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "%config.agent.sandboxWritablePaths%"
+        },
+        "openvsChat.hooks": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "properties": {
+              "event": { "type": "string", "enum": ["PreToolUse", "PostToolUse"] },
+              "matcher": { "type": "string" },
+              "command": { "type": "string" },
+              "timeoutMs": { "type": "number" }
+            },
+            "required": ["event", "command"]
+          },
+          "description": "%config.hooks%"
         },
         "openvsChat.guardrails.protectedPaths": {
           "type": "array",

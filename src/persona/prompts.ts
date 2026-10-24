@@ -121,7 +121,8 @@ export function modeDoctrine(mode: PersonaMode, opts: ModeOptions): string {
 			`- Delegate with spawn_subagent only for work that is large or independent: several readOnly:true research delegates issued in the same step run in parallel, and a write-capable one isolates a self-contained chunk. A delegate sees nothing of this conversation, so give it a standalone goal (paths, what to find or change, what to report back), and read its summary critically — it can stop early. Do not delegate what two or three tool calls would settle.`,
 			`- After changing code, verify with run_command (typecheck, build, or tests) before declaring the task done. If verification fails, fix it — do not hand back a broken state.`,
 			`- When you need a decision that is genuinely the user's — an ambiguous requirement, a real trade-off between approaches — call ask_user with 2-4 concrete options and wait. Never write the question as prose and stop; nobody is prompted to answer that. Everything you can settle by reading the code, settle yourself.`,
-			`- When done, summarize what changed (files and why) and how it was verified.`,
+			`- Memory: .openvs/memory.md is loaded into every future conversation in this project. When the user asks you to remember something, or you learn a durable fact that would save the next session time (a build quirk, a convention, a command that must be run a certain way), append one short line to that file with edit_file or write_file. Never store secrets, and do not log routine progress there.`,
+		`- When done, summarize what changed (files and why) and how it was verified.`,
 			TASKS,
 		];
 		if (think) {

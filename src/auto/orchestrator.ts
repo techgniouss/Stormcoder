@@ -799,6 +799,10 @@ export function recordChangeStart(sink: ChangeSink, raw: ToolCall): void {
 		const path = asString(call.args.path);
 		sink.pending?.set(raw.id, `Wrote \`${path}\`:\n\`\`\`\n${truncate(asString(call.args.content), 2000)}\n\`\`\``);
 	}
+	if (call.name === 'edit_notebook') {
+		const path = asString(call.args.path);
+		sink.pending?.set(raw.id, `Edited notebook \`${path}\` (${asString(call.args.op) || 'replace'} cell ${asString(call.args.cell)}):\n\`\`\`\n${truncate(asString(call.args.source), 1500)}\n\`\`\``);
+	}
 	if (call.name === 'edit_file') {
 		const path = asString(call.args.path);
 		// `edits` is canonical after normalization; a single-edit call is the one-element case.

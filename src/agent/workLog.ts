@@ -41,6 +41,9 @@ export class WorkLog {
 			case 'edit_file':
 				line = `edited ${path}${flag}`;
 				break;
+			case 'edit_notebook':
+				line = `edited notebook ${path} (cell ${String(call.args.cell ?? '?')})${flag}`;
+				break;
 			case 'search_files':
 				line = `searched for "${String(call.args.query ?? '').slice(0, 60)}"${flag}`;
 				break;

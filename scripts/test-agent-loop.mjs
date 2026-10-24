@@ -2329,7 +2329,7 @@ async function runAuto(agentSteps, { maxSteps = 20, history = [{ role: 'user', c
 	await new AgentRunner(provider, approver, 3, { mcp, maxContextTokens: 5_400 })
 		.run([{ role: 'system', content: 'SYS' }, { role: 'user', content: 'go' }], params, noopCallbacks());
 	const result = sent[1][0];
-	assert.ok(result.startsWith('FIRST') && result.endsWith('LAST'), 'head and tail reach the model');
+	assert.ok(result.startsWith('FIRST') && result.endsWith('LAST'), 'head and tail reach the model: ' + JSON.stringify([result.slice(0, 20), result.slice(-60)]));
 	assert.match(result, /omitted to fit/);
 	assert.ok(result.length < 12_000, `sized to the budget: ${result.length}`);
 }

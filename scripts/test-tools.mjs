@@ -679,12 +679,12 @@ function reset(initial = {}, options = {}) {
 	const latin1 = new Uint8Array([0x63, 0x61, 0x66, 0xe9, 0x0a]); // "caf\xe9\n"
 	const origRead = vscodeStub.workspace.fs.readFile;
 	const origWrite = vscodeStub.workspace.fs.writeFile;
-	const raw = new Map([['/repo/img.png', bin], ['/repo/latin.txt', latin1]]);
+	const raw = new Map([['/repo/blob.dat', bin], ['/repo/latin.txt', latin1]]);
 	let wrote = false;
 	vscodeStub.workspace.fs.readFile = async u => raw.get(u.fsPath) ?? origRead(u);
 	vscodeStub.workspace.fs.writeFile = async (u, b) => { wrote = true; return origWrite(u, b); };
 	try {
-		const read = await run('read_file', { path: 'img.png' });
+		const read = await run('read_file', { path: 'blob.dat' });
 		assert.strictEqual(read.isError, true);
 		assert.match(read.result, /binary/);
 		const edit = await run('edit_file', { path: 'latin.txt', oldText: 'caf', newText: 'tea' });

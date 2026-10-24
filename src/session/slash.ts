@@ -25,6 +25,9 @@ export const SLASH_COMMANDS: readonly { cmd: string; desc: string }[] = [
 	{ cmd: 'mcp', desc: 'MCP server status — "add" registers, "reconnect" retries' },
 	{ cmd: 'history', desc: 'Reopen a previous conversation' },
 	{ cmd: 'undo', desc: 'Restore the files the last run in this tab changed' },
+	{ cmd: 'init', desc: 'Have the agent write an AGENTS.md describing this project' },
+	{ cmd: 'review', desc: 'Review the uncommitted changes (read-only)' },
+	{ cmd: 'compact', desc: 'Summarize older turns of this chat to free context' },
 	{ cmd: 'clear', desc: 'Clear this chat tab (saved to History)' },
 	{ cmd: 'help', desc: 'Show all slash commands' },
 ];
@@ -108,6 +111,8 @@ export interface SlashEffects {
 	mcpReconnect(): void;
 	/** Opens the detached Settings window, scrolled to the MCP section — bare `/mcp`'s effect. */
 	openMcpSettings(): void;
+	/** Summarizes this tab's older turns now instead of waiting for the context to fill (`/compact`). */
+	compact(): void;
 	/** Restores the files this tab's latest run changed (`/undo`). */
 	undoRun(): void;
 	/** Renders help/skills-list text back to whichever sink asked, via `bus.postTo`. */
@@ -131,6 +136,7 @@ export const SLASH_HELP_TEXT = [
 	'`/mcp` — MCP server status   ·   `/mcp add` — register a server   ·   `/mcp reconnect`',
 	'`/history` — reopen a previous conversation (also the 🕘 button; closed tabs are saved there)',
 	'`/undo` — restore the files the last run in this tab changed',
+	'`/init` — have the agent write an `AGENTS.md` for this project   ·   `/review` — review the uncommitted changes   ·   `/compact` — summarize older turns now',
 	'`/clear` — clear this chat tab (saved to History)   ·   `/help` — show this help',
 	'',
 	'**While a run is streaming**: keep typing! In Agent mode, Enter **steers** the live run; otherwise your message is **queued** and sent when the run finishes. The **+** tab button opens parallel chats.',
@@ -145,6 +151,17 @@ export function buildSkillsText(snapshot: SlashSkillsSnapshot): string {
 	}
 	return lines.join('\n');
 }
+
+/** The task `/init` hands the agent. */
+export const INIT_PROMPT = 'Analyze this repository and write an AGENTS.md at its root for future coding agents. '
+	+ 'Explore first (manifest files, directory layout, a few representative source files, existing README and CI config), then write a concise file covering: '
+	+ 'what the project is, the exact commands to build, test, lint and run it (verify each one exists), the directory layout, code style and conventions you actually observed, '
+	+ 'and any gotchas. Do not invent anything you did not see. If an AGENTS.md or CLAUDE.md already exists, improve it instead of replacing it.';
+
+/** The task `/review` hands the agent. */
+export const REVIEW_PROMPT = 'Review my uncommitted changes. Run `git status` and `git diff` (and `git diff --staged`), read the changed files where the diff lacks context, '
+	+ 'then report concrete problems: correctness bugs, missed edge cases, broken callers, missing tests, security issues. Cite `path:line`. '
+	+ 'Do not edit any files. If everything looks right, say so briefly.';
 
 /**
  * Host-side port of `handleSlash` at `media/main.js`. Dispatches a recognized command through
@@ -198,6 +215,20 @@ export function runSlash(text: string, effects: SlashEffects, remote = false): S
 	if (cmd === 'clear') {
 		effects.clearSession();
 		return { handled: true };
+	}
+	if (cmd === 'compact') {
+		effects.compact();
+		return { handled: true };
+	}
+	if (cmd === 'init') {
+		// An ordinary Agent run with a canned task: it can read the repo and write the file,
+		// under whatever approval policy is in force.
+		effects.setMode('agent');
+		return { handled: true, sendRest: INIT_PROMPT };
+	}
+	if (cmd === 'review') {
+		effects.setMode('agent');
+		return { handled: true, sendRest: rest ? `${REVIEW_PROMPT}\n\nFocus: ${rest}` : REVIEW_PROMPT };
 	}
 	if (cmd === 'undo') {
 		// Allowed remotely, unlike the other commands that touch this instance's files: it can

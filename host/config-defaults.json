@@ -81,6 +81,7 @@
 		"openvsChat.rules": "",
 		"openvsChat.ruleFiles": [
 			".openvs/rules.md",
+			".openvs/memory.md",
 			"AGENTS.md",
 			"CLAUDE.md",
 			".github/copilot-instructions.md",
@@ -121,6 +122,9 @@
 			"\\btee\\b[^;&|\\n]*(\\.env(\\.[\\w-]+)?|\\.pem|\\.key|id_rsa|\\.ssh/|\\.git/)"
 		],
 		"openvsChat.guardrails.allowedCommands": [],
+		"openvsChat.agent.sandbox": "off",
+		"openvsChat.agent.sandboxWritablePaths": [],
+		"openvsChat.hooks": [],
 		"openvsChat.guardrails.protectedPaths": [
 			".git",
 			".env",
@@ -586,6 +590,28 @@
 		"openvsChat.guardrails.allowedCommands": {
 			"type": "array",
 			"description": "%config.guardrails.allowedCommands%"
+		},
+		"openvsChat.agent.sandbox": {
+			"type": "string",
+			"enum": [
+				"off",
+				"workspace",
+				"workspace-offline"
+			],
+			"enumDescriptions": [
+				"%config.agent.sandbox.off%",
+				"%config.agent.sandbox.workspace%",
+				"%config.agent.sandbox.offline%"
+			],
+			"description": "%config.agent.sandbox%"
+		},
+		"openvsChat.agent.sandboxWritablePaths": {
+			"type": "array",
+			"description": "%config.agent.sandboxWritablePaths%"
+		},
+		"openvsChat.hooks": {
+			"type": "array",
+			"description": "%config.hooks%"
 		},
 		"openvsChat.guardrails.protectedPaths": {
 			"type": "array",

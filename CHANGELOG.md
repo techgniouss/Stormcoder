@@ -10,6 +10,11 @@ Agent effectiveness audit.
 - Safety: the default approval policy is `auto-edits` (commands ask). The deny-list now covers `git reset --hard`, `git clean -f`, `git checkout -- .`, interpreter one-liners that delete trees, `npm/cargo publish`, piping secrets or files to `curl`/`nc`, and shell writes to `.env`, `*.pem`, `*.key`, `.git/` and `.ssh/`.
 - `run_command` takes `background: true` for servers and watchers, with a new `command_output` tool to read or stop them. New `web_search` tool (DuckDuckGo, through the same per-host approval as `fetch_url`).
 - `CLAUDE.md` is read as a rules file by default. Anthropic models get a 16k output allowance when `maxTokens` is left at the 8192 default.
+- Slash commands: `/init` (the agent writes an `AGENTS.md`), `/review` (read-only review of uncommitted changes) and `/compact` (summarize older turns now).
+- Per-directory rules: a subfolder's `AGENTS.md` / `CLAUDE.md` is delivered the first time the agent touches a file under it. `.openvs/memory.md` is loaded into every conversation, and the agent is told to append durable project facts to it.
+- Hooks: `openvsChat.hooks` runs commands before and after tool calls (`PreToolUse` exit code 2 blocks the call; `PostToolUse` exit code 2 feeds text back to the model).
+- Notebooks: `read_file` shows `.ipynb` as numbered cells and `edit_notebook` replaces, inserts or deletes a cell, keeping the file's format. `read_file` also shows pictures to vision models and reads PDFs through `pdftotext` when installed.
+- Sandbox: `openvsChat.agent.sandbox` (`workspace` or `workspace-offline`) runs commands in bubblewrap on Linux or `sandbox-exec` on macOS, read-only outside the workspace, temp and tool caches; secrets in the workspace stay read-only. Off by default; it fails closed when requested but unavailable.
 - Tests: `scripts/test-discovery.mjs`; the browser test helper also finds `chrome-linux64`.
 
 ## 1.3.5

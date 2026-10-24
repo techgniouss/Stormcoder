@@ -28,6 +28,12 @@ export interface ChatImage {
 	readonly mimeType: string;
 	/** Base64-encoded image data, without the `data:...;base64,` prefix. */
 	readonly data: string;
+	/**
+	 * What this image costs the model, when that is known better than its encoded size says.
+	 * Providers bill an image by its pixels, not its bytes; the size-based estimate is for user
+	 * attachments, which arrive already shrunk.
+	 */
+	readonly estimatedTokens?: number;
 }
 
 /**
