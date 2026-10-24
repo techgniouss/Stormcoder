@@ -4157,6 +4157,8 @@ ${context.content}` }
 			maxRunMinutes: cfg.get<number>('agent.maxRunMinutes') ?? 30,
 			memoryEnabled: cfg.get<boolean>('memory.enabled') !== false,
 			memoryRecentRuns: cfg.get<number>('memory.recentRuns') ?? 5,
+			// Shown on a paired phone ("Connected · project"): which desktop and folder it is driving.
+			workspaceName: (vscode.workspace.workspaceFolders?.[0]?.name ?? '').slice(0, 60),
 		});
 		await this.postSkills();
 		this.pushAvailableModels(providers);

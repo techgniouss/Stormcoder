@@ -123,7 +123,7 @@ function renderOne(content, extra = {}) {
 	const body = bodyOf(renderOne('before\n```js\nconsole.log(1);\n```\nafter'));
 	assert.deepEqual(body.children.map(n => n.tagName), ['p', 'pre', 'p']);
 	const pre = body.children[1];
-	assert.deepEqual(shape(pre), [{ tag: 'span', text: 'js' }, { tag: 'code', text: 'console.log(1);' }]);
+	assert.deepEqual(shape(pre), [{ tag: 'span', text: 'js' }, { tag: 'code', text: 'console.log(1);' }, { tag: 'button', text: 'Copy' }]);
 	assert.equal(body.children[2].textContent, 'after');
 }
 
@@ -207,7 +207,7 @@ function renderOne(content, extra = {}) {
 	const group = container.children[1].children.find(c => c.className === 'tool-group');
 	const row = group.children[0];
 	assert.equal(row.className, 'tool tool-done');
-	assert.match(row.textContent, /read_file/);
+	assert.match(row.textContent, /^Read/, 'a finished tool reads as a verb, not its id');
 	assert.match(row.textContent, /src\/a\.ts/);
 	assert.match(row.textContent, /2 lines/);
 	assert.equal(argHint({ command: 'npm   test' }), 'npm test');

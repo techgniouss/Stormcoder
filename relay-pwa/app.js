@@ -126,6 +126,8 @@ const els = {
 	attachActiveBtn: document.getElementById('attachActiveBtn'),
 	pairForm: document.getElementById('pairForm'),
 	scanBtn: document.getElementById('scanBtn'),
+	modeSeg: document.getElementById('modeSeg'),
+	pairScreenRoot: document.getElementById('pairScreen'),
 	pairCode: /** @type {HTMLInputElement} */ (document.getElementById('pairCode')),
 	pairError: document.getElementById('pairError'),
 	app: document.getElementById('app'),
@@ -735,6 +737,8 @@ function sessionFor(msg) {
 function renderTabs() {
 	if (!els.tabs) { return; }
 	els.tabs.replaceChildren();
+	// One chat needs no strip: the header already says where this is, and the space goes to the chat.
+	if (sessions.length < 2) { return; }
 	for (const session of sessions) {
 		// A wrapper div, not a button: it holds two independently-clickable controls
 		// (switch, close), and a button can't nest a button per HTML's interactive-content rule.
@@ -764,7 +768,8 @@ function renderTabs() {
 			closeSession(session.id);
 		});
 		tab.appendChild(title);
-		tab.appendChild(close);
+		// Only the chat being read can be closed, so a thumb aimed at another tab cannot close it.
+		if (session.id === activeSessionId) { tab.appendChild(close); }
 		els.tabs.appendChild(tab);
 		if (session.id === activeSessionId && typeof tab.scrollIntoView === 'function') {
 			tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -837,7 +842,7 @@ function renderChrome() {
 	const session = activeSession();
 	if (!session) { return; }
 	if (els.todos) { renderTodos(els.todos, session.todos || []); }
-	if (els.modeSelect) { els.modeSelect.value = session.mode || 'ask'; }
+	if (els.modeSelect) { els.modeSelect.value = session.mode || 'ask'; syncModeSeg(); }
 	if (els.stopBtn) { els.stopBtn.hidden = !session.streaming; }
 	if (els.composer) {
 		els.composer.placeholder = session.streaming
@@ -961,6 +966,8 @@ function clearOptions(select) {
 
 function renderProviderSelect() {
 	if (!els.providerSelect) { return; }
+	// With one provider there is nothing to choose, so the control is not shown.
+	els.providerSelect.hidden = providers.length < 2;
 	clearOptions(els.providerSelect);
 	for (const provider of providers) {
 		// A provider with no credential can't answer; say so in the list rather than let a pick
@@ -1174,6 +1181,32 @@ function closeHistoryPanel() {
 	els.historyPanel.hidden = true;
 }
 
+/** Draws the Ask / Plan / Agent segmented control; the hidden `#modeSelect` stays the source of truth. */
+function buildModeSeg() {
+	if (!els.modeSeg || !els.modeSelect) { return; }
+	for (const option of [...els.modeSelect.querySelectorAll('option')]) {
+		const button = el('button', 'seg-btn', option.textContent || option.value);
+		button.type = 'button';
+		button.setAttribute('role', 'radio');
+		button.dataset.mode = option.value;
+		button.addEventListener('click', () => {
+			if (!els.modeSelect || els.modeSelect.value === option.value) { return; }
+			els.modeSelect.value = option.value;
+			els.modeSelect.dispatchEvent(new Event('change'));
+		});
+		els.modeSeg.appendChild(button);
+	}
+	syncModeSeg();
+}
+
+/** Marks the segment matching the select's value. */
+function syncModeSeg() {
+	if (!els.modeSeg || !els.modeSelect) { return; }
+	for (const button of els.modeSeg.querySelectorAll('.seg-btn')) {
+		button.setAttribute('aria-checked', String(/** @type {HTMLElement} */ (button).dataset.mode === els.modeSelect.value));
+	}
+}
+
 function historyPanelOpen() {
 	return !!els.historyPanel && !els.historyPanel.hidden;
 }
@@ -1264,6 +1297,9 @@ function loadEarlier() {
 }
 
 /** The steady-state status line once the relay has welcomed this device — see {@link hostOnline}. */
+/** The desktop's folder name, from the host's `config`: shown beside "Connected" so the phone names what it is driving. */
+let workspaceName = '';
+
 function refreshStatus() {
 	if (!ws || ws.readyState !== WebSocket.OPEN) { return; }
 	if (!e2eKeys) {
@@ -1271,13 +1307,19 @@ function refreshStatus() {
 	} else if (hostOnline === false) {
 		setStatus('Stormcoder is closed on your computer — open it to continue', 'status-warn');
 	} else {
-		setStatus('Connected', 'status-ok');
+		setStatus('Connected', 'status-ok', workspaceName);
 	}
 }
 
-function setStatus(text, className) {
+/**
+ * @param {string} text
+ * @param {string} [className]
+ * @param {string} [scope] what the status is about (the desktop's folder), muted after the text
+ */
+function setStatus(text, className, scope) {
 	if (!els.status) { return; }
 	els.status.textContent = text;
+	if (scope) { els.status.appendChild(el('span', 'status-scope', `· ${scope}`)); }
 	els.status.className = `status ${className || ''}`.trim();
 }
 
@@ -1658,8 +1700,10 @@ function handleAppMessage(msg) {
 					pendingModel = null;
 				}
 			}
+			if (typeof msg.workspaceName === 'string') { workspaceName = msg.workspaceName.slice(0, 60); }
 			renderProviderSelect();
 			renderModelSelect();
+			refreshStatus();
 			break;
 		}
 		case 'sessions': {
@@ -2397,6 +2441,7 @@ document.addEventListener('visibilitychange', () => {
 
 window.addEventListener('pagehide', persistRecvState);
 
+buildModeSeg();
 withSelectButton(els.modeSelect);
 withSelectButton(els.providerSelect);
 withSelectButton(els.modelSelect);
@@ -2418,7 +2463,7 @@ if (els.composer) {
 	});
 }
 if (els.enhanceBtn) { els.enhanceBtn.addEventListener('click', enhancePrompt); }
-if (els.modeSelect) { els.modeSelect.addEventListener('change', () => setMode(els.modeSelect.value)); }
+if (els.modeSelect) { els.modeSelect.addEventListener('change', () => { setMode(els.modeSelect.value); syncModeSeg(); }); }
 if (els.providerSelect) { els.providerSelect.addEventListener('change', () => setProvider(els.providerSelect.value)); }
 if (els.modelSelect) { els.modelSelect.addEventListener('change', () => setModel(els.modelSelect.value)); }
 if (els.attachImageBtn && els.attachImageInput) {
@@ -2467,6 +2512,19 @@ if (native) {
 	// "Add to Home Screen" advice is for browsers; this is already an installed app.
 	const note = document.querySelector('.pair-note');
 	if (note) { note.hidden = true; }
+	// Scanning is the main way in here and pasting a link the fallback (see `.pair-native` in styles.css).
+	if (els.pairScreenRoot) { els.pairScreenRoot.classList.add('pair-native'); }
+	if (els.pairCode) { els.pairCode.placeholder = 'Or paste the pairing link'; }
+	const intro = document.getElementById('pairIntro');
+	if (intro) { intro.textContent = 'Scan the QR code shown on your computer to pair this phone.'; }
+	// The Android Back button: close what is open first, and only leave the app from a plain screen.
+	window.addEventListener('stormcoder:back', event => {
+		let handled = false;
+		if (historyPanelOpen()) { closeHistoryPanel(); handled = true; }
+		else if (els.slashMenu && !els.slashMenu.hidden) { els.slashMenu.hidden = true; handled = true; }
+		const detail = /** @type {CustomEvent} */ (event).detail;
+		if (detail && typeof detail === 'object') { detail.handled = handled; }
+	});
 	// The shell hands over a pairing link (opened from the camera or a message) as an event, so this
 	// file needs no knowledge of how Android delivers it.
 	window.addEventListener('stormcoder:pairing-link', event => {

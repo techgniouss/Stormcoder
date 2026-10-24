@@ -144,6 +144,27 @@ try {
 	assert.equal(stored.origin, relayOrigin, 'the relay address is remembered with the device');
 	assert.equal(stored.token, 'tok-1');
 
+	// The desktop names itself, and the controls the phone shows are the ones the redesign promises.
+	const push = async message => { for (const f of await desktop.sealForAll(message)) { for (const w of sockets) { w.send(JSON.stringify({ v: 1, t: 'm', seq: 900000 + Math.floor(Math.random() * 90000), p: f })); } } };
+	await push({ type: 'config', workspaceName: 'demo-project', selectedProvider: 'p', providers: [{ id: 'p', label: 'P', model: 'm1', suggestedModels: ['m1'] }] });
+	await push({ type: 'sessions', activeSessionId: 's1', sessions: [{ id: 's1', title: 'One', mode: 'ask', streaming: false, queue: [] }] });
+	await push({ type: 'transcript', sessionId: 's1', from: 0, total: 1, truncated: false, messages: [{ role: 'assistant', content: '```js\nconst a = 1;\n```' }] });
+	await phone.locator('#status', { hasText: '· demo-project' }).waitFor({ timeout: 10000 });
+	assert.equal(await phone.locator('#tabs .tab').count(), 0, 'one chat shows no tab strip');
+	assert.equal(await phone.locator('#providerSelect').isVisible(), false, 'one provider shows no provider picker');
+	assert.equal(await phone.locator('#modeSeg .seg-btn[aria-checked=true]').textContent(), 'Ask');
+	received.length = 0;
+	await phone.locator('#modeSeg .seg-btn', { hasText: 'Plan' }).tap();
+	for (let i = 0; i < 50 && !received.some(m => m.type === 'setMode'); i++) { await new Promise(r => setTimeout(r, 100)); }
+	assert.ok(received.some(m => m.type === 'setMode' && m.mode === 'plan'), 'the segmented control changes the mode');
+	assert.equal(await phone.locator('.md-code .md-copy').count(), 1, 'a code block has a Copy button');
+	// The Back button closes what is open before it would leave the app.
+	const back = () => phone.evaluate(() => { const detail = { handled: false }; window.dispatchEvent(new CustomEvent('stormcoder:back', { detail })); return detail.handled; });
+	assert.equal(await back(), false, 'nothing open: the shell may leave the app');
+	await phone.locator('#historyBtn').tap();
+	assert.equal(await back(), true, 'Back closes History first');
+	assert.equal(await phone.locator('#historyPanel').isVisible(), false);
+
 	// Reopen the app: it goes straight back to the relay it paired with.
 	const before = sockets.length;
 	await phone.goto(`${appOrigin}/`);

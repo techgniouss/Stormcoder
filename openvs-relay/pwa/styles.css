@@ -235,12 +235,8 @@ input:focus-visible, textarea:focus-visible { outline: none; border-color: var(-
 	flex: 1;
 	min-width: 0;
 	min-height: 48px;
-	text-transform: uppercase;
-	letter-spacing: .15em;
-	text-align: center;
-	font-family: var(--mono); /* taste-skill-ignore: code entry */
+	/* A link or a key, in the text face: the key is not case-sensitive, so it is never shown shouted. */
 }
-#pairCode::placeholder { letter-spacing: .02em; font-size: 14px; }
 #pairForm button {
 	min-height: 48px;
 	padding: 8px 20px;
@@ -252,6 +248,24 @@ input:focus-visible, textarea:focus-visible { outline: none; border-color: var(-
 #pairForm button:active { filter: brightness(.92); }
 .pair-scan { margin-top: 12px; min-height: 44px; padding: 0 20px; border: 1px solid var(--border-strong); border-radius: var(--radius-card); background: transparent; color: var(--text); font: inherit; }
 .pair-scan[hidden] { display: none; }
+.pair-screen .pair-where { color: var(--muted); font-size: var(--fs-small); }
+
+/* In the Android app scanning is the way in, and pasting a link is the fallback beneath it. */
+.pair-native .pair-scan {
+	order: 1;
+	width: 100%;
+	min-height: 52px;
+	margin: 20px 0 4px;
+	font-weight: 600;
+	background: var(--accent-fill); /* taste-skill-ignore: the one primary action */
+	border-color: transparent;
+	color: var(--accent-ink);
+}
+.pair-native .pair-scan:active { filter: brightness(.92); }
+.pair-native #pairForm { order: 2; margin-top: 12px; }
+.pair-native #pairForm button { background: transparent; border: 1px solid var(--border-strong); color: var(--text); }
+.pair-native .pair-error { order: 3; }
+.pair-native .pair-note { order: 4; }
 
 .pair-screen .pair-error { color: var(--pill-negative-ink); min-height: 1.5em; font-size: var(--fs-small); }
 .pair-screen .pair-note { color: var(--muted); font-size: var(--fs-small); margin-top: 20px; }
@@ -317,6 +331,10 @@ input:focus-visible, textarea:focus-visible { outline: none; border-color: var(-
 .icon-btn:active { background: var(--active-bg); }
 .icon-btn .icon { width: 18px; height: 18px; }
 .icon-label { font-size: var(--fs-small); }
+/* The header is for state, not captions: the two actions are icons with accessible names. */
+.topbar .icon-label { display: none; }
+.status-scope { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status { white-space: nowrap; }
 
 /* ---- Tabs ---- */
 
@@ -473,16 +491,31 @@ h5.md-heading, h6.md-heading { font-size: 14px; color: var(--text-2); }
 	background: var(--surface);
 	border: 1px solid var(--border);
 	border-radius: var(--radius-card);
-	padding: 12px;
+	/* The top strip holds the language and the Copy button, clear of the first line. */
+	padding: 40px 12px 12px;
 	overflow-x: auto;
 	font-size: 13px;
 	line-height: 1.5;
 	tab-size: 4;
 }
 .md-code code { background: none; padding: 0; font-size: inherit; white-space: pre; }
+.md-copy {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	min-height: 32px;
+	padding: 0 12px;
+	border: none;
+	border-radius: var(--radius-control);
+	background: var(--raised);
+	color: var(--text-2);
+	font-size: var(--fs-small);
+}
+.md-copy:active { background: var(--active-bg); color: var(--text); }
 .md-code-lang {
-	display: block;
-	margin: -4px 0 6px;
+	position: absolute;
+	top: 12px;
+	left: 12px;
 	font-family: var(--mono); /* taste-skill-ignore: code only */
 	font-size: 11px;
 	color: var(--muted);
@@ -559,8 +592,8 @@ h5.md-heading, h6.md-heading { font-size: 14px; color: var(--text-2); }
 .tool-error .tool-mark { background: var(--negative); }
 .tool-stopped .tool-mark { background: var(--faint); }
 @keyframes spin { to { transform: rotate(360deg); } }
-.tool-name { font-family: var(--mono); /* taste-skill-ignore: code only */ font-size: 12.5px; color: var(--text); flex-shrink: 0; }
-.tool-arg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tool-name { font-size: var(--fs-small); font-weight: 600; color: var(--text); flex-shrink: 0; }
+.tool-arg { font-family: var(--mono); /* taste-skill-ignore: a command or path */ font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .tool-state {
 	flex-shrink: 0;
 	font-size: 11.5px;
@@ -764,17 +797,14 @@ h5.md-heading, h6.md-heading { font-size: 14px; color: var(--text-2); }
 	background: none;
 	border: none;
 	border-radius: var(--radius-control);
-	padding: 0 10px;
+	padding: 0 8px;
 	min-width: var(--hit);
 	color: var(--text-2);
 }
 .tool-btn .icon { width: 20px; height: 20px; }
 .tool-btn:active { background: var(--active-bg); }
 .tool-label { font-size: var(--fs-small); }
-/* Icons alone on a phone (the aria-label names each); words return once there is room. */
-@media (max-width: 479px) {
-	.tool-label { display: none; }
-}
+/* The words stay on a phone: three bare icons (one of them a sparkle) do not say what they do. */
 
 .round-btn {
 	display: grid;
@@ -812,6 +842,19 @@ h5.md-heading, h6.md-heading { font-size: 14px; color: var(--text-2); }
 	background-repeat: no-repeat;
 }
 #modeSelect { flex: 0 0 auto; }
+.controls-row select[hidden] { display: none; }
+.seg { display: inline-flex; flex: 0 0 auto; gap: 2px; padding: 3px; border-radius: var(--radius-control); background: var(--surface); }
+.seg-btn {
+	min-height: 38px;
+	padding: 0 10px;
+	border: none;
+	border-radius: var(--radius-control);
+	background: transparent;
+	color: var(--text-2);
+	font-size: var(--fs-small);
+}
+.seg-btn[aria-checked="true"] { background: var(--raised); color: var(--text); }
+.seg-btn:active { background: var(--active-bg); }
 #providerSelect { flex: 0 1 auto; max-width: 42%; }
 #modelSelect { flex: 1 1 0; }
 .controls-row select.select-warn { border-color: var(--warning); }

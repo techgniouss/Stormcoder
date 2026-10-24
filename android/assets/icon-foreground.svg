@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="140" y1="100" x2="880" y2="940" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22345a"/>
+      <stop offset=".55" stop-color="#121a30"/>
+      <stop offset="1" stop-color="#0a0e1b"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="512" cy="500" r="330" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3d9bff" stop-opacity=".55"/>
+      <stop offset=".55" stop-color="#2a6fe0" stop-opacity=".16"/>
+      <stop offset="1" stop-color="#2a6fe0" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bolt" x1="360" y1="150" x2="680" y2="880" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c9f1ff"/>
+      <stop offset=".38" stop-color="#6cc8ff"/>
+      <stop offset="1" stop-color="#2f84f2"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".28"/>
+      <stop offset=".45" stop-color="#ffffff" stop-opacity=".04"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity=".1"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="34"/></filter>
+    <filter id="drop" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="22" stdDeviation="26" flood-color="#000" flood-opacity=".5"/></filter>
+  </defs>
+<g transform="translate(512 512) scale(0.72) translate(-512 -512)">
+  <!-- The 824px tile sits inside the 1024 canvas, the standard desktop icon proportion. -->
+  <!-- Code brackets, drawn as thick rounded chevrons. -->
+  <g fill="none" stroke="#e4ecff" stroke-opacity=".9" stroke-width="58" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M338 352 L214 512 L338 672"/>
+    <path d="M686 352 L810 512 L686 672"/>
+  </g>
+  <!-- The bolt: a soft glow underneath, then the bolt itself. -->
+  <path d="M572 188 L388 548 H500 L452 838 L650 462 H540 Z" fill="#3a95ff" opacity=".85" filter="url(#glow)"/>
+  <path d="M572 188 L388 548 H500 L452 838 L650 462 H540 Z" fill="url(#bolt)" stroke="#e9f8ff" stroke-opacity=".5" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M572 188 L470 392 L520 392 Z" fill="#ffffff" opacity=".35"/>
+</g>
+</svg>

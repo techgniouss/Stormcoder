@@ -5,6 +5,8 @@
 // The only Android-specific code the phone app sees. It runs before app.js and, inside the
 // Capacitor shell, defines `globalThis.StormcoderNative` (the contract app.js reads):
 //   { platform: 'android', scanQr(): Promise<string | null> }
+// and turns the Android Back button into a `stormcoder:back` event the app can answer (it sets
+// `detail.handled` when it closed something; otherwise the app is sent to the background).
 // Outside the shell (a plain browser, or the tests) it does nothing, so the app behaves as the PWA.
 (function () {
 	'use strict';
@@ -13,6 +15,14 @@
 		return;
 	}
 	const scanner = cap.registerPlugin('BarcodeScanner');
+	const app = cap.registerPlugin('App');
+	app.addListener('backButton', () => {
+		const detail = { handled: false };
+		globalThis.dispatchEvent(new CustomEvent('stormcoder:back', { detail }));
+		if (!detail.handled) {
+			app.minimizeApp();
+		}
+	});
 	globalThis.StormcoderNative = Object.freeze({
 		platform: 'android',
 		/**

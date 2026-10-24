@@ -221,6 +221,7 @@ export function renderBody(container, text) {
 			const pre = el('pre', 'md-code');
 			if (fence[2]) { pre.appendChild(el('span', 'md-code-lang', fence[2])); }
 			pre.appendChild(el('code', undefined, body.join('\n')));
+			pre.appendChild(copyButton(body.join('\n')));
 			container.appendChild(pre);
 			continue;
 		}
@@ -328,6 +329,63 @@ function resultSummary(result) {
 	return lines ? `${lines} line${lines === 1 ? '' : 's'}` : 'no output';
 }
 
+/**
+ * A "Copy" button for a code block. Falls back to a hidden textarea where the async clipboard is
+ * unavailable (an older WebView), and says so on the button instead of failing silently.
+ * @param {string} text
+ */
+function copyButton(text) {
+	const button = el('button', 'md-copy', 'Copy');
+	button.type = 'button';
+	button.setAttribute('aria-label', 'Copy code');
+	button.addEventListener('click', async () => {
+		let ok = false;
+		try {
+			await navigator.clipboard.writeText(text);
+			ok = true;
+		} catch {
+			const area = document.createElement('textarea');
+			area.value = text;
+			area.setAttribute('readonly', '');
+			area.style.position = 'fixed';
+			area.style.opacity = '0';
+			document.body.appendChild(area);
+			area.select();
+			try { ok = document.execCommand('copy'); } catch { ok = false; }
+			area.remove();
+		}
+		button.textContent = ok ? 'Copied' : 'Could not copy';
+		setTimeout(() => { button.textContent = 'Copy'; }, 1500);
+	});
+	return button;
+}
+
+/** What a tool is doing, in words, while it runs and once it has finished: [running, finished]. */
+const TOOL_VERBS = {
+	run_command: ['Running', 'Ran'],
+	read_file: ['Reading', 'Read'],
+	write_file: ['Writing', 'Wrote'],
+	edit_file: ['Editing', 'Edited'],
+	list_dir: ['Listing', 'Listed'],
+	glob_files: ['Finding files', 'Found files'],
+	search_files: ['Searching', 'Searched'],
+	fetch_url: ['Fetching', 'Fetched'],
+	remember: ['Remembering', 'Remembered'],
+	recall: ['Recalling', 'Recalled'],
+};
+
+/**
+ * The words shown for a tool row: "Running", "Ran", and so on; an unknown tool (an MCP server's)
+ * keeps its own name with underscores read as spaces.
+ * @param {string | undefined} name
+ * @param {string} status
+ */
+export function toolVerb(name, status) {
+	const verbs = name ? TOOL_VERBS[/** @type {keyof typeof TOOL_VERBS} */ (name)] : undefined;
+	if (verbs) { return status === 'running' ? verbs[0] : verbs[1]; }
+	return (name || 'tool').replace(/_/g, ' ');
+}
+
 /** Tool output shown per row, at most — the rest is a scroll the phone doesn't need. */
 const RESULT_PREVIEW_CHARS = 4000;
 
@@ -352,7 +410,9 @@ function fillToolRow(row, call) {
 	row.replaceChildren();
 	const head = el('div', 'tool-head');
 	head.appendChild(el('span', 'tool-mark'));
-	head.appendChild(el('span', 'tool-name', call.name || 'tool'));
+	const toolName = el('span', 'tool-name', toolVerb(call.name, status));
+	toolName.setAttribute('data-tool', call.name || 'tool');
+	head.appendChild(toolName);
 	const hint = argHint(call.args);
 	if (hint) { head.appendChild(el('span', 'tool-arg', hint)); }
 	const label = status === 'running' ? 'running' : status === 'stopped' ? 'stopped' : status === 'error' ? 'failed' : '';

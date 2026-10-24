@@ -28,7 +28,8 @@
 <div id="pairScreen" class="pair-screen">
 	<img class="pair-mark" src="/icon.svg" alt="" width="72" height="72">
 	<h1>Stormcoder Remote</h1>
-	<p>Paste the pairing link from the desktop, or type the key shown under the QR code.</p>
+	<p id="pairIntro">Paste the pairing link from the desktop, or type the key shown under the QR code.</p>
+	<p id="pairWhere" class="pair-where">On your computer, open Settings, then Remote control, then Pair a device.</p>
 	<form id="pairForm">
 		<label for="pairCode" class="sr-only">Pairing link or key</label>
 		<input id="pairCode" type="text" inputmode="text" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="go" placeholder="Pairing link or key">
@@ -61,15 +62,16 @@
 			<div class="composer-actions">
 				<input id="attachImageInput" type="file" accept="image/*" hidden>
 				<button id="attachImageBtn" class="tool-btn" type="button" aria-label="Attach image"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15.5 8.5h.01"/></svg><span class="tool-label">Image</span></button>
-				<button id="attachActiveBtn" class="tool-btn" type="button" aria-label="Attach the open file"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h12V7l-4-4zM14 3v4h4M10 12l-2 2 2 2M14 12l2 2-2 2"/></svg><span class="tool-label">Open file</span></button>
-				<button id="enhanceBtn" class="tool-btn" type="button" aria-label="Enhance prompt"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM18.5 15l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/></svg><span class="tool-label">Enhance</span></button>
+				<button id="attachActiveBtn" class="tool-btn" type="button" aria-label="Attach the open file"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h12V7l-4-4zM14 3v4h4M10 12l-2 2 2 2M14 12l2 2-2 2"/></svg><span class="tool-label">File</span></button>
+				<button id="enhanceBtn" class="tool-btn" type="button" aria-label="Enhance prompt"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM18.5 15l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/></svg><span class="tool-label">Improve</span></button>
 				<span class="spacer"></span>
 				<button id="stopBtn" class="round-btn stop-btn" type="button" aria-label="Stop" hidden><svg class="icon icon-fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7z"/></svg></button>
 				<button id="sendBtn" class="round-btn send-btn" type="button" aria-label="Send"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/></svg></button>
 			</div>
 		</div>
 		<div class="controls-row">
-			<select id="modeSelect" aria-label="Mode">
+			<div id="modeSeg" class="seg" role="radiogroup" aria-label="Mode"></div>
+			<select id="modeSelect" aria-label="Mode" hidden>
 				<option value="ask">Ask</option>
 				<option value="plan">Plan</option>
 				<option value="agent">Agent</option>

@@ -62,6 +62,16 @@ assert.match(fs.readFileSync(path.join(root, 'electron-builder.yml'), 'utf8'), /
 const manifest = fs.readFileSync(path.join(root, 'android', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
 assert.match(manifest, /android:allowBackup="false"/, 'device keys and tokens are not backed up');
 assert.match(manifest, /android:usesCleartextTraffic="false"/);
+const res = path.join(root, 'android', 'android', 'app', 'src', 'main', 'res');
+assert.ok(!fs.existsSync(path.join(res, 'drawable', 'splash.png')), 'the stock Capacitor splash is gone');
+assert.match(fs.readFileSync(path.join(res, 'values', 'styles.xml'), 'utf8'), /windowSplashScreenBackground/, 'the launch screen sets its own ground');
+assert.match(fs.readFileSync(path.join(res, 'values-night', 'colors.xml'), 'utf8'), /#111114/, 'dark launch ground');
+for (const density of ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi']) {
+	for (const name of ['ic_launcher.png', 'ic_launcher_round.png', 'ic_launcher_foreground.png']) {
+		assert.ok(fs.statSync(path.join(res, `mipmap-${density}`, name)).size > 300, `${density}/${name} is drawn`);
+	}
+}
+assert.ok(fs.existsSync(path.join(root, 'android', 'assets', 'icon-foreground.svg')), 'the icon source is kept beside the project');
 const cap = JSON.parse(fs.readFileSync(path.join(root, 'android', 'capacitor.config.json'), 'utf8'));
 assert.equal(cap.server.cleartext, false);
 assert.equal(cap.android.allowMixedContent, false);

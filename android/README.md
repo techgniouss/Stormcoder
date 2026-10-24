@@ -18,6 +18,7 @@ you build, so the relay only routes sealed messages.
 | `src/native.js` | The only Android-specific code the app sees. Inside the shell it defines `globalThis.StormcoderNative` (`platform`, `scanQr()`). Outside it does nothing. |
 | `capacitor.config.json` | App id `dev.stormcoder.remote`, bundled assets, HTTPS only, native HTTP enabled. |
 | `android/` | The generated Android Studio project (Gradle). Edit it by hand only for manifest or build settings; `allowBackup` is off and cleartext traffic is off. |
+| `assets/` | The icon source (`icon.svg`, and `icon-foreground.svg` for the adaptive icon). The launcher icons in `android/app/src/main/res/mipmap-*` are drawn from them; the launch screen is the app's own ground with the mark (`values/styles.xml`, light and `values-night` dark). |
 | `www/` | Build output, not committed. |
 
 The shared phone app has one small seam for all this (`native` in `openvs-relay/pwa/app.js`). When
@@ -43,6 +44,12 @@ npm run build:debug    # or, from the command line: android/app/build/outputs/ap
 ```
 
 `npm run build:release` makes a Play Store bundle; sign it with your own key (never commit it).
+
+## In the app
+
+- **Back button:** closes History or the slash menu first, and sends the app to the background from a plain screen (`stormcoder:back` in `src/native.js` and `app.js`).
+- **System bars:** Capacitor's `SystemBars` handles the edge-to-edge insets (`insetsHandling: css`); the app's own padding uses `env(safe-area-inset-*)`.
+- **Header:** shows the connection and the desktop's folder name ("Connected · project"), which the desktop sends in its encrypted `config` message.
 
 ## Pairing
 
