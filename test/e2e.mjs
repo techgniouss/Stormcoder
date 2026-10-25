@@ -164,7 +164,7 @@ try {
 	await changes.locator('.ch-a', { hasText: 'hello from stormcoder' }).waitFor({ timeout: 10000 });
 	assert.ok((await page.locator('#changesBadge').textContent()).length > 0, 'the rail badge counts changed files');
 	await changes.getByRole('button', { name: 'Stage all' }).click();
-	await changes.locator('.ch-group', { hasText: 'Staged' }).waitFor({ timeout: 10000 });
+	await changes.locator('.ch-group', { hasText: /^Staged \(/ }).waitFor({ timeout: 10000 });
 	assert.ok(await changes.getByRole('button', { name: /^Commit \d+$/ }).isDisabled(), 'commit waits for a message');
 	await changes.getByRole('button', { name: 'Generate' }).click();
 	await page.waitForFunction(() => { const m = document.querySelector('#view-changes .ch-msg'); return !!m && !m.disabled && m.value.length > 0; }, undefined, { timeout: 15000 });
@@ -180,6 +180,79 @@ try {
 	await changes.getByRole('tab', { name: 'Files' }).click();
 	await changes.locator('.ch-row', { hasText: 'hello.txt' }).click();
 	await changes.locator('.ch-ln', { hasText: 'hello from stormcoder' }).waitFor({ timeout: 10000 });
+	await changes.getByRole('tab', { name: 'Changes' }).click();
+
+	// One hunk at a time.
+	const rows40 = Array.from({ length: 40 }, (_, i) => `row${i + 1}`);
+	fs.writeFileSync(path.join(project, 'multi.txt'), rows40.join('\n') + '\n');
+	gitIn('add', 'multi.txt');
+	gitIn('commit', '-q', '-m', 'multi');
+	const edited = [...rows40];
+	edited[1] = 'EDIT-A';
+	edited[37] = 'EDIT-B';
+	fs.writeFileSync(path.join(project, 'multi.txt'), edited.join('\n') + '\n');
+	await page.click('[data-view=chat]');
+	await page.click('[data-view=changes]');
+	await changes.locator('.ch-row', { hasText: 'multi.txt' }).click();
+	await changes.locator('.ch-hunk').nth(1).waitFor({ timeout: 10000 });
+	await changes.getByRole('button', { name: 'Stage hunk' }).first().click();
+	await changes.locator('.ch-group', { hasText: /^Staged \(/ }).waitFor({ timeout: 10000 });
+	assert.match(gitIn('diff', '--cached', 'multi.txt'), /EDIT-A/);
+	assert.doesNotMatch(gitIn('diff', '--cached', 'multi.txt'), /EDIT-B/, 'only the chosen hunk is staged');
+
+	// Discard asks first, then puts the file back.
+	await changes.locator('.ch-row', { hasText: 'multi.txt' }).last().click();
+	await changes.getByRole('button', { name: 'Discard', exact: true }).first().click();
+	await changes.getByText('Undo', { exact: true }).waitFor({ timeout: 5000 });
+	await changes.getByRole('button', { name: 'Cancel' }).click();
+	assert.match(fs.readFileSync(path.join(project, 'multi.txt'), 'utf8'), /EDIT-B/, 'cancel leaves the file alone');
+	await changes.getByRole('button', { name: 'Discard', exact: true }).first().click();
+	await changes.locator('.ch-confirm').getByRole('button', { name: 'Discard' }).click();
+	await changes.getByText('Changes discarded', { exact: false }).waitFor({ timeout: 10000 });
+	assert.doesNotMatch(fs.readFileSync(path.join(project, 'multi.txt'), 'utf8'), /EDIT-B/);
+
+	// Stash and pop.
+	await changes.getByRole('button', { name: 'Stash', exact: true }).click();
+	await changes.getByRole('button', { name: /Pop stash/ }).waitFor({ timeout: 10000 });
+	assert.ok(gitIn('stash', 'list').includes('Stormcoder stash'));
+	await changes.getByRole('button', { name: /Pop stash/ }).click();
+	await changes.getByText('Stash applied', { exact: false }).waitFor({ timeout: 10000 });
+	await changes.locator('.ch-row', { hasText: 'multi.txt' }).first().waitFor({ timeout: 10000 });
+	gitIn('checkout', '-q', '--', '.');
+	gitIn('reset', '-q');
+	gitIn('stash', 'clear');
+
+	// Publish a feature branch to a local remote, then open its pull request page.
+	const bare = path.join(host.data, 'remote.git');
+	execFileSync('git', ['init', '--bare', '-q', '-b', 'main', bare]);
+	gitIn('remote', 'add', 'origin', bare);
+	gitIn('checkout', '-q', '-b', 'feature/x');
+	await page.click('[data-view=chat]');
+	await page.click('[data-view=changes]');
+	await changes.getByRole('button', { name: 'Publish branch' }).click();
+	await changes.getByRole('button', { name: 'Confirm publish' }).click();
+	await changes.getByText('Pushed to origin/feature/x', { exact: false }).waitFor({ timeout: 15000 });
+	await changes.getByRole('button', { name: 'Open pull request' }).first().click();
+	await changes.getByText('no remote to open a pull request', { exact: false }).waitFor({ timeout: 10000 });
+	gitIn('remote', 'set-url', 'origin', 'git@github.com:acme/widgets.git');
+	const [popup] = await Promise.all([page.waitForEvent('popup', { timeout: 10000 }), changes.getByRole('button', { name: 'Open pull request' }).first().click()]);
+	assert.equal(popup.url(), 'https://github.com/acme/widgets/compare/feature%2Fx?expand=1');
+	await popup.close();
+	gitIn('remote', 'set-url', 'origin', bare);
+
+	// Docked: the chat and the Changes view side by side; the choice sticks and can be undone.
+	await changes.getByRole('button', { name: 'Dock beside chat' }).click();
+	await page.locator('#views.split').waitFor({ timeout: 5000 });
+	const chatBox = await page.locator('#view-chat').boundingBox();
+	const changesBox = await page.locator('#view-changes').boundingBox();
+	assert.ok(chatBox.width > 300 && changesBox.width > 300 && chatBox.x + chatBox.width <= changesBox.x + 2, 'chat is left, Changes is right, neither covers the other');
+	await page.click('[data-view=chat]');
+	assert.ok(await page.locator('#views.split').count() === 1, 'the panel stays beside the chat');
+	await page.click('[data-view=history]');
+	assert.equal(await page.locator('#views.split').count(), 0, 'other views take the whole window');
+	await page.click('[data-view=changes]');
+	await changes.getByRole('button', { name: 'Undock' }).click();
+	assert.equal(await page.locator('#views.split').count(), 0);
 	await page.click('[data-view=chat]');
 
 	// 4. The palette opens and filters.

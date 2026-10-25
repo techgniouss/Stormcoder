@@ -19,9 +19,11 @@
 	let message = '';
 	let drafting = false;
 	let busy = '';
-	/** @type {{ level: string, text: string, detail?: string, action?: string } | null} */
+	/** @type {{ level: string, text: string, detail?: string, action?: { label: string, run: () => void } } | null} */
 	let banner = null;
-	let confirmPush = false;
+	/** @type {{ title: string, rows: string[][], label: string, danger?: boolean, run: () => void } | null} A question the git bar is asking before it does something it cannot take back. */
+	let confirm = null;
+	let docked = false;
 	/** Paths the agent changed in this session, as the chat reported them. */
 	const agentFiles = new Set();
 	/** @type {{ files: string[], truncated: boolean } | null} */
@@ -105,7 +107,7 @@
 		if (st && st.isRepo) {
 			const present = sel && st.files.some(f => f.path === sel.path && areaValid(f, sel.area));
 			if (!present) { sel = firstSelection(); }
-			if (st.unpushed.length === 0) { confirmPush = false; }
+			if (confirm && confirm.title === 'Push to origin?' && st.unpushed.length === 0) { confirm = null; }
 		}
 		if (viewShowing) { render(); }
 	}
@@ -183,6 +185,11 @@
 		add('changes', 'Changes', st && st.isRepo ? st.files.length : 0);
 		add('files', 'Files', 0);
 		t.append(el('span', 'ch-spacer'));
+		if (window.innerWidth >= 1000) {
+			const dock = button(docked ? 'Undock' : 'Dock beside chat', 'ch-link', () => window.dispatchEvent(new CustomEvent('changes-dock')));
+			dock.classList.add('ch-dock');
+			t.append(dock);
+		}
 		if (st && st.isRepo) {
 			const sync = !st.branch ? 'detached HEAD' : !st.upstream ? 'not published' : st.ahead || st.behind ? `${st.ahead} ahead, ${st.behind} behind` : 'in sync with origin';
 			t.append(el('span', 'ch-branch', st.branch || 'detached'), el('span', 'ch-sync', sync));
@@ -207,11 +214,16 @@
 		}
 	}
 
-	/** @param {string} title @param {any[]} files @param {string} area @param {string} action @param {() => void} onAll */
-	function group(title, files, area, action, onAll) {
+	/** @param {string} title @param {any[]} files @param {string} area @param {string} action @param {() => void} onAll @param {string} [extra] @param {() => void} [onExtra] */
+	function group(title, files, area, action, onAll, extra, onExtra) {
 		const head = el('div', 'ch-group');
 		head.append(el('span', '', `${title} (${files.length})`));
-		if (action && canWrite) { head.append(button(action, 'ch-link', onAll)); }
+		if (canWrite && (action || extra)) {
+			const links = el('span', 'ch-links');
+			if (extra && onExtra) { links.append(button(extra, 'ch-link ch-link-danger', onExtra)); }
+			if (action) { links.append(button(action, 'ch-link', onAll)); }
+			head.append(links);
+		}
 		slot.list.append(head);
 		for (const f of files) { slot.list.append(row(f, area)); }
 	}
@@ -262,7 +274,7 @@
 		}
 		if (conflicts.length) { group('Conflicts', conflicts, 'conflict', '', () => { /* none */ }); }
 		if (staged.length) { group('Staged', staged, 'staged', 'Unstage all', () => void act('unstage', staged.map(f => f.path))); }
-		if (unstaged.length) { group('Not staged', unstaged, 'unstaged', 'Stage all', () => void act('stage', unstaged.map(f => f.path))); }
+		if (unstaged.length) { group('Not staged', unstaged, 'unstaged', 'Stage all', () => void act('stage', unstaged.map(f => f.path)), 'Discard all', () => askDiscard(unstaged)); }
 		if (st.unpushed.length) {
 			const head = el('div', 'ch-group');
 			head.append(el('span', '', `Not pushed (${st.unpushed.length})`));
@@ -288,7 +300,10 @@
 			b.addEventListener('click', () => { mode = key; renderHead(); loadView(); });
 			seg.append(b);
 		}
-		slot.head.append(path, el('span', 'ch-spacer'), seg);
+		slot.head.append(path, el('span', 'ch-spacer'));
+		const cur = fileFor(sel.path);
+		if (canWrite && cur && sel.area === 'unstaged') { slot.head.append(button('Discard', 'ch-link ch-link-danger', () => askDiscard([cur]))); }
+		slot.head.append(seg);
 	}
 
 	function renderFileHead() {
@@ -318,7 +333,7 @@
 		if (token !== viewToken) { return; }
 		pane.textContent = '';
 		if (!res.ok) { pane.append(el('div', 'ch-empty', res.error)); return; }
-		if (wantFile) { drawText(pane, res.value); } else { drawDiff(pane, res.value); }
+		if (wantFile) { drawText(pane, res.value); } else { drawDiff(pane, res.value, sel.area, sel.path); }
 	}
 
 	/** @param {HTMLElement} pane @param {any} v */
@@ -332,13 +347,21 @@
 		if (v.truncated) { pane.append(el('div', 'ch-note', 'Showing the first part of a large file.')); }
 	}
 
-	/** @param {HTMLElement} pane @param {any} v */
-	function drawDiff(pane, v) {
+	/** @param {HTMLElement} pane @param {any} v @param {string} area @param {string} file */
+	function drawDiff(pane, v, area, file) {
 		if (v.binary) { pane.append(el('div', 'ch-empty', 'Binary file changed.')); return; }
 		if (!v.rows.length) { pane.append(el('div', 'ch-empty', 'No line changes to show (mode change, or an empty file).')); return; }
 		const frag = document.createDocumentFragment();
 		for (const r of v.rows) {
-			if (r.k === 'h') { frag.append(el('div', 'ch-hunk', r.t)); continue; }
+			if (r.k === 'h') {
+				const h = el('div', 'ch-hunk');
+				h.append(el('span', '', r.t));
+				if (v.hunkable && canWrite && (area === 'staged' || area === 'unstaged')) {
+					h.append(button(area === 'staged' ? 'Unstage hunk' : 'Stage hunk', 'ch-link', () => void act('stageHunk', [file, area, r.i, r.t])));
+				}
+				frag.append(h);
+				continue;
+			}
 			frag.append(codeLine(r.k, r.o === undefined ? '' : String(r.o), r.n === undefined ? '' : String(r.n), r.t));
 		}
 		pane.append(frag);
@@ -415,7 +438,7 @@
 		g.textContent = '';
 		const stagedCount = st.files.filter(f => f.staged).length;
 		const hasConflict = st.files.some(f => f.conflict);
-		
+
 		if (!trusted) {
 			g.append(note('warn', 'Read-only', 'This folder is not trusted. You can view diffs only.'));
 			return;
@@ -423,19 +446,21 @@
 		if (st.merging) {
 			g.append(note('warn', 'Merge in progress', hasConflict ? 'Commit is disabled until the conflicts are resolved.' : 'Commit to finish the merge.'));
 		}
-		if (banner) { g.append(note(banner.level, banner.text, banner.detail)); }
+		if (banner) {
+			const n = note(banner.level, banner.text, banner.detail);
+			if (banner.action) { n.append(button(banner.action.label, 'ch-link', banner.action.run)); }
+			g.append(n);
+		}
 
-		if (confirmPush) {
+		if (confirm) {
 			const dlg = el('div', 'ch-confirm');
-			dlg.append(el('strong', '', 'Push to origin?'));
+			dlg.append(el('strong', '', confirm.title));
 			const kv = el('div', 'ch-kv');
-			const target = st.upstream || (st.branch ? 'origin/' + st.branch : '');
-			for (const [k, v] of [['To', target], ['Sends', `${st.unpushed.length} commit${st.unpushed.length === 1 ? '' : 's'}`], ['Force', 'never']]) {
-				kv.append(el('i', '', k), el('span', '', v));
-			}
+			for (const [k, v] of confirm.rows) { kv.append(el('i', '', k), el('span', '', v)); }
 			dlg.append(kv);
 			const row2 = el('div', 'ch-actions');
-			row2.append(el('span', 'ch-spacer'), button('Cancel', '', () => { confirmPush = false; renderGit(); }), button(st.upstream ? 'Confirm push' : 'Confirm publish', 'btn-primary', () => void doPush()));
+			const ask = confirm;
+			row2.append(el('span', 'ch-spacer'), button('Cancel', '', () => { confirm = null; renderGit(); }), button(ask.label, ask.danger ? 'ch-danger' : 'btn-primary', () => { confirm = null; ask.run(); }));
 			dlg.append(row2);
 			g.append(dlg);
 			return;
@@ -455,34 +480,68 @@
 
 		const acts = el('div', 'ch-actions');
 		const info = stagedCount ? `${stagedCount} staged` : st.unpushed.length ? `${st.ahead || st.unpushed.length} ahead of ${st.upstream || 'origin'}` : '0 staged';
-		acts.append(el('span', 'ch-info', info), el('span', 'ch-spacer'));
+		acts.append(el('span', 'ch-info', info));
+		if (!drafting && st.files.length && !st.merging) { acts.append(button('Stash', 'ch-link', () => void act('stash', []), !!busy)); }
+		if (!drafting && st.stashes) { acts.append(button(`Pop stash (${st.stashes})`, 'ch-link', () => void act('stashPop', []), !!busy)); }
+		acts.append(el('span', 'ch-spacer'));
 		if (drafting) {
 			acts.append(button('Cancel', '', () => { void git('cancelDraft'); }));
 		} else if (stagedCount) {
 			acts.append(button(message.trim() ? 'Regenerate' : 'Generate', '', () => void draft(), !!busy));
 		}
-		commitBtn = button(stagedCount ? `Commit ${stagedCount}` : 'Commit', 'btn-primary', () => void doCommit());
+		commitBtn = button(stagedCount ? `Commit ${stagedCount}` : 'Commit', stagedCount || !st.unpushed.length ? 'btn-primary' : '', () => void doCommit());
 		commitBtn.disabled = !canCommit();
-		if (stagedCount || !st.unpushed.length) { acts.append(commitBtn); }
+		if (st.files.length) { acts.append(commitBtn); }
+		if (!st.merging) {
+			if (!st.upstream && st.branch) {
+				acts.append(button('Publish branch', stagedCount ? '' : 'btn-primary', () => askPush(), !!busy));
+			} else if (st.unpushed.length) {
+				acts.append(button(`Push ${st.unpushed.length}`, stagedCount ? '' : 'btn-primary', () => askPush(), !!busy));
+			}
+		}
 		g.append(acts);
 
-		if (st.unpushed.length || st.behind || (!st.upstream && st.branch && !st.files.length)) {
+		const canPr = !!st.upstream && !st.unpushed.length && !!st.branch && !/^(main|master)$/.test(st.branch);
+		if (st.canUndoCommit || st.merging || st.behind || canPr) {
 			const p = el('div', 'ch-actions');
 			if (st.canUndoCommit) { p.append(button('Undo commit', '', () => void act('undoCommit', []), !!busy)); }
 			if (st.merging) { p.append(button('Abort merge', 'ch-danger', () => void act('abortMerge', []), !!busy)); }
 			p.append(el('span', 'ch-spacer'));
 			if (st.behind) { p.append(button('Pull', '', () => void act('pull', []), !!busy)); }
-			if (!st.upstream && st.branch) {
-				p.append(button('Publish branch', 'btn-primary', () => { confirmPush = true; renderGit(); }, !!busy));
-			} else if (st.unpushed.length) {
-				p.append(button(`Push ${st.unpushed.length}`, 'btn-primary', () => { confirmPush = true; renderGit(); }, !!busy));
-			}
-			g.append(p);
-		} else if (st.merging) {
-			const p = el('div', 'ch-actions');
-			p.append(button('Abort merge', 'ch-danger', () => void act('abortMerge', []), !!busy));
+			if (canPr) { p.append(button('Open pull request', '', () => void openPR())); }
 			g.append(p);
 		}
+	}
+
+	/** Asks before a push or publish; the dialog names the target and says force is never used. */
+	function askPush() {
+		const target = st.upstream || (st.branch ? 'origin/' + st.branch : '');
+		confirm = {
+			title: 'Push to origin?',
+			rows: [['To', target], ['Sends', `${st.unpushed.length} commit${st.unpushed.length === 1 ? '' : 's'}`], ['Force', 'never']],
+			label: st.upstream ? 'Confirm push' : 'Confirm publish',
+			run: () => void doPush(),
+		};
+		renderGit();
+	}
+
+	/** Asks before throwing away working-tree changes, which cannot be taken back. @param {any[]} files */
+	function askDiscard(files) {
+		const names = files.map(f => f.path);
+		confirm = {
+			title: 'Discard changes?',
+			rows: [['Files', names.length === 1 ? names[0] : `${names.length} files (${names.slice(0, 2).map(baseName).join(', ')}…)`], ['Effect', 'back to the staged or committed text; new files are deleted'], ['Undo', 'not possible']],
+			label: 'Discard',
+			danger: true,
+			run: () => void act('discard', [names]),
+		};
+		renderGit();
+	}
+
+	async function openPR() {
+		const res = await git('prUrl');
+		if (!res.ok) { banner = { level: 'err', text: res.error }; renderGit(); return; }
+		window.open(res.value, '_blank', 'noopener');
 	}
 
 	/** @type {HTMLButtonElement} */
@@ -515,6 +574,9 @@
 		if (!res.ok) { banner = { level: 'err', text: res.error.split('\n')[0], detail: res.error.split('\n').slice(1, 6).join('\n') }; }
 		else if (op === 'undoCommit') { banner = { level: 'ok', text: 'Commit undone; its changes are staged again.' }; }
 		else if (op === 'pull') { banner = { level: 'ok', text: 'Pulled the latest commits.' }; }
+		else if (op === 'stash') { banner = { level: 'ok', text: 'Stashed your changes. Pop the stash to bring them back.' }; }
+		else if (op === 'stashPop') { banner = { level: 'ok', text: 'Stash applied.' }; }
+		else if (op === 'discard') { banner = { level: 'ok', text: 'Changes discarded.' }; }
 		await refresh();
 		if (!viewShowing) { return; }
 		render();
@@ -556,12 +618,13 @@
 		const publish = !st.upstream;
 		busy = 'push';
 		banner = null;
-		confirmPush = false;
+		confirm = null;
 		renderGit();
 		const res = await git('push', publish);
 		busy = '';
 		if (res.ok) {
 			banner = { level: 'ok', text: 'Pushed to ' + res.value.target };
+			if (st.branch && !/^(main|master)$/.test(st.branch)) { banner.action = { label: 'Open pull request', run: () => void openPR() }; }
 		} else if (res.kind === 'rejected') {
 			banner = { level: 'err', text: 'Push rejected', detail: 'The remote has commits you do not have. Pull first, then push again. Stormcoder never force pushes.' };
 		} else {
@@ -595,6 +658,7 @@
 			render();
 		},
 		hide() { viewShowing = false; },
+		setDocked(value) { docked = value; if (viewShowing) { renderTabs(); } },
 		setTrusted(value) { if (trusted !== value) { trusted = value; if (viewShowing) { render(); } } },
 		/** Remembers which files the agent touched so rows can say so. */
 		noteAgentFiles(files) {

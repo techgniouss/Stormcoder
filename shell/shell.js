@@ -61,6 +61,12 @@
 		}
 	});
 
+	/** Changes view shown beside the chat instead of replacing it (a remembered choice, wide windows only). */
+	let docked = false;
+	try { docked = localStorage.getItem('sc-dock') === '1'; } catch (e) { /* storage unavailable */ }
+	/** The docked panel is open next to the chat. */
+	let panelOpen = false;
+	const canDock = () => docked && window.innerWidth >= 1000;
 	let wasBusy = false;
 	/** The folder the Changes view last read, so a switch clears it. */
 	let lastFolder = null;
@@ -103,8 +109,11 @@
 
 	function showFrame(view) {
 		for (const [name, el] of Object.entries(frames)) { el.classList.toggle('hidden', name !== view); }
-		$('view-changes').classList.add('hidden');
-		StormChanges.hide();
+		if (!(canDock() && panelOpen && view === 'chat')) {
+			$('view-changes').classList.add('hidden');
+			$('views').classList.remove('split');
+			StormChanges.hide();
+		}
 		const el = frames[view];
 		try { el.contentWindow.focus(); } catch (e) { /* cross-origin focus is best effort */ }
 	}
@@ -142,13 +151,28 @@
 
 	/** @param {string} viewKey @param {string[]} [files] Paths for the Changes view to select first. */
 	function navigate(viewKey, files) {
+		const prev = current;
 		mark(viewKey);
 		if (viewKey === 'changes') {
+			if (canDock()) {
+				// Docked: the panel opens beside the chat; the rail button toggles it.
+				if (panelOpen && !files && prev === 'changes') { panelOpen = false; navigate('chat'); return; }
+				panelOpen = true;
+				showFrame('chat');
+				navFrame('chat', { to: 'chat' });
+				$('views').classList.add('split');
+				$('view-changes').classList.remove('hidden');
+				StormChanges.show(files);
+				return;
+			}
+			panelOpen = false;
+			$('views').classList.remove('split');
 			for (const el of Object.values(frames)) { el.classList.add('hidden'); }
 			$('view-changes').classList.remove('hidden');
 			StormChanges.show(files);
 			return;
 		}
+		if (viewKey !== 'chat') { panelOpen = false; }
 		if (viewKey === 'chat' || viewKey === 'history') {
 			showFrame('chat');
 			navFrame('chat', { to: viewKey });
@@ -166,6 +190,16 @@
 	}
 
 	api.onNavigate(({ view }) => navigate(view));
+	StormChanges.setDocked(docked);
+	window.addEventListener('changes-dock', () => {
+		docked = !docked;
+		try { localStorage.setItem('sc-dock', docked ? '1' : '0'); } catch (e) { /* storage unavailable */ }
+		StormChanges.setDocked(docked);
+		if (!docked) { panelOpen = false; }
+		if (current === 'changes' || panelOpen) { navigate('changes'); }
+	});
+	// A window narrowed below the dock width falls back to the full-width view.
+	window.addEventListener('resize', () => { if (panelOpen && !canDock()) { panelOpen = false; navigate('changes'); } });
 	api.onPalette(() => openCommands());
 	for (const btn of document.querySelectorAll('.rail-btn[data-view]')) {
 		btn.addEventListener('click', () => navigate(btn.dataset.view));

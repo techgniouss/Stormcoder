@@ -72,3 +72,12 @@
 	.ch-body { grid-template-columns: 1fr; grid-template-rows: minmax(120px, 40%) minmax(0, 1fr); }
 	.ch-list { border-right: 0; border-bottom: 1px solid var(--rule); }
 }
+.ch-links { display: flex; gap: 12px; }
+.ch-link-danger { color: var(--negative); }
+.ch-dock { margin-right: 12px; padding-bottom: 7px; }
+.ch-hunk { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ch-hunk .ch-link { flex: none; position: sticky; right: 14px; }
+/* Docked: the chat keeps the left of the window and the Changes view takes the right. */
+#views.split #view-chat { right: auto; width: 46%; }
+#views.split #view-changes { left: 46%; width: 54%; border-left: 1px solid var(--border); }
+#views.split .ch-body { grid-template-columns: minmax(180px, 38%) minmax(0, 1fr); }

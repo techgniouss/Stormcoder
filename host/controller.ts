@@ -324,7 +324,7 @@ export class Controller {
 			if (!folder) {
 				throw new repo.GitError('Open a project folder first.', 'failed');
 			}
-			const writes = new Set(['stage', 'unstage', 'commit', 'push', 'pull', 'undoCommit', 'abortMerge', 'draft']);
+			const writes = new Set(['stage', 'unstage', 'stageHunk', 'discard', 'stash', 'stashPop', 'commit', 'push', 'pull', 'undoCommit', 'abortMerge', 'draft']);
 			if (writes.has(op) && !trusted) {
 				throw new repo.GitError('Trust this folder to change its git state.', 'failed');
 			}
@@ -336,6 +336,11 @@ export class Controller {
 				case 'files': value = await repo.listFiles(folder); break;
 				case 'stage': await repo.stage(folder, list(args[0])); break;
 				case 'unstage': await repo.unstage(folder, list(args[0])); break;
+				case 'stageHunk': await repo.stageHunk(folder, String(args[0]), args[1] === 'staged' ? 'staged' : 'unstaged', Number(args[2]), String(args[3])); break;
+				case 'discard': await repo.discard(folder, list(args[0])); break;
+				case 'stash': await repo.stash(folder); break;
+				case 'stashPop': await repo.stashPop(folder); break;
+				case 'prUrl': value = await repo.pullRequestUrl(folder); break;
 				case 'commit': value = await repo.commit(folder, String(args[0] ?? '')); break;
 				case 'push': value = await repo.push(folder, args[0] === true); break;
 				case 'pull': await repo.pull(folder); break;

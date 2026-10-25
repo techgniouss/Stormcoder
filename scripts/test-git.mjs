@@ -196,5 +196,68 @@ assert.ok(s.files.some(f => f.path === 'src/deep/x.ts'));
 assert.equal(s.prefix, 'src', 'the folder opened inside the repository is reported');
 assert.equal((await g.status(repo)).prefix, '');
 
+// Hunks: stage one of two, then take it back; a stale header is refused.
+sh(repo, 'reset', '-q', '--', '.gitignore');
+const lines = Array.from({ length: 40 }, (_, i) => `row${i + 1}`);
+write(repo, 'multi.txt', lines.join('\n') + '\n');
+sh(repo, 'add', 'multi.txt');
+sh(repo, 'commit', '-q', '-m', 'multi');
+const edited = [...lines];
+edited[1] = 'EDIT-A';
+edited[37] = 'EDIT-B';
+write(repo, 'multi.txt', edited.join('\n') + '\n');
+d = await g.diff(repo, 'multi.txt', 'unstaged');
+const heads = d.rows.filter(r => r.k === 'h');
+assert.equal(heads.length, 2, 'two separate hunks');
+assert.equal(d.hunkable, true);
+assert.deepEqual(heads.map(h => h.i), [0, 1]);
+await rejects(g.stageHunk(repo, 'multi.txt', 'unstaged', 1, '@@ -1 +1 @@'), 'nothing');
+await g.stageHunk(repo, 'multi.txt', 'unstaged', 1, heads[1].t);
+assert.match(sh(repo, 'diff', '--cached', 'multi.txt'), /EDIT-B/);
+assert.doesNotMatch(sh(repo, 'diff', '--cached', 'multi.txt'), /EDIT-A/, 'only the chosen hunk is staged');
+assert.match(sh(repo, 'diff', 'multi.txt'), /EDIT-A/, 'the other hunk is still unstaged');
+const sd = await g.diff(repo, 'multi.txt', 'staged');
+await g.stageHunk(repo, 'multi.txt', 'staged', 0, sd.rows.find(r => r.k === 'h').t);
+assert.equal(sh(repo, 'diff', '--cached', 'multi.txt'), '', 'the hunk is out of the index again');
+assert.equal((await g.diff(repo, 'new-untracked-none.txt', 'untracked').catch(() => ({ hunkable: false }))).hunkable, false);
+
+// Discard: a modified file goes back, an untracked file is deleted, staged work survives.
+sh(repo, 'checkout', '-q', 'multi.txt');
+write(repo, 'one.txt', 'scribble\n');
+write(repo, 'junk.txt', 'junk\n');
+await g.discard(repo, ['one.txt', 'junk.txt']);
+assert.notEqual(fs.readFileSync(path.join(repo, 'one.txt'), 'utf8'), 'scribble\n');
+assert.ok(!fs.existsSync(path.join(repo, 'junk.txt')));
+await assert.rejects(g.discard(repo, ['../x']), g.GitError);
+write(repo, 'one.txt', 'staged version\n');
+await g.stage(repo, ['one.txt']);
+write(repo, 'one.txt', 'staged version\nplus scribble\n');
+await g.discard(repo, ['one.txt']);
+assert.equal(fs.readFileSync(path.join(repo, 'one.txt'), 'utf8'), 'staged version\n', 'discard goes back to the staged text');
+assert.equal((await g.status(repo)).files.find(f => f.path === 'one.txt').staged, true);
+
+// Stash and pop.
+fs.rmSync(path.join(repo, 'ignored.txt'), { force: true });
+write(repo, 'stashme.txt', 's\n');
+await g.stash(repo);
+s = await g.status(repo);
+assert.equal(s.stashes, 1);
+assert.equal(s.files.length, 0, 'the tree is clean after stashing: ' + JSON.stringify(s.files));
+await g.stashPop(repo);
+assert.equal((await g.status(repo)).stashes, 0);
+assert.ok(fs.existsSync(path.join(repo, 'stashme.txt')));
+sh(repo, 'reset', '-q');
+sh(repo, 'checkout', '-q', '.');
+sh(repo, 'clean', '-fdq');
+await rejects(g.stash(repo), 'nothing');
+
+// Pull request links.
+sh(repo, 'remote', 'set-url', 'origin', 'git@github.com:acme/widgets.git');
+assert.equal(await g.pullRequestUrl(repo), 'https://github.com/acme/widgets/compare/main?expand=1');
+sh(repo, 'remote', 'set-url', 'origin', 'https://token@gitlab.com/acme/widgets.git');
+assert.match(await g.pullRequestUrl(repo), /^https:\/\/gitlab\.com\/acme\/widgets\/-\/merge_requests\/new\?/);
+sh(repo, 'remote', 'set-url', 'origin', 'https://git.example.org/acme/widgets.git');
+await rejects(g.pullRequestUrl(repo), 'no-remote');
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log('test-git: all assertions passed');

@@ -11,8 +11,10 @@ import * as path from 'path';
  * The git operations behind the Changes view. It shells out to the `git` command line (there is
  * no editor Git extension here) and imports nothing from `vscode`, so it is tested directly.
  *
- * What it will never do, whatever the caller asks: force-push, delete a branch or remote, skip
- * hooks (`--no-verify`), or discard working-tree changes. Paths are checked before they reach git.
+ * What it will never do, whatever the caller asks: force-push, delete a branch or remote, or skip
+ * hooks (`--no-verify`). Discarding a file's working-tree changes is possible only through
+ * {@link discard}, which the UI reaches only after the user confirms. Paths are checked before
+ * they reach git.
  */
 
 /** How long one git command may run before it is killed. Push and pull talk to the network. */
@@ -76,6 +78,8 @@ export interface RepoStatus {
 	readonly unpushed: RepoCommit[];
 	/** The newest commit is local only, so it can be taken back with a soft reset. */
 	readonly canUndoCommit: boolean;
+	/** Entries on the stash list. */
+	readonly stashes: number;
 	/** The opened folder's path inside the repository ('' when it is the root), for matching paths the chat reports. */
 	readonly prefix: string;
 }
@@ -87,6 +91,8 @@ export interface DiffRow {
 	readonly o?: number;
 	readonly n?: number;
 	readonly t: string;
+	/** On a hunk header: its position in the file, for staging that hunk alone. */
+	readonly i?: number;
 }
 
 /** A file's diff or text, capped for the UI. */
@@ -94,6 +100,8 @@ export interface FileDiff {
 	readonly rows: DiffRow[];
 	readonly binary: boolean;
 	readonly truncated: boolean;
+	/** Hunks can be staged or unstaged one by one (tracked, text, not cut short). */
+	readonly hunkable?: boolean;
 }
 
 /** A file's current text. */
@@ -189,7 +197,7 @@ function parseNumstat(out: string, into: Map<string, { a: number | null; d: numb
 
 /** Reads the repository state. Never throws for "not a repository" or "git missing"; those are results. */
 export async function status(cwd: string): Promise<RepoStatus> {
-	const empty: RepoStatus = { isRepo: false, ahead: 0, behind: 0, merging: false, files: [], unpushed: [], canUndoCommit: false, prefix: '' };
+	const empty: RepoStatus = { isRepo: false, ahead: 0, behind: 0, merging: false, files: [], unpushed: [], canUndoCommit: false, stashes: 0, prefix: '' };
 	let root: string | undefined;
 	try {
 		root = await repoRoot(cwd);
@@ -199,11 +207,12 @@ export async function status(cwd: string): Promise<RepoStatus> {
 	if (!root) {
 		return empty;
 	}
-	const [st, unstagedNum, stagedNum, merge] = await Promise.all([
+	const [st, unstagedNum, stagedNum, merge, stashList] = await Promise.all([
 		ok(['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all'], root),
 		run(['diff', '--numstat', '-z', '--no-ext-diff', '--no-textconv'], root),
 		run(['diff', '--cached', '--numstat', '-z', '--no-ext-diff', '--no-textconv'], root),
 		run(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], root),
+		run(['stash', 'list'], root),
 	]);
 	const counts = new Map<string, { a: number | null; d: number | null }>();
 	parseNumstat(unstagedNum.stdout, counts);
@@ -268,7 +277,7 @@ export async function status(cwd: string): Promise<RepoStatus> {
 	} catch {
 		prefix = '';
 	}
-	return { isRepo: true, root, branch, detached, upstream, ahead, behind, merging: merge.code === 0, files, unpushed, canUndoCommit, prefix: prefix.startsWith('..') ? '' : prefix };
+	return { isRepo: true, root, branch, detached, upstream, ahead, behind, merging: merge.code === 0, files, unpushed, canUndoCommit, stashes: stashList.stdout.split('\n').filter(Boolean).length, prefix: prefix.startsWith('..') ? '' : prefix };
 }
 
 async function listUnpushed(root: string, upstream: string | undefined): Promise<RepoCommit[]> {
@@ -297,13 +306,14 @@ export function parseUnifiedDiff(text: string): FileDiff {
 	let o = 0;
 	let n = 0;
 	let inHunk = false;
+	let hunk = 0;
 	for (const line of text.split('\n')) {
 		const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
 		if (h) {
 			o = Number(h[1]);
 			n = Number(h[2]);
 			inHunk = true;
-			rows.push({ k: 'h', t: line });
+			rows.push({ k: 'h', t: line, i: hunk++ });
 		} else if (!inHunk || line.startsWith('\\')) {
 			continue;
 		} else if (line.startsWith('+')) {
@@ -314,7 +324,7 @@ export function parseUnifiedDiff(text: string): FileDiff {
 			rows.push({ k: 'c', o: o++, n: n++, t: line.slice(1) });
 		}
 	}
-	return { rows, binary: false, truncated };
+	return { rows, binary: false, truncated, hunkable: false };
 }
 
 /** True when `abs` is a symbolic link, which the viewer refuses (it could point outside the project). */
@@ -344,7 +354,119 @@ export async function diff(cwd: string, rel: string, area: 'staged' | 'unstaged'
 	} else {
 		r = await run(['diff', ...(area === 'staged' ? ['--cached'] : []), ...common, '--', file], root);
 	}
-	return parseUnifiedDiff(r.stdout);
+	const parsed = parseUnifiedDiff(r.stdout);
+	return { ...parsed, hunkable: area !== 'untracked' && !parsed.binary && !parsed.truncated && parsed.rows.length > 0 };
+}
+
+/** Splits a one-file diff into its header and its hunks, each kept as raw text so it can be re-applied. */
+function splitHunks(text: string): { header: string; hunks: string[] } {
+	const lines = text.split('\n');
+	const first = lines.findIndex(l => l.startsWith('@@ '));
+	if (first < 0) {
+		return { header: '', hunks: [] };
+	}
+	const header = lines.slice(0, first).join('\n') + '\n';
+	const hunks: string[] = [];
+	let cur: string[] = [];
+	for (const line of lines.slice(first)) {
+		if (line.startsWith('@@ ') && cur.length) {
+			hunks.push(cur.join('\n') + '\n');
+			cur = [];
+		}
+		cur.push(line);
+	}
+	while (cur.length && cur[cur.length - 1] === '') {
+		cur.pop();
+	}
+	hunks.push(cur.join('\n') + '\n');
+	return { header, hunks };
+}
+
+/**
+ * Stages one hunk of a file (`area` unstaged), or takes one hunk back out of the index (`area`
+ * staged). The patch is rebuilt here from git's own diff, never taken from the caller, and the
+ * hunk header the user saw must still match, so a file that changed since is refused.
+ */
+export async function stageHunk(cwd: string, rel: string, area: 'staged' | 'unstaged', index: number, expectHeader: string): Promise<void> {
+	const root = await requireRoot(cwd);
+	const file = safeRelPath(rel);
+	const r = await run(['diff', ...(area === 'staged' ? ['--cached'] : []), '--no-color', '--no-ext-diff', '--no-textconv', '-U3', '--', file], root);
+	const { header, hunks } = splitHunks(r.stdout);
+	const hunk = Number.isInteger(index) ? hunks[index] : undefined;
+	if (!hunk || hunk.split('\n')[0] !== expectHeader) {
+		throw new GitError('That file changed since you opened it. Pick the hunk again.', 'nothing');
+	}
+	const a = await run(['apply', '--cached', '--recount', ...(area === 'staged' ? ['--reverse'] : []), '-'], root, header + hunk);
+	if (a.code !== 0) {
+		throw new GitError(`${a.stderr}${a.stdout}`.trim() || 'git apply failed', 'failed');
+	}
+}
+
+/**
+ * Throws away the working-tree changes of the given files: a tracked file goes back to what is
+ * staged (or committed), an untracked file is deleted. This is the one destructive call here;
+ * the UI asks first.
+ */
+export async function discard(cwd: string, paths: string[]): Promise<void> {
+	const root = await requireRoot(cwd);
+	const st = await status(root);
+	const known = new Map(st.files.map(f => [f.path, f]));
+	for (const p of paths.map(safeRelPath)) {
+		const f = known.get(p);
+		if (!f || f.conflict) {
+			continue;
+		}
+		if (f.untracked) {
+			await ok(['clean', '-f', '-q', '--', p], root);
+		} else if (f.unstaged) {
+			await ok(['restore', '--worktree', '--', p], root);
+		}
+	}
+}
+
+/** Puts every change, untracked files included, on the stash and leaves a clean tree. */
+export async function stash(cwd: string): Promise<void> {
+	const root = await requireRoot(cwd);
+	const out = await ok(['stash', 'push', '--include-untracked', '-m', 'Stormcoder stash'], root);
+	if (/No local changes to save/i.test(out)) {
+		throw new GitError('Nothing to stash.', 'nothing');
+	}
+}
+
+/** Re-applies the newest stash and drops it; git keeps it if the apply conflicts. */
+export async function stashPop(cwd: string): Promise<void> {
+	const root = await requireRoot(cwd);
+	const r = await run(['stash', 'pop'], root);
+	if (r.code !== 0) {
+		throw new GitError(`${r.stderr}${r.stdout}`.trim() || 'git stash pop failed', 'failed');
+	}
+}
+
+/** The page that opens a pull request (or merge request) for the current branch on its host. */
+export async function pullRequestUrl(cwd: string): Promise<string> {
+	const root = await requireRoot(cwd);
+	const st = await status(root);
+	if (!st.branch) {
+		throw new GitError('Check out a branch first.', 'detached');
+	}
+	const remote = st.upstream ? st.upstream.split('/')[0] : 'origin';
+	const r = await run(['remote', 'get-url', remote], root);
+	const m = r.code === 0 ? /^(?:https?:\/\/(?:[^@/]+@)?|git@|ssh:\/\/git@)([^/:]+)[/:](.+?)(?:\.git)?\/?$/.exec(r.stdout.trim()) : null;
+	if (!m) {
+		throw new GitError('This repository has no remote to open a pull request on.', 'no-remote');
+	}
+	const [, host, repoPath] = m;
+	const branch = encodeURIComponent(st.branch);
+	if (host === 'github.com') {
+		return `https://github.com/${repoPath}/compare/${branch}?expand=1`;
+	}
+	if (host === 'gitlab.com') {
+		return `https://gitlab.com/${repoPath}/-/merge_requests/new?merge_request%5Bsource_branch%5D=${branch}`;
+	}
+	if (host === 'bitbucket.org') {
+		return `https://bitbucket.org/${repoPath}/pull-requests/new?source=${branch}`;
+	}
+	throw new GitError(`Opening a pull request is supported for GitHub, GitLab and Bitbucket, not ${host}.`, 'no-remote');
 }
 
 /** The current text of a file in the project, for the Files tab. Refuses links, folders and anything outside the repository. */
