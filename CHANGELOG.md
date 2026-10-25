@@ -42,6 +42,18 @@ Agent effectiveness audit.
 - Benchmark: `bench/` has 13 tasks with objective checks, a headless runner over the real engine (`node bench/run.mjs --provider anthropic --model ...`), a comparison tool and a validator that proves the tasks can neither be passed untouched nor by known shortcuts. `npm run bench:go` (or `node bench/start.mjs`) is a guided runner that asks for provider, model and key. `custom` providers can take a key from `CUSTOM_API_KEY`. `--app-data` runs the benchmark with the API keys and provider settings already saved in the app (read from a sanitized private copy under Electron; sign-in sessions, MCP servers and hooks are never carried over). The secret codec moved from `electron/main.ts` to `electron/secrets.ts` unchanged. `npm run bench:validate` and a three-task oracle run are part of `npm test`.
 - Tests: `scripts/test-discovery.mjs`; the browser test helper also finds `chrome-linux64`.
 
+## 1.3.6
+
+Full audit of every section; each fix has a regression test.
+
+- Safety: ask and plan modes refuse tools they were not offered. "Always allow" for a command no longer approves anything chained after it. The dangerous-command list covers more bypasses, writes through a dangling symlink are refused, `fetch_url` asks before reaching private hosts, and tool calls cut off at the token limit are not run. Non-UTF-8 and binary files are no longer corrupted by edits.
+- Remote control: a phone can no longer queue or steer prompts that run under the desktop's looser approval policy. A connected client cannot evict the desktop host from the relay, revoked devices lose access to the pending and push endpoints, and failed pairing guesses no longer withdraw every code. Outbound data is scrubbed of credentials, the cloudflared download is checksum-verified, and the WebSocket server enforces control-frame and backpressure rules.
+- Settings and data: a typo in `settings.json` no longer resets your settings or overwrites the file, and corrupt state files are renamed aside. The built-in editor is limited to settings, logs, MCP config and project skills. OAuth sign-in URLs are no longer corrupted when the browser opens them. 17 numeric settings now have bounds.
+- Providers: concurrent OAuth refreshes share one request and no longer wipe a valid sign-in. Kiro calls work, the thinking block closes after a reasoning-then-tools turn, Antigravity tool results are matched to the right call, key rotation no longer double-rotates, and sign-in requests time out.
+- MCP and skills: a bad server entry is skipped instead of failing every run, a streaming reply that never ends times out, and shutdown and reconnect no longer leak a server process. The consent dialog lists environment variable names, header names and the working directory. Project-level MCP headers no longer expand `${env:...}`.
+- Auto mode: the reviewer no longer sees writes that were refused or failed, plan and review text is saved with the session, and a failed step stops the run.
+- Chat: links in messages open in the system browser, the tab strip and dialogs handle keyboard focus, and hard-coded colours use tokens.
+
 ## 1.3.5
 
 Audit pass over the thinking-line work.
