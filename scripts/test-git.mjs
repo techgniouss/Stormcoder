@@ -193,6 +193,8 @@ write(repo, 'src/deep/x.ts', 'x\n');
 s = await g.status(path.join(repo, 'src'));
 assert.equal(s.isRepo, true);
 assert.ok(s.files.some(f => f.path === 'src/deep/x.ts'));
+assert.equal(s.prefix, 'src', 'the folder opened inside the repository is reported');
+assert.equal((await g.status(repo)).prefix, '');
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log('test-git: all assertions passed');

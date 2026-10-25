@@ -75,6 +75,11 @@
 		}
 	}
 
+	/** The repository-relative form of a path the chat reported (relative to the opened folder). @param {string} p */
+	function agentKey(p) { return st && st.prefix ? st.prefix + '/' + p : p; }
+	/** @param {string} p */
+	function isAgent(p) { return agentFiles.has(p) || (!!st && !!st.prefix && agentFiles.has(p.slice(st.prefix.length + 1))); }
+
 	function baseName(p) { return p.split('/').pop() || p; }
 	function dirName(p) { const i = p.lastIndexOf('/'); return i < 0 ? '' : p.slice(0, i); }
 
@@ -231,7 +236,7 @@
 		const name = el('span', 'ch-name', baseName(f.path));
 		name.title = f.path;
 		r.append(name);
-		if (agentFiles.has(f.path)) { r.append(el('span', 'ch-tag', 'agent')); }
+		if (isAgent(f.path)) { r.append(el('span', 'ch-tag', 'agent')); }
 		if (f.conflict) {
 			r.append(el('span', 'ch-count ch-del', 'conflict'));
 		} else if (f.added !== null || f.removed !== null) {
@@ -302,6 +307,11 @@
 		}
 		const f = fileFor(sel.path);
 		const wantFile = mode === 'file';
+		if (wantFile && f && f.status === 'D') {
+			pane.textContent = '';
+			pane.append(el('div', 'ch-empty', 'This file was deleted. Switch to Diff to see what it held.'));
+			return;
+		}
 		const res = wantFile
 			? await git('file', sel.path)
 			: await git('diff', sel.path, sel.area === 'staged' ? 'staged' : f && f.untracked ? 'untracked' : 'unstaged');
@@ -456,7 +466,7 @@
 		if (stagedCount || !st.unpushed.length) { acts.append(commitBtn); }
 		g.append(acts);
 
-		if (st.unpushed.length || (!st.upstream && st.branch && !st.files.length)) {
+		if (st.unpushed.length || st.behind || (!st.upstream && st.branch && !st.files.length)) {
 			const p = el('div', 'ch-actions');
 			if (st.canUndoCommit) { p.append(button('Undo commit', '', () => void act('undoCommit', []), !!busy)); }
 			if (st.merging) { p.append(button('Abort merge', 'ch-danger', () => void act('abortMerge', []), !!busy)); }
@@ -573,7 +583,7 @@
 			if (Array.isArray(files)) { for (const f of files) { agentFiles.add(String(f).replace(/ \(new\)$/, '')); } }
 			void refresh().then(() => {
 				if (Array.isArray(files) && st && st.isRepo) {
-					const first = files.map(f => String(f).replace(/ \(new\)$/, '')).find(p => st.files.some(f => f.path === p));
+					const first = files.map(f => agentKey(String(f).replace(/ \(new\)$/, ''))).find(p => st.files.some(f => f.path === p));
 					if (first) {
 						const f = fileFor(first);
 						sel = { path: first, area: f.unstaged ? 'unstaged' : 'staged' };

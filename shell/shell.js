@@ -79,6 +79,8 @@
 		}
 		if (message && message.type === 'checkpoint' && Array.isArray(message.files)) {
 			StormChanges.noteAgentFiles(message.files);
+			// An empty list means the run was undone; either way the files on disk just changed.
+			StormChanges.refresh();
 		}
 		if (frames[view]) { postToFrame(view, message); }
 	});

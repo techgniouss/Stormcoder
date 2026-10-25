@@ -13,6 +13,9 @@ import assert from 'node:assert/strict';
 // verify, and a model that wrote again on every nudge would never finish.
 const mock = await startMock(req => {
 	// The memory suggestion request (stormcoder.memory.autoPropose): answer it with one fact.
+	if (String(req.messages.at(-1)?.content).includes('Write a git commit message for the following staged changes')) {
+		return 'Add hello file from the model';
+	}
 	if (String(req.messages.at(-1)?.content).includes('You maintain a short project memory')) {
 		return '[{"type":"gotcha","text":"Proposed by the model after the run."}]';
 	}
@@ -163,10 +166,13 @@ try {
 	await changes.getByRole('button', { name: 'Stage all' }).click();
 	await changes.locator('.ch-group', { hasText: 'Staged' }).waitFor({ timeout: 10000 });
 	assert.ok(await changes.getByRole('button', { name: /^Commit \d+$/ }).isDisabled(), 'commit waits for a message');
-	await changes.locator('.ch-msg').fill('Add hello file');
+	await changes.getByRole('button', { name: 'Generate' }).click();
+	await page.waitForFunction(() => { const m = document.querySelector('#view-changes .ch-msg'); return !!m && !m.disabled && m.value.length > 0; }, undefined, { timeout: 15000 });
+	assert.equal(await changes.locator('.ch-msg').inputValue(), 'Add hello file from the model', 'Generate fills the message from the model');
+	assert.ok(await changes.getByRole('button', { name: 'Regenerate' }).isVisible(), 'the button then offers Regenerate');
 	await changes.getByRole('button', { name: /^Commit \d+$/ }).click();
 	await changes.getByText('Committed', { exact: false }).first().waitFor({ timeout: 15000 });
-	assert.equal(gitIn('log', '-1', '--format=%s').trim(), 'Add hello file');
+	assert.equal(gitIn('log', '-1', '--format=%s').trim(), 'Add hello file from the model');
 	await changes.getByRole('button', { name: 'Publish branch' }).click();
 	await changes.getByText('Force', { exact: true }).waitFor({ timeout: 5000 });
 	await changes.getByRole('button', { name: 'Confirm publish' }).click();

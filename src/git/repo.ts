@@ -76,6 +76,8 @@ export interface RepoStatus {
 	readonly unpushed: RepoCommit[];
 	/** The newest commit is local only, so it can be taken back with a soft reset. */
 	readonly canUndoCommit: boolean;
+	/** The opened folder's path inside the repository ('' when it is the root), for matching paths the chat reports. */
+	readonly prefix: string;
 }
 
 /** One line of a parsed unified diff. */
@@ -187,7 +189,7 @@ function parseNumstat(out: string, into: Map<string, { a: number | null; d: numb
 
 /** Reads the repository state. Never throws for "not a repository" or "git missing"; those are results. */
 export async function status(cwd: string): Promise<RepoStatus> {
-	const empty: RepoStatus = { isRepo: false, ahead: 0, behind: 0, merging: false, files: [], unpushed: [], canUndoCommit: false };
+	const empty: RepoStatus = { isRepo: false, ahead: 0, behind: 0, merging: false, files: [], unpushed: [], canUndoCommit: false, prefix: '' };
 	let root: string | undefined;
 	try {
 		root = await repoRoot(cwd);
@@ -260,7 +262,13 @@ export async function status(cwd: string): Promise<RepoStatus> {
 
 	const unpushed = await listUnpushed(root, upstream);
 	const canUndoCommit = unpushed.length > 0 && (await run(['rev-parse', '-q', '--verify', 'HEAD~1'], root)).code === 0 && merge.code !== 0;
-	return { isRepo: true, root, branch, detached, upstream, ahead, behind, merging: merge.code === 0, files, unpushed, canUndoCommit };
+	let prefix = '';
+	try {
+		prefix = path.relative(fs.realpathSync(root), fs.realpathSync(cwd)).split(path.sep).join('/');
+	} catch {
+		prefix = '';
+	}
+	return { isRepo: true, root, branch, detached, upstream, ahead, behind, merging: merge.code === 0, files, unpushed, canUndoCommit, prefix: prefix.startsWith('..') ? '' : prefix };
 }
 
 async function listUnpushed(root: string, upstream: string | undefined): Promise<RepoCommit[]> {
