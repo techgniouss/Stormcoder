@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // Approval / ask_user card rendering for the PWA — a port of
 // `extensions/openvs-chat/media/prompts.js`'s shape (same reply fields: `approved`/`always`/
@@ -24,7 +24,8 @@ function el(tag, className, text) {
 /** @typedef {{ label: string, description?: string }} AskOption */
 /**
  * @typedef {{ id: string, type: string, sessionId?: string, title?: string, detail?: string,
- *   preview?: string, previewLanguage?: string, question?: string, options?: AskOption[] }} PromptRequest
+ *   preview?: string, previewLanguage?: string, question?: string, options?: AskOption[],
+ *   reviewOnDesktop?: boolean, hiddenBytes?: number }} PromptRequest
  */
 
 /**
@@ -70,6 +71,9 @@ export function create(deps) {
 	function shell(request, className, attach) {
 		const card = el('div', `prompt-card prompt-open ${className}`);
 		card.setAttribute('data-prompt-id', request.id);
+		// Announced when it appears: a run is blocked on this, and a screen reader should hear that.
+		card.setAttribute('role', 'alertdialog');
+		card.setAttribute('aria-label', String(request.title || request.question || 'The agent needs an answer'));
 		open.set(request.id, { request, card });
 		if (attach) { deps.container.appendChild(card); }
 		return card;
@@ -85,12 +89,19 @@ export function create(deps) {
 		if (request.preview) {
 			card.appendChild(el('pre', 'prompt-preview', request.preview));
 		}
+		// Too long to review on a phone (the host kept both ends and said how much it hid): the only
+		// answer offered here is Deny. Allowing something that could not be read is the one thing
+		// this card must not make easy; it is answered on the computer.
+		const hidden = request.reviewOnDesktop === true;
+		if (hidden) {
+			card.appendChild(el('div', 'prompt-detail prompt-hidden-note', `Part of this (${Number(request.hiddenBytes) || 'a lot'} bytes) is too long to show on a phone. Check it on the computer to allow it, or deny it here.`));
+		}
 		const actions = el('div', 'prompt-actions');
 		for (const [act, label] of /** @type {['allow'|'always'|'deny', string][]} */ ([
 			['allow', 'Allow'],
 			['always', 'Allow for run'],
 			['deny', 'Deny'],
-		])) {
+		]).filter(([act]) => !hidden || act === 'deny')) {
 			const button = el('button', `prompt-btn prompt-${act}`, label);
 			button.addEventListener('click', () => answer(
 				request.id,

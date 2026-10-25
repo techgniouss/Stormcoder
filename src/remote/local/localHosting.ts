@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -11,24 +11,24 @@ import { fileStore, LocalRelay } from './relayServer';
 import { checkTunnelDns, findCloudflared, installCloudflared, quickTunnelConfig, Tunnel } from './tunnel';
 
 /** SecretStorage key of the local relay's HMAC pepper — generated once, reused forever, or every paired device stops verifying. */
-const PEPPER_KEY = 'openvsChat.remote.localPepper';
-/** SecretStorage key of a named tunnel's connector token (see `openvsChat.remoteSetTunnel`). */
-export const TUNNEL_TOKEN_KEY = 'openvsChat.remote.tunnelToken';
-/** The port a named tunnel's dashboard route should point at when `openvsChat.remote.localPort` is unset. */
+const PEPPER_KEY = 'stormcoder.remote.localPepper';
+/** SecretStorage key of a named tunnel's connector token (see `stormcoder.remoteSetTunnel`). */
+export const TUNNEL_TOKEN_KEY = 'stormcoder.remote.tunnelToken';
+/** The port a named tunnel's dashboard route should point at when `stormcoder.remote.localPort` is unset. */
 const NAMED_TUNNEL_DEFAULT_PORT = 8787;
 /** Restart delays after cloudflared dies unexpectedly — a flaky network shouldn't need a reload. */
 const RESTART_DELAYS_MS = [2_000, 5_000, 15_000, 30_000, 60_000];
 
-/** `openvsChat.remote.relayMode`. */
+/** `stormcoder.remote.relayMode`. */
 export type RelayMode = 'local' | 'hosted';
 
 /**
- * Resolves `openvsChat.remote.relayMode`: `auto` (the default) is `hosted` for anyone who
+ * Resolves `stormcoder.remote.relayMode`: `auto` (the default) is `hosted` for anyone who
  * already set a relay URL — their deployment keeps working exactly as before — and `local`
  * for everyone else, so turning remote on needs nothing but the toggle.
  */
 export function getRelayMode(): RelayMode {
-	const cfg = vscode.workspace.getConfiguration('openvsChat');
+	const cfg = vscode.workspace.getConfiguration('stormcoder');
 	const mode = cfg.get<string>('remote.relayMode') ?? 'auto';
 	if (mode === 'local' || mode === 'hosted') {
 		return mode;
@@ -57,14 +57,14 @@ function pwaDir(context: vscode.ExtensionContext): string {
  * on is itself the go-ahead.
  */
 export async function ensureCloudflared(context: vscode.ExtensionContext, askFirst: boolean): Promise<string | undefined> {
-	const configured = vscode.workspace.getConfiguration('openvsChat').get<string>('remote.cloudflaredPath');
+	const configured = vscode.workspace.getConfiguration('stormcoder').get<string>('remote.cloudflaredPath');
 	const found = findCloudflared(configured, installDir(context));
 	if (found) {
 		return found;
 	}
 	if (askFirst) {
 		const choice = await vscode.window.showInformationMessage(
-			'OpenVS Remote reaches your phone through Cloudflare Tunnel (cloudflared), which isn\'t installed yet. Install it now? It\'s downloaded from Cloudflare\'s official GitHub releases.',
+			'Stormcoder Remote reaches your phone through Cloudflare Tunnel (cloudflared), which isn\'t installed yet. Install it now? It\'s downloaded from Cloudflare\'s official GitHub releases.',
 			'Install', 'Not Now');
 		if (choice !== 'Install') {
 			return undefined;
@@ -72,7 +72,7 @@ export async function ensureCloudflared(context: vscode.ExtensionContext, askFir
 	}
 	return vscode.window.withProgress({
 		location: vscode.ProgressLocation.Notification,
-		title: 'OpenVS Remote: installing Cloudflare Tunnel (cloudflared)…',
+		title: 'Stormcoder Remote: installing Cloudflare Tunnel (cloudflared)…',
 		cancellable: true,
 	}, async (_progress, token) => {
 		const controller = new AbortController();
@@ -81,7 +81,7 @@ export async function ensureCloudflared(context: vscode.ExtensionContext, askFir
 			return await installCloudflared(installDir(context), fetch, process.platform, process.arch, controller.signal);
 		} catch (err) {
 			if (!controller.signal.aborted) {
-				void vscode.window.showErrorMessage(`OpenVS Remote couldn't install cloudflared: ${err instanceof Error ? err.message : String(err)}`);
+				void vscode.window.showErrorMessage(`Stormcoder Remote couldn't install cloudflared: ${err instanceof Error ? err.message : String(err)}`);
 			}
 			return undefined;
 		}
@@ -117,7 +117,7 @@ export class LocalHosting implements vscode.Disposable {
 
 	/** Starts the relay for one room, then the tunnel in the background. Resolves as soon as the relay itself listens. */
 	async start(roomId: string, hostToken: string, askBeforeInstall: boolean): Promise<void> {
-		const cfg = vscode.workspace.getConfiguration('openvsChat');
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
 		const hostname = cfg.get<string>('remote.tunnelHostname')?.trim() || undefined;
 		const token = hostname ? await this.context.secrets.get(TUNNEL_TOKEN_KEY) : undefined;
 		this.quickTunnel = !token;
@@ -129,7 +129,7 @@ export class LocalHosting implements vscode.Disposable {
 			port: configuredPort > 0 ? configuredPort : (token ? NAMED_TUNNEL_DEFAULT_PORT : 0),
 		});
 		relay.registerRoom(roomId, hostToken);
-		this.urlKey = `openvsChat.remote.lastPublicUrl.${roomId}`;
+		this.urlKey = `stormcoder.remote.lastPublicUrl.${roomId}`;
 		const port = await relay.start();
 		this.relay = relay;
 		this.localUrl = `http://127.0.0.1:${port}`;
@@ -180,7 +180,7 @@ export class LocalHosting implements vscode.Disposable {
 		const binary = await ensureCloudflared(this.context, askBeforeInstall);
 		if (!binary) {
 			this.tunnelError = 'Cloudflare Tunnel (cloudflared) is not installed';
-			throw new Error('OpenVS Remote needs Cloudflare Tunnel (cloudflared) to reach your phone. Run "Remote: Install Cloudflare Tunnel", or set "openvsChat.remote.cloudflaredPath".');
+			throw new Error('Stormcoder Remote needs Cloudflare Tunnel (cloudflared) to reach your phone. Run "Remote: Install Cloudflare Tunnel", or set "stormcoder.remote.cloudflaredPath".');
 		}
 		if (this.disposed) {
 			throw new Error('Local hosting stopped.');
@@ -230,10 +230,10 @@ export class LocalHosting implements vscode.Disposable {
 		this.warnedDns = true;
 		// Not awaited: the tunnel is ready either way, and pairing must not wait on a click.
 		void vscode.window.showWarningMessage(
-			'Your network’s DNS won’t resolve Cloudflare quick-tunnel addresses (*.trycloudflare.com) — some ISPs block them. A phone on this Wi-Fi or the same carrier won’t reach OpenVS Remote until its Private DNS is set to one.one.one.one (Android: Settings → Network → Private DNS), or you switch to your own Cloudflare tunnel, whose address isn’t blocked.',
+			'Your network’s DNS won’t resolve Cloudflare quick-tunnel addresses (*.trycloudflare.com) — some ISPs block them. A phone on this Wi-Fi or the same carrier won’t reach Stormcoder Remote until its Private DNS is set to one.one.one.one (Android: Settings → Network → Private DNS), or you switch to your own Cloudflare tunnel, whose address isn’t blocked.',
 			'Use My Cloudflare Tunnel').then(choice => {
 			if (choice) {
-				void vscode.commands.executeCommand('openvsChat.remoteSetTunnel');
+				void vscode.commands.executeCommand('stormcoder.remoteSetTunnel');
 			}
 		});
 	}
@@ -243,7 +243,7 @@ export class LocalHosting implements vscode.Disposable {
 		if (this.disposed) {
 			return;
 		}
-		console.warn(`OpenVS local relay: cloudflared exited (code ${code}); restarting.\n${log}`);
+		console.warn(`Stormcoder local relay: cloudflared exited (code ${code}); restarting.\n${log}`);
 		this.tunnelError = `cloudflared exited (code ${code}), restarting`;
 		const delay = RESTART_DELAYS_MS[Math.min(this.restartAttempt, RESTART_DELAYS_MS.length - 1)];
 		this.restartAttempt++;

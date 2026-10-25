@@ -1,15 +1,15 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * Reference "web sign-in" server for OpenVS AI Chat.
+ * Reference "web sign-in" server for Stormcoder AI Chat.
  *
  * This is the backend that the chat's "Sign in with web" button talks to. Point a
  * provider's auth URL at it, e.g.:
  *
- *   "openvsChat.nvidia.authUrl": "http://localhost:7345/login"
+ *   "stormcoder.nvidia.authUrl": "http://localhost:7345/login"
  *
  * The contract (see README.md) is:
  *   1. The editor opens  <authUrl>?redirect_uri=<editor-callback>&state=<nonce>&provider=<id>
@@ -172,7 +172,7 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-	console.log(`OpenVS AI Chat reference auth server listening on http://localhost:${PORT}`);
+	console.log(`Stormcoder AI Chat reference auth server listening on http://localhost:${PORT}`);
 	console.log(`Sign-in:  set a provider authUrl to http://localhost:${PORT}/login`);
 	if (UPSTREAM && UPSTREAM_KEY) {
 		console.log(`Proxy:    forwarding /v1 -> ${UPSTREAM} (set baseUrl to http://localhost:${PORT}/v1)`);

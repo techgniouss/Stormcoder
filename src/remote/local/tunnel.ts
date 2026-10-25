@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -104,7 +104,7 @@ async function publishedDigest(asset: string, fetchImpl: typeof fetch, signal?: 
 	const digest = entry?.digest;
 	const match = typeof digest === 'string' ? /^sha256:([0-9a-f]{64})$/i.exec(digest) : null;
 	if (typeof url !== 'string' || !url.startsWith(RELEASE_DOWNLOAD_PREFIX) || !match) {
-		throw new Error(`The cloudflared release publishes no SHA-256 for ${asset}, so it was not downloaded. Install cloudflared yourself and set "openvsChat.remote.cloudflaredPath".`);
+		throw new Error(`The cloudflared release publishes no SHA-256 for ${asset}, so it was not downloaded. Install cloudflared yourself and set "stormcoder.remote.cloudflaredPath".`);
 	}
 	return { url, sha256: match[1].toLowerCase() };
 }
@@ -125,7 +125,7 @@ export async function installCloudflared(
 ): Promise<string> {
 	const asset = releaseAsset(platform, arch);
 	if (!asset) {
-		throw new Error(`Cloudflare doesn't publish cloudflared for ${platform}/${arch}. Install it yourself and set "openvsChat.remote.cloudflaredPath".`);
+		throw new Error(`Cloudflare doesn't publish cloudflared for ${platform}/${arch}. Install it yourself and set "stormcoder.remote.cloudflaredPath".`);
 	}
 	const expected = await publishedDigest(asset, fetchImpl, signal);
 	const response = await fetchImpl(expected.url, { signal, redirect: 'follow' });
@@ -354,10 +354,10 @@ export async function checkTunnelDns(
 
 /** A scratch directory for the quick tunnel's empty config file. */
 export function quickTunnelConfig(dir: string = os.tmpdir()): string {
-	const file = path.join(dir, 'openvs-quick-tunnel.yml');
+	const file = path.join(dir, 'stormcoder-quick-tunnel.yml');
 	if (!fs.existsSync(file)) {
 		fs.mkdirSync(dir, { recursive: true });
-		fs.writeFileSync(file, '# OpenVS quick tunnel: intentionally empty, see tunnel.ts\n');
+		fs.writeFileSync(file, '# Stormcoder quick tunnel: intentionally empty, see tunnel.ts\n');
 	}
 	return file;
 }

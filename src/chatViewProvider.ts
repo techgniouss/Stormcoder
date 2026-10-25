@@ -1,18 +1,21 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { AgentA2A, AgentMessageDelivery, AgentOptions, AgentRunner, AgentSessionInfo, RunResult } from './agent/agentRunner';
+import { MEMORY_TYPES, MemoryScope, MemoryStore, appendMemory, buildPromptBlock, buildProposalPrompt, configureMemory, goalOf, memoryEnabled, parseProposals, projectStore, searchTranscripts, userStore } from './memory/projectMemory';
+import { WorkLog } from './agent/workLog';
+import { thinkingStyle } from './providers/anthropic';
 import { streamBudgeted } from './agent/budgetedStream';
 import { describeRestore, FileWrite, RunCheckpoint } from './agent/checkpoint';
-import { CACHED_COMPACT_TRIGGER, COMPACT_MARKER, COMPACT_TRIGGER, SUMMARY_MAX_TOKENS, compactMessages, shouldCompact } from './agent/compaction';
+import { CACHED_COMPACT_TRIGGER, COMPACT_MARKER, COMPACT_TRIGGER, SUMMARY_MAX_TOKENS, canCompact, compactMessages, shouldCompact } from './agent/compaction';
 import { contextTurn, estimateTokens, needsCompactPrompt, unfittableRequest, withSystemPrompt } from './agent/context';
 import { contextWindowFor, requestBudgets } from './agent/contextWindow';
 import { APPROVAL_POLICIES, ApprovalPolicy, applyApprovalFloor, Guardrails, loadGuardrails, parseApprovalPolicy, RunOrigin } from './agent/guardrails';
-import { ApprovalRequest, ApprovalResult, ToolApprover, UserQuestion } from './agent/tools';
+import { ApprovalRequest, ApprovalResult, ToolApprover, UserQuestion, stopBackgroundCommands } from './agent/tools';
 import { AutoOrchestrator, describePinnedModelError, fallbackNote, isModelError, nextCandidate } from './auto/orchestrator';
 import { AUTO_ROLES, AutoRole, RoleAssignment, RoleRouter } from './auto/router';
 import { WebAuthManager } from './auth';
@@ -29,11 +32,14 @@ import { rateLimitStatus } from './providers/rateLimits';
 import { ProviderRegistry } from './providers/registry';
 import { withProviderResilience } from './providers/resilience';
 import { ModelCatalog } from './providers/modelCatalog';
-import { ChatImage, ChatMessage, ChatProvider, entrySupportsTools, isAbortError, modelSupportsVision } from './providers/types';
+import { ChatImage, ChatMessage, ChatProvider, entrySupportsTools, isAbortError, modelSupportsVision, streamChatWithContinuation } from './providers/types';
 import { defaultChromeProfilePath } from './providers/webCookie/chromeCookies';
 import { AttachImageChunk, UploadAssembler, readPickedImages, sanitizeInlineImages } from './remote/attachments';
 import { QueueDrainGate } from './session/queueDrain';
 import { appendRules, COMPACT_RULES_CHARS, RulesProvider } from './rules';
+
+/** What the compact system prompt may carry of project memory (about 400 tokens). */
+const COMPACT_MEMORY_CHARS = 1_600;
 import { MessageSink, SessionBus } from './session/bus';
 import { adoptLegacyState, buildPersistedState, LegacyPersistedState, loadState, restoredSessions, saveState } from './session/persistence';
 import { PromptRegistry } from './session/prompts';
@@ -109,8 +115,14 @@ const INLINE_KINDS: InlineKind[] = ['explain', 'fix', 'doc', 'optimize', 'tests'
 /** {@link MessageSink} ids for the two in-process surfaces every chat host has. */
 const WEBVIEW_SINK_ID = 'webview';
 const SETTINGS_SINK_ID = 'settings';
-/** {@link MessageSink} id for the diagnostic `openvsChat.remote.loopback` sink. */
+/** {@link MessageSink} id for the diagnostic `stormcoder.remote.loopback` sink. */
 const LOOPBACK_SINK_ID = 'loopback';
+
+/** Most messages a paired device may page back in one `fetchTranscript`. */
+const MAX_TRANSCRIPT_PAGE = 100;
+
+/** Paths a run started from a paired phone may not write: instructions and process config that outlive the run. */
+const REMOTE_PROTECTED_PATHS = /(^|\/)(\.stormcoder|\.openvs)\/(skills(\/|$)|mcp\.json$)|(^|\/)\.vscode\/mcp\.json$/i;
 
 /**
  * Message `type`s that must never reach a `wantsChat: false` sink (the detached Settings tab
@@ -119,16 +131,18 @@ const LOOPBACK_SINK_ID = 'loopback';
  * `SessionBus.post` is what actually enforces it now, per the "remote control" plan's "Multi-
  * sink egress" section ("CHAT_ONLY filtering moves host-side"). `SessionBus` itself has to stay
  * `vscode`-free and so cannot read `media/main.js`, which is why this copy lives here instead.
+ * `'remote'` is deliberately absent, as in `media/main.js`: connection status, pairing replies and
+ * the device list are the Remote control panel's data, and that panel lives in the Settings tab.
  */
 const CHAT_ONLY_MESSAGE_TYPES: ReadonlySet<string> = new Set([
 	'token', 'agentStepStart', 'agentStepEnd', 'toolStart', 'toolEnd',
 	'done', 'newChat', 'inline', 'autoPhase', 'autoSummary', 'editProposal', 'compacted', 'steerable', 'steerRejected',
 	'approvalRequest', 'askRequest', 'promptCancel',
-	'sessions', 'transcript', 'runStart', 'userTurn', 'commands', 'remote',
+	'sessions', 'transcript', 'runStart', 'userTurn', 'commands',
 ]);
 
 /**
- * Default for `openvsChat.remote.promptEscalationSeconds`: how long an approval/question
+ * Default for `stormcoder.remote.promptEscalationSeconds`: how long an approval/question
  * prompt waits for a chat-capable sink to (re)appear before falling back to a native VS Code
  * dialog. Only matters once every chat surface has disconnected while a prompt is pending —
  * see {@link ChatViewProvider.armEscalationFor}.
@@ -177,6 +191,17 @@ interface WebviewToHost {
 	content?: string;
 	role?: string;
 	reviewEnabled?: boolean;
+	memoryEnabled?: boolean;
+	memoryRecentRuns?: number;
+	memoryAutoPropose?: boolean;
+	/** The Memory panel's requests: which store, which line (by its exact text), and what to change. */
+	memoryScope?: string;
+	memoryRaw?: string;
+	memoryType?: string;
+	memoryText?: string;
+	memoryPinned?: boolean;
+	suggestionId?: string;
+	suggestionAccept?: boolean;
 	inline?: boolean;
 	/** `applyEdit` only: which stored proposal to apply (see `ChatViewProvider.editProposals`). */
 	proposalId?: string;
@@ -288,7 +313,7 @@ interface DevicesHandler {
 /** A function that posts to the webview with a session id pre-bound. */
 type SessionPost = (message: Record<string, unknown> & { type: string }) => void;
 
-/** The valid values of `openvsChat.guardrails.approval`, mirrored in the webview picker. */
+/** The valid values of `stormcoder.guardrails.approval`, mirrored in the webview picker. */
 const APPROVAL_LEVELS: readonly string[] = APPROVAL_POLICIES;
 
 /**
@@ -296,13 +321,13 @@ const APPROVAL_LEVELS: readonly string[] = APPROVAL_POLICIES;
  * (Ask / Plan / Agent), provider configuration, model listing, and context.
  */
 export class ChatViewProvider implements vscode.WebviewViewProvider {
-	public static readonly viewType = 'openvsChat.view';
+	public static readonly viewType = 'stormcoder.view';
 
 	private view?: vscode.WebviewView;
 	/**
 	 * Every surface this host can post a message to (Phase 3 of "remote control"): the sidebar
 	 * webview and the detached Settings tab today, a hidden loopback sink when
-	 * `openvsChat.remote.loopback` is on, a real remote sink in a later phase. `post()` (below)
+	 * `stormcoder.remote.loopback` is on, a real remote sink in a later phase. `post()` (below)
 	 * delegates here instead of hardcoding its destinations.
 	 */
 	private readonly bus = new SessionBus();
@@ -385,7 +410,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	 * {@link setRemoteStatus}. `postRemote()` broadcasts from this rather than from a
 	 * hardcoded stub — see that method's own doc for why this used to be a placeholder.
 	 * `idleDisabled` (Phase 7c) is set only when the connection was auto-disconnected by
-	 * `openvsChat.remote.idleDisableHours`, so the status indicator can say why.
+	 * `stormcoder.remote.idleDisableHours`, so the status indicator can say why.
 	 */
 	private remoteStatus: { enabled: boolean; connected: boolean; idleDisabled?: boolean } = { enabled: false, connected: false };
 
@@ -510,8 +535,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	private readonly router: RoleRouter;
 	private readonly rules = new RulesProvider();
 	private readonly skills: SkillRegistry;
-	private static readonly ACTIVE_SKILL_KEY = 'openvsChat.activeSkill';
-	private static readonly HISTORY_KEY = 'openvsChat.chatHistory';
+	private static readonly ACTIVE_SKILL_KEY = 'stormcoder.activeSkill';
+	private static readonly HISTORY_KEY = 'stormcoder.chatHistory';
 	/**
 	 * Shared brevity directive appended to the chat modes so replies stay dense — this both
 	 * improves readability and trims response tokens (fewer tokens re-sent as history).
@@ -526,7 +551,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	private readonly sessionStore = new SessionStore();
 	/**
 	 * Where {@link sessionStore} diagnostics are reported, gated on
-	 * `openvsChat.remote.traceSessions`. A dedicated channel — never `console.log`, never a
+	 * `stormcoder.remote.traceSessions`. A dedicated channel — never `console.log`, never a
 	 * user-facing notification — since this is meant for whoever is debugging session wiring,
 	 * not something every user needs to see.
 	 */
@@ -567,10 +592,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		};
 		this.bus.setChatOnlyTypes(CHAT_ONLY_MESSAGE_TYPES);
 		this.restoreSessionState();
+		configureMemory({
+			userDir: vscode.Uri.joinPath(context.globalStorageUri, 'memory'),
+			searchChats: (words, limit) => this.searchChats(words, limit),
+		});
 		// A hidden sink that exercises the N-sink paths (origin routing, rebind, escalation)
 		// with no network transport — see the "remote control" plan's Phase 3 staging note.
 		// Read once at construction, like `traceSessions`: no live toggling.
-		if (vscode.workspace.getConfiguration('openvsChat').get<boolean>('remote.loopback')) {
+		if (vscode.workspace.getConfiguration('stormcoder').get<boolean>('remote.loopback')) {
 			const channel = vscode.window.createOutputChannel('Stormcoder: Loopback Sink');
 			context.subscriptions.push(channel);
 			const loopbackSink: MessageSink = {
@@ -585,9 +614,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	/** The base system prompt: project rules + the configured system prompt + all active skills. */
-	/** Whether the environment snapshot is included at all (openvsChat.persona.environment). */
+	/** Whether the environment snapshot is included at all (stormcoder.persona.environment). */
 	private environmentEnabled(): boolean {
-		return vscode.workspace.getConfiguration('openvsChat').get<boolean>('persona.environment') !== false;
+		return vscode.workspace.getConfiguration('stormcoder').get<boolean>('persona.environment') !== false;
 	}
 
 	/**
@@ -621,14 +650,216 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	 * {@link COMPACT_RULES_CHARS} and leaves the active skills out: on a budget that small a
 	 * skill (up to 16k characters) cannot fit whole, and half a skill is worse than none.
 	 */
-	private async basePrompts(): Promise<{ full: string; compact: string }> {
+	private async basePrompts(sessionId?: string): Promise<{ full: string; compact: string }> {
 		const env = this.environmentEnabled() ? (await buildEnvContext()).stable : '';
 		const userBase = this.registry.getSystemPrompt();
 		const rules = await this.rules.getRules();
+		const memory = await this.memoryBlock(sessionId);
 		return {
-			full: await this.withSkills(appendRules(personaBase(env, userBase), rules)),
-			compact: appendRules(personaBase(env, userBase, true), rules, COMPACT_RULES_CHARS),
+			full: await this.withSkills(appendMemory(appendRules(personaBase(env, userBase), rules), memory)),
+			compact: appendMemory(appendRules(personaBase(env, userBase, true), rules, COMPACT_RULES_CHARS), memory, COMPACT_MEMORY_CHARS),
 		};
+	}
+
+	/** Project memory as read when each chat session first needed it; see {@link memoryBlock}. */
+	private readonly memorySnapshots = new Map<string, string>();
+
+	/** The first workspace folder, where project memory lives. */
+	private memoryRoot(): vscode.Uri | undefined {
+		return vscode.workspace.workspaceFolders?.[0]?.uri;
+	}
+
+	/** The project's memory store, when memory is on and the folder is one the user trusts (a cloned repository's memory file is text anyone could have written). */
+	private projectMemory(): MemoryStore | undefined {
+		const root = this.memoryRoot();
+		return root && vscode.workspace.isTrusted && memoryEnabled() ? projectStore(root) : undefined;
+	}
+
+	/** How many recent runs the memory block lists (`stormcoder.memory.recentRuns`). */
+	private memoryRecentRuns(): number | undefined {
+		const runs = vscode.workspace.getConfiguration('stormcoder').get<number>('memory.recentRuns');
+		return typeof runs === 'number' ? runs : undefined;
+	}
+
+	/**
+	 * The memory block for a session's system prompt, read once per session and then reused.
+	 * The system prompt is the prefix a caching backend matches on, so a block that changed
+	 * mid-conversation (a fact saved, a run journaled) would make every later turn a full
+	 * cache miss. What a session saves shows up in the next one.
+	 */
+	private async memoryBlock(sessionId?: string): Promise<string> {
+		if (sessionId && this.memorySnapshots.has(sessionId)) {
+			return this.memorySnapshots.get(sessionId)!;
+		}
+		const block = await buildPromptBlock(this.memoryRoot(), this.memoryRecentRuns());
+		if (sessionId) {
+			if (this.memorySnapshots.size >= 50) {
+				this.memorySnapshots.delete(this.memorySnapshots.keys().next().value as string);
+			}
+			this.memorySnapshots.set(sessionId, block);
+		}
+		return block;
+	}
+
+	/** Records a run that changed files in the project journal, so the next session knows what was done. */
+	private async journalRun(messages: ReadonlyArray<{ role: string; content: string }>, workLog: WorkLog): Promise<void> {
+		try {
+			const files = workLog.changedFiles();
+			const goal = goalOf(messages);
+			const memory = this.projectMemory();
+			if (!memory || !files.length || !goal) {
+				return;
+			}
+			await memory.appendJournal({ date: new Date().toISOString().slice(0, 10), goal, files, verified: workLog.verified() });
+		} catch {
+			// bookkeeping must never turn a finished run into an error
+		}
+	}
+
+	/**
+	 * Asks the model, once the run is over, what the next session should be told, and queues the
+	 * answer as suggestions for the user to accept or dismiss in Settings > Memory. Off unless
+	 * `stormcoder.memory.autoPropose` is on, because it costs one more request (about 1-2k
+	 * tokens) per run that changed files. Runs detached from the chat: nothing waits on it and
+	 * any failure is only a suggestion not made.
+	 */
+	private proposeMemory(
+		provider: ChatProvider,
+		params: { model: string; baseUrl: string },
+		messages: ReadonlyArray<{ role: string; content: string }>,
+		workLog: WorkLog,
+		sessionId: string,
+		post: SessionPost,
+	): void {
+		const memory = this.projectMemory();
+		const goal = goalOf(messages);
+		if (!memory || !goal || !workLog.changedFiles().length
+			|| vscode.workspace.getConfiguration('stormcoder').get<boolean>('memory.autoPropose') !== true) {
+			return;
+		}
+		const answer = [...(this.sessionStore.getSession(sessionId)?.messages ?? [])].reverse().find(m => m.role === 'assistant' && !m.kind)?.content ?? '';
+		const digest = workLog.render();
+		const run = async (): Promise<void> => {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), 45_000);
+			try {
+				const providerId = provider.info.id;
+				const saved = (await memory.facts()).map(e => `- ${e.text}`).join('\n');
+				const result = await withProviderResilience(this.registry, providerId, params.model, apiKey => streamChatWithContinuation(provider, {
+					messages: [{ role: 'user', content: buildProposalPrompt(goal, digest, answer, saved) }],
+					model: params.model,
+					apiKey,
+					baseUrl: params.baseUrl,
+					maxTokens: 500,
+					signal: controller.signal,
+					onToken: () => { /* nothing is shown while this runs */ },
+				}));
+				const today = new Date().toISOString().slice(0, 10);
+				const proposals = parseProposals(result.text, await memory.facts(), goal, today);
+				if (!proposals.length) {
+					return;
+				}
+				await memory.addProposals(proposals);
+				post({ type: 'info', message: `Stormcoder suggests ${proposals.length} note${proposals.length === 1 ? '' : 's'} for project memory. Review ${proposals.length === 1 ? 'it' : 'them'} in Settings > Memory.` });
+			} catch {
+				// a suggestion not made is not an error worth showing
+			} finally {
+				clearTimeout(timer);
+			}
+		};
+		void run();
+	}
+
+	/** Past chats mentioning any of `words`, as ready-to-show lines for the `recall` tool. */
+	private searchChats(words: string[], limit: number): string[] {
+		return searchTranscripts([
+			...this.sessionStore.getSessions().map(s => ({ title: s.title || 'Untitled chat', messages: s.messages })),
+			...this.sessionStore.getHistory().map(h => ({ title: h.title, when: new Date(h.savedAt).toISOString().slice(0, 10), messages: h.messages })),
+		], words, limit);
+	}
+
+	/** The store for a panel request's scope, or undefined when that scope is not available. */
+	private memoryStoreFor(scope: unknown): MemoryStore | undefined {
+		if (scope === 'user') {
+			return userStore();
+		}
+		const root = this.memoryRoot();
+		return root && vscode.workspace.isTrusted ? projectStore(root) : undefined;
+	}
+
+	/** Everything the Memory panel shows, for one sink. */
+	private async memoryState(): Promise<Record<string, unknown>> {
+		const root = this.memoryRoot();
+		const trusted = !!root && vscode.workspace.isTrusted;
+		const project = trusted ? await projectStore(root!).view() : undefined;
+		const user = await userStore()?.view();
+		const block = await buildPromptBlock(root, this.memoryRecentRuns());
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
+		return {
+			enabled: memoryEnabled(),
+			autoPropose: cfg.get<boolean>('memory.autoPropose') === true,
+			hasProject: !!root,
+			trusted,
+			tokens: estimateTokens(block),
+			types: [...MEMORY_TYPES],
+			project,
+			user,
+		};
+	}
+
+	/** Answers a Memory panel request: the new state for the sink that asked, plus a one-line outcome. */
+	private async postMemoryState(origin: string, message?: string, error?: boolean): Promise<void> {
+		this.bus.postTo(origin, { type: 'memoryState', state: await this.memoryState(), message, error });
+	}
+
+	/** `/memory`: lists what is remembered, saves a note, or switches memory on or off. */
+	private async handleMemorySlash(args: string, reply: (text: string) => void): Promise<void> {
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
+		const [sub = '', ...restWords] = args.trim().split(/\s+/).filter(Boolean);
+		const word = sub.toLowerCase();
+		if (word === 'on' || word === 'off') {
+			await cfg.update('memory.enabled', word === 'on', vscode.ConfigurationTarget.Global);
+			await this.postConfig();
+			reply(word === 'on' ? 'Project memory is on. It applies to chats you start from now on.' : 'Project memory is off. Chats you start from now on will not carry it.');
+			return;
+		}
+		if (word === 'add') {
+			let words = restWords;
+			let scope: MemoryScope = 'project';
+			if (words[0]?.toLowerCase() === 'user') {
+				scope = 'user';
+				words = words.slice(1);
+			}
+			let type = 'note';
+			if (words[0] && (MEMORY_TYPES as readonly string[]).includes(words[0].toLowerCase())) {
+				type = words[0].toLowerCase();
+				words = words.slice(1);
+			}
+			const store = this.memoryStoreFor(scope);
+			if (!memoryEnabled()) {
+				reply('Project memory is off. Turn it on with `/memory on` first.');
+			} else if (!store) {
+				reply(scope === 'user' ? 'Your personal memory is not available here.' : 'Open a trusted folder first: project memory lives in it.');
+			} else if (!words.length) {
+				reply('Usage: `/memory add [user] [convention|command|decision|gotcha|note] <text>`');
+			} else {
+				const outcome = await store.remember(type, words.join(' '));
+				reply(outcome.saved ? `${outcome.message}\nIt applies to chats you start from now on.` : outcome.message);
+			}
+			return;
+		}
+		if (!memoryEnabled()) {
+			reply('Project memory is off (`/memory on` turns it on).');
+			return;
+		}
+		const state = await this.memoryState();
+		const count = (v: unknown): number => ((v as { entries?: unknown[] } | undefined)?.entries?.length ?? 0);
+		const waiting = ((state.project as { proposals?: unknown[] } | undefined)?.proposals?.length ?? 0);
+		reply([
+			`**Project memory** is on: ${count(state.project)} saved fact${count(state.project) === 1 ? '' : 's'} here, ${count(state.user)} of yours across projects, about ${state.tokens} tokens at the start of a new chat.`,
+			waiting ? `${waiting} suggested note${waiting === 1 ? ' is' : 's are'} waiting for your decision.` : '',
+			'Manage it in Settings > Memory. `/memory add [user] <text>` saves a note; `/memory off` switches it off.',
+		].filter(Boolean).join('\n'));
 	}
 
 	/** `base` followed by every active skill, within the combined skills budget. */
@@ -882,7 +1113,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			(m: WebviewToHost) => this.dispatchMessage(m, WEBVIEW_SINK_ID), undefined, this.context.subscriptions);
 
 		const sub = vscode.workspace.onDidChangeConfiguration(e => {
-			if (e.affectsConfiguration('openvsChat')) {
+			if (e.affectsConfiguration('stormcoder')) {
 				void this.postConfig();
 			}
 		});
@@ -951,7 +1182,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			edit: `${instruction ?? 'Edit'} — apply this to the following ${lang} code and return only the updated code:\n\n${block}`,
 		};
 
-		await vscode.commands.executeCommand('openvsChat.view.focus');
+		await vscode.commands.executeCommand('stormcoder.view.focus');
 		// Local-only, not `this.post`'s broadcast: `prompt` embeds the *desktop's* current
 		// active editor selection verbatim — code the remote user cannot see and did not
 		// choose, unredacted (this field isn't `content`/`preview`, so `RemoteSink`'s own
@@ -984,7 +1215,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	 *
 	 * Registration and broadcast happen unconditionally, even with zero chat-capable sinks
 	 * connected — a sink that (re)connects while this is pending gets the card replayed by
-	 * `rebindPrompts` and can answer it normally. Only once `openvsChat.remote.
+	 * `rebindPrompts` and can answer it normally. Only once `stormcoder.remote.
 	 * promptEscalationSeconds` passes with still nothing to show it to does this resolve
 	 * `undefined`, so the caller (`SessionApprover`) falls back to a native dialog — see
 	 * {@link armEscalationFor}. Rejects with an AbortError when the run is stopped, so
@@ -1004,7 +1235,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		// screen. A hidden view keeps its DOM (retainContextWhenHidden), which means the
 		// question would sit there unseen while the task silently stalled.
 		if (this.view && !this.view.visible) {
-			void vscode.commands.executeCommand('openvsChat.view.focus');
+			void vscode.commands.executeCommand('stormcoder.view.focus');
 		}
 		return new Promise<Record<string, unknown> | undefined>((resolve, reject) => {
 			// Declared before `onAbort` (rather than from `register`'s return value directly)
@@ -1071,9 +1302,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	/** `openvsChat.remote.promptEscalationSeconds`, in milliseconds. */
+	/** `stormcoder.remote.promptEscalationSeconds`, in milliseconds. */
 	private escalationMs(): number {
-		const seconds = vscode.workspace.getConfiguration('openvsChat').get<number>('remote.promptEscalationSeconds');
+		const seconds = vscode.workspace.getConfiguration('stormcoder').get<number>('remote.promptEscalationSeconds');
 		return (typeof seconds === 'number' && seconds >= 0 ? seconds : DEFAULT_PROMPT_ESCALATION_SECONDS) * 1000;
 	}
 
@@ -1242,9 +1473,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		// the contribution (a test, an unactivated extension — see `loadGuardrails`' own
 		// `commandTimeoutMs` comment for the same class of gap) would silently run every
 		// remote request with no interlock at all.
-		const rawFloor = vscode.workspace.getConfiguration('openvsChat').get<string>('remote.approvalFloor');
+		const rawFloor = vscode.workspace.getConfiguration('stormcoder').get<string>('remote.approvalFloor');
 		const floor: ApprovalPolicy = (APPROVAL_POLICIES as readonly string[]).includes(rawFloor ?? '') ? (rawFloor as ApprovalPolicy) : 'auto-edits';
-		return { ...g, approval: applyApprovalFloor(g.approval, runOrigin, floor) };
+		const approval = applyApprovalFloor(g.approval, runOrigin, floor);
+		// A run started from a paired phone additionally cannot write the files that steer later
+		// sessions or start processes (skills, MCP config): under the default 'auto-edits' floor
+		// file edits are not asked about, so a prompt-injected remote run could plant them silently.
+		return runOrigin === 'remote' ? { ...g, approval, protectedRegex: [...(g.protectedRegex ?? []), REMOTE_PROTECTED_PATHS] } : { ...g, approval };
 	}
 
 	// --- Message handling -------------------------------------------------------
@@ -1269,9 +1504,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			}
 			const post = this.sessionPost(message.sessionId || 'default');
 			post({ type: 'error', message: err instanceof Error ? err.message : String(err) });
-			// A no-op unless this session's run was actually tracked (see trackSessionSend).
-			this.sessionStore.endRun(message.sessionId || 'default');
-			post({ type: 'done' });
+			// Only a message that starts a run can have left one tracked. Ending it for any other
+			// type let a malformed `steer` from a paired phone mark someone's live run as over while
+			// it kept running.
+			if (message.type === 'send' || message.type === 'slash') {
+				// A no-op unless this session's run was actually tracked (see trackSessionSend).
+				this.sessionStore.endRun(message.sessionId || 'default');
+				post({ type: 'done' });
+			}
 		});
 	}
 
@@ -1482,7 +1722,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				// history back must not overwrite what any other connected client is showing.
 				if (message.sessionId) {
 					const before = typeof message.before === 'number' ? message.before : 0;
-					const count = typeof message.count === 'number' ? message.count : undefined;
+					// Capped: a paired device could otherwise ask for a whole transcript in one frame, past what
+					// the relay accepts, and the relay answers an oversized frame by dropping the host's socket.
+					const count = typeof message.count === 'number' ? Math.min(Math.max(1, Math.floor(message.count) || 1), MAX_TRANSCRIPT_PAGE) : undefined;
 					const page = this.sessionStore.pageMessages(message.sessionId, { before, count });
 					this.bus.postTo(origin, { type: 'transcript', sessionId: message.sessionId, ...page });
 				}
@@ -1536,7 +1778,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			case 'setProvider':
 				// Persist real providers only; the Auto selection lives in webview state.
 				if (message.provider && message.provider !== AUTO_PROVIDER && this.registry.getProvider(message.provider)) {
-					await vscode.workspace.getConfiguration('openvsChat').update(
+					await vscode.workspace.getConfiguration('stormcoder').update(
 						'defaultProvider', message.provider, vscode.ConfigurationTarget.Global);
 					// Explicit, like every sibling setter below (setRole/setBaseUrl/…) — every
 					// other connected sink (the desktop panel, a paired remote client) needs to
@@ -1553,17 +1795,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				break;
 			case 'setApproval':
 				if (message.approval && APPROVAL_LEVELS.includes(message.approval)) {
-					await vscode.workspace.getConfiguration('openvsChat').update(
+					await vscode.workspace.getConfiguration('stormcoder').update(
 						'guardrails.approval', message.approval, vscode.ConfigurationTarget.Global);
 				}
 				break;
 			case 'setReviewEnabled':
-				await vscode.workspace.getConfiguration('openvsChat').update(
+				await vscode.workspace.getConfiguration('stormcoder').update(
 					'auto.enableReview', !!message.reviewEnabled, vscode.ConfigurationTarget.Global);
 				await this.postConfig();
 				break;
 			case 'setModel':
-				if (message.provider && typeof message.model === 'string') {
+				// A known provider only: any other id would create a `stormcoder.<id>.model` setting
+				// of the sender's choosing, and a paired phone is allowed to send this message.
+				if (message.provider && typeof message.model === 'string' && message.model.length <= 200 && this.registry.getProvider(message.provider)) {
 					await this.registry.setModel(message.provider, message.model);
 					// See `setProvider`'s own note just above — same gap, same fix.
 					await this.postConfig();
@@ -1588,36 +1832,87 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				break;
 			case 'setSystemPrompt':
 				if (typeof message.text === 'string') {
-					await vscode.workspace.getConfiguration('openvsChat').update(
+					await vscode.workspace.getConfiguration('stormcoder').update(
 						'systemPrompt', message.text, vscode.ConfigurationTarget.Global);
 				}
 				break;
 			case 'setMaxTokens':
 				if (typeof message.maxTokens === 'number' && Number.isFinite(message.maxTokens) && message.maxTokens > 0) {
-					await vscode.workspace.getConfiguration('openvsChat').update(
+					await vscode.workspace.getConfiguration('stormcoder').update(
 						'maxTokens', Math.floor(message.maxTokens), vscode.ConfigurationTarget.Global);
 				}
 				break;
 			case 'setRules':
 				if (typeof message.text === 'string') {
-					await vscode.workspace.getConfiguration('openvsChat').update(
+					await vscode.workspace.getConfiguration('stormcoder').update(
 						'rules', message.text, vscode.ConfigurationTarget.Global);
 				}
 				break;
 			case 'setMaxSteps':
 				if (typeof message.maxSteps === 'number' && Number.isFinite(message.maxSteps) && message.maxSteps > 0) {
-					await vscode.workspace.getConfiguration('openvsChat').update(
+					await vscode.workspace.getConfiguration('stormcoder').update(
 						'agent.maxSteps', Math.floor(message.maxSteps), vscode.ConfigurationTarget.Global);
 				}
 				break;
 			case 'setMaxRunMinutes':
 				if (typeof message.maxRunMinutes === 'number' && Number.isFinite(message.maxRunMinutes) && message.maxRunMinutes > 0) {
-					await vscode.workspace.getConfiguration('openvsChat').update(
+					await vscode.workspace.getConfiguration('stormcoder').update(
 						'agent.maxRunMinutes', Math.floor(message.maxRunMinutes), vscode.ConfigurationTarget.Global);
 				}
 				break;
+			case 'setMemoryEnabled':
+				await vscode.workspace.getConfiguration('stormcoder').update(
+					'memory.enabled', !!message.memoryEnabled, vscode.ConfigurationTarget.Global);
+				await this.postConfig();
+				break;
+			case 'setMemoryRecentRuns':
+				if (typeof message.memoryRecentRuns === 'number' && Number.isFinite(message.memoryRecentRuns)) {
+					await vscode.workspace.getConfiguration('stormcoder').update(
+						'memory.recentRuns', Math.min(20, Math.max(0, Math.floor(message.memoryRecentRuns))), vscode.ConfigurationTarget.Global);
+					await this.postConfig();
+				}
+				break;
+			case 'setMemoryAutoPropose':
+				await vscode.workspace.getConfiguration('stormcoder').update(
+					'memory.autoPropose', !!message.memoryAutoPropose, vscode.ConfigurationTarget.Global);
+				await this.postMemoryState(origin);
+				break;
+			case 'memoryList':
+				await this.postMemoryState(origin);
+				break;
+			case 'memoryAdd':
+			case 'memoryEdit':
+			case 'memoryDelete':
+			case 'memoryClear':
+			case 'memoryProposal': {
+				const store = this.memoryStoreFor(message.memoryScope);
+				if (!store) {
+					await this.postMemoryState(origin, message.memoryScope === 'user' ? 'Your personal memory is not available here.' : 'Open a trusted folder first: project memory lives in it.', true);
+					break;
+				}
+				let outcome: { ok: boolean; message: string };
+				if (message.type === 'memoryAdd') {
+					const saved = await store.remember(message.memoryType || 'note', message.memoryText ?? '');
+					outcome = { ok: saved.saved, message: saved.message };
+				} else if (message.type === 'memoryEdit') {
+					outcome = await store.update(message.memoryRaw ?? '', {
+						...(message.memoryText !== undefined ? { text: message.memoryText } : {}),
+						...(message.memoryType !== undefined ? { type: message.memoryType } : {}),
+						...(message.memoryPinned !== undefined ? { pinned: message.memoryPinned } : {}),
+					});
+				} else if (message.type === 'memoryDelete') {
+					outcome = await store.remove(message.memoryRaw ?? '');
+				} else if (message.type === 'memoryProposal') {
+					outcome = await store.resolveProposal(message.suggestionId ?? '', !!message.suggestionAccept);
+				} else {
+					await store.clear();
+					outcome = { ok: true, message: 'Cleared.' };
+				}
+				await this.postMemoryState(origin, outcome.message, !outcome.ok);
+				break;
+			}
 			case 'setDecompose':
-				await vscode.workspace.getConfiguration('openvsChat').update(
+				await vscode.workspace.getConfiguration('stormcoder').update(
 					'auto.decompose', !!message.decompose, vscode.ConfigurationTarget.Global);
 				await this.postConfig();
 				break;
@@ -1642,9 +1937,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				// The Settings panel's on/off switch. Desktop-only (REMOTE_DENIED in
 				// src/remote/policy.ts): a paired phone must not be able to switch remote off, or on.
 				if (message.enabled) {
-					await vscode.commands.executeCommand('openvsChat.remoteEnable', { quiet: true });
+					await vscode.commands.executeCommand('stormcoder.remoteEnable', { quiet: true });
 				} else {
-					await vscode.workspace.getConfiguration('openvsChat').update('remote.enabled', false, vscode.ConfigurationTarget.Global);
+					await vscode.workspace.getConfiguration('stormcoder').update('remote.enabled', false, vscode.ConfigurationTarget.Global);
 				}
 				// Answers with the real state, so a switch that couldn't turn on (no relay URL in
 				// hosted mode) flips back instead of showing "on".
@@ -1736,7 +2031,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				await this.toggleSkill(message.text || '');
 				break;
 			case 'createSkill':
-				await vscode.commands.executeCommand('openvsChat.createSkill');
+				await vscode.commands.executeCommand('stormcoder.createSkill');
 				break;
 			case 'steer':
 				if (message.sessionId && message.text?.trim()) {
@@ -1772,14 +2067,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				await this.postMcpStatus();
 				break;
 			case 'mcpAdd':
-				await vscode.commands.executeCommand('openvsChat.mcpAdd');
+				await vscode.commands.executeCommand('stormcoder.mcpAdd');
 				break;
 			case 'mcpReconnect':
 				this.mcp.reconnect();
 				await this.postMcpStatus();
 				break;
 			case 'mcpOpenConfig':
-				await vscode.commands.executeCommand('openvsChat.mcpOpenConfig');
+				await vscode.commands.executeCommand('stormcoder.mcpOpenConfig');
 				break;
 			case 'openExternal':
 				if (message.url) {
@@ -1795,7 +2090,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	 * Runs the sign-in flow for `providerId`: device-flow OAuth for Copilot/Grok, a local
 	 * credential import for Kiro, the redirect-URI/native web flow for everything that has
 	 * one configured, and a paste-a-key prompt otherwise. Public (not just reached via the
-	 * webview's generic `signIn` message) so `extension.ts`'s `openvsChat.signIn` command —
+	 * webview's generic `signIn` message) so `extension.ts`'s `stormcoder.signIn` command —
 	 * the Command Palette entry point — shares this one implementation instead of
 	 * duplicating a second, older dispatch that never learned about the three OAuth-proxy
 	 * providers.
@@ -1859,7 +2154,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 					this.invalidateModelCache(providerId);
 					vscode.window.showInformationMessage(
 						`${label} will use the default Chrome profile (${defaultProfile}). Add more Google accounts ` +
-						'under "Additional API keys" on this card, and enable "openvsChat.webGemini.enabled" in ' +
+						'under "Additional API keys" on this card, and enable "stormcoder.webGemini.enabled" in ' +
 						'Settings before using it — read the risk in the provider\'s description first.',
 					);
 				}
@@ -2485,7 +2780,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			// such turn ~1.9k tokens of tool schemas for the privilege.
 			const smallTalk = !!talkKind;
 			const readTools = (mode === 'ask' || mode === 'plan') && !smallTalk && !!provider.runAgentStep && this.modelToolCapable(providerId, provider, model);
-			const prompts = await this.systemPrompts(mode, !!message.inline, readTools);
+			const prompts = await this.systemPrompts(mode, !!message.inline, readTools, sessionId);
 			const assembled: ChatMessage[] = [{ role: 'system', content: prompts.full }];
 			const contextBudget = this.configuredContextTokens(model, params.maxTokens, providerId);
 			const editTarget = this.takeEditTarget(mode, !!message.inline);
@@ -2621,6 +2916,63 @@ ${context.content}` }
 	}
 
 	/**
+	 * `/compact`: summarizes the tab's older turns now, with the model the tab is set to, using
+	 * the same summarizer and store arithmetic as the automatic path in {@link compactHistory}.
+	 */
+	private async compactSession(sessionId: string, origin: string): Promise<void> {
+		const say = (message: string) => this.bus.postTo(origin, { type: 'info', sessionId, message });
+		const session = this.sessionStore.getSession(sessionId);
+		if (!session) {
+			return;
+		}
+		if (this.activeRequests.has(sessionId)) {
+			say('A run is in progress in this tab; compact once it finishes.');
+			return;
+		}
+		const providerId = session.provider && session.provider !== AUTO_PROVIDER ? session.provider : this.registry.getDefaultProviderId();
+		const provider = this.registry.getProvider(providerId);
+		if (!provider) {
+			say(`Unknown provider: ${providerId}`);
+			return;
+		}
+		const model = session.model?.trim() || this.registry.getModel(providerId);
+		const history = this.sanitizeHistory(this.sessionStore.sendableMessages(sessionId));
+		// Shaped like an assembled request ([system, …history]) so `replaced` lands in the terms
+		// the store's arithmetic expects — see SessionStore.applyCompaction.
+		const assembled: ChatMessage[] = [{ role: 'system', content: '' }, ...history];
+		const controller = new AbortController();
+		const params = {
+			model,
+			apiKey: (await this.registry.getApiKey(providerId)) ?? '',
+			baseUrl: this.registry.getBaseUrl(providerId),
+			maxTokens: this.effectiveMaxTokens('ask', false, providerId, model),
+			signal: controller.signal,
+		};
+		const trimBudget = this.configuredContextTokens(model, params.maxTokens, providerId);
+		if (!canCompact(assembled, 2)) {
+			say('Not enough conversation to compact yet.');
+			return;
+		}
+		say('Compacting this conversation…');
+		const res = await compactMessages(assembled, async (toSummarize, maxTokens) => {
+			let text = '';
+			await withProviderResilience(this.registry, providerId, model, async apiKey => {
+				await provider.streamChat({ ...params, apiKey, messages: toSummarize, maxTokens, onToken: delta => { text += delta; } });
+			});
+			return stripThinking(text);
+		}, 2, Math.max(1_000, trimBudget - SUMMARY_MAX_TOKENS));
+		if (!res) {
+			say('Could not compact the conversation (the summarizer failed). Nothing was changed.');
+			return;
+		}
+		const summary = res.messages.find(m => m.content.startsWith(COMPACT_MARKER))?.content ?? '';
+		this.sessionStore.applyCompaction(sessionId, summary, res.replaced);
+		this.persistSessionState();
+		this.bus.postTo(origin, { type: 'compacted', sessionId, summary, replaced: res.replaced });
+		say(`Compacted ${res.replaced} earlier message(s) (~${Math.round(res.before / 1000)}k → ~${Math.round(res.after / 1000)}k tokens).`);
+	}
+
+	/**
 	 * Wires {@link SlashEffects} to the same private handlers each dispatcher case already
 	 * uses, so a slash command and the equivalent standalone message can never disagree about
 	 * what it does. `skillsSnapshot` is resolved by the caller (`handleSlashCommand`) rather
@@ -2670,14 +3022,16 @@ ${context.content}` }
 				}
 			},
 			setSkill: id => { void this.setActiveSkill(id); },
-			createSkill: () => { void vscode.commands.executeCommand('openvsChat.createSkill'); },
-			mcpAdd: () => { void vscode.commands.executeCommand('openvsChat.mcpAdd'); },
+			createSkill: () => { void vscode.commands.executeCommand('stormcoder.createSkill'); },
+			mcpAdd: () => { void vscode.commands.executeCommand('stormcoder.mcpAdd'); },
 			mcpReconnect: () => {
 				this.mcp.reconnect();
 				void this.postMcpStatus();
 			},
 			openMcpSettings: () => { this.openSettingsWindow(); },
 			reply: text => { this.bus.postTo(origin, { type: 'info', sessionId, message: text }); },
+			compact: () => { void this.compactSession(sessionId, origin); },
+			memory: args => { void this.handleMemorySlash(args, text => this.bus.postTo(origin, { type: 'info', sessionId, message: text })); },
 			undoRun: () => { void this.undoLastRun(sessionId, origin); },
 			listSkills: () => skillsSnapshot,
 		};
@@ -2782,7 +3136,7 @@ ${context.content}` }
 				const orchestrator = new AutoOrchestrator(this.registry, this.router, approver, maxSteps, this.mcp,
 					id => this.modelCache.get(id),
 					this.configuredMaxRunMs(),
-					vscode.workspace.getConfiguration('openvsChat').get<boolean>('agent.traceTiming') ?? false,
+					vscode.workspace.getConfiguration('stormcoder').get<boolean>('agent.traceTiming') ?? false,
 					guardrails);
 				let stepThinking: ThinkingStreamParser | undefined;
 				// The plan and review phases stream plain tokens (only agent steps end in
@@ -2801,16 +3155,17 @@ ${context.content}` }
 				// same mid-run steering box. Stragglers from a previous run in this tab go;
 				// what was typed into this one is kept for the implementer to drain.
 				this.dropForeignSteering(sessionId, runId);
-				const base = await this.basePrompts();
-				// `openvsChat.persona.compactPrompt`, as `systemPrompts` applies it everywhere else.
+				const base = await this.basePrompts(sessionId);
+				// `stormcoder.persona.compactPrompt`, as `systemPrompts` applies it everywhere else.
 				const compactSetting = this.compactPromptSetting();
+				const autoWorkLog = new WorkLog();
 				await orchestrator.run(
 					{
 						history, contextText, signal: controller.signal,
 						baseSystemPrompt: compactSetting === 'always' ? base.compact : base.full,
 						compactBaseSystemPrompt: compactSetting === 'never' ? undefined : base.compact,
 						forceCompactPrompt: compactSetting === 'always',
-						thinking: vscode.workspace.getConfiguration('openvsChat').get<boolean>('persona.thinking') !== false,
+						thinking: vscode.workspace.getConfiguration('stormcoder').get<boolean>('persona.thinking') !== false,
 						steering: () => this.drainSteering(sessionId, runId),
 					},
 					{
@@ -2842,20 +3197,35 @@ ${context.content}` }
 							this.recordAssistantTurn(sessionId, formatted);
 						},
 						onToolStart: (call, parentCallId) => post({ type: 'toolStart', id: call.id, name: call.name, args: call.args, parentCallId }),
-						onToolEnd: (call, result, isError, parentCallId) => post({ type: 'toolEnd', id: call.id, name: call.name, result, isError, parentCallId }),
+						onToolEnd: (call, result, isError, parentCallId) => {
+							if (!parentCallId) { autoWorkLog.record(call, result, isError); }
+							post({ type: 'toolEnd', id: call.id, name: call.name, result, isError, parentCallId });
+						},
 						note: text => post({ type: 'info', message: text }),
 						onTodos: items => post({ type: 'todos', items }),
 					},
 				);
 				stepThinking?.flush();
 				flushPhaseText();
+				this.sessionStore.attachWorkNotes(sessionId, autoWorkLog.render());
+				await this.journalRun(history, autoWorkLog);
+				// Suggestions are asked of the planning model: it is the one the user picked for judgement.
+				try {
+					const planner = (await this.router.resolveRoleCandidates('plan', {}))[0];
+					const plannerProvider = planner?.ready ? this.registry.getProvider(planner.providerId) : undefined;
+					if (planner && plannerProvider && !controller.signal.aborted) {
+						this.proposeMemory(plannerProvider, { model: planner.model, baseUrl: this.registry.getBaseUrl(planner.providerId) }, history, autoWorkLog, sessionId, post);
+					}
+				} catch {
+					// a suggestion not made is not an error
+				}
 			} else {
 				// Ask/Plan → planning/reasoning model; inline Edit → implementation model.
 				const role: AutoRole = mode === 'edit' ? 'code' : 'plan';
 				// Vision is a routing constraint, not a late failure: an attached image steers
 				// Auto to a model that can read it instead of erroring out on the one it picked.
 				const needs = { vision: !!history.at(-1)?.images?.length };
-				const prompts = await this.systemPrompts(mode, !!message.inline);
+				const prompts = await this.systemPrompts(mode, !!message.inline, false, sessionId);
 				const messages: ChatMessage[] = [{ role: 'system', content: prompts.full }];
 				if (contextText) {
 					messages.push(contextTurn(contextText));
@@ -2979,7 +3349,7 @@ ${context.content}` }
 		if (truncated) {
 			post({
 				type: 'info',
-				message: 'The reply is still incomplete after several automatic continuations — raise "openvsChat.maxTokens" or ask for a smaller piece at a time.',
+				message: 'The reply is still incomplete after several automatic continuations — raise "stormcoder.maxTokens" or ask for a smaller piece at a time.',
 			});
 		}
 		// A reply with no text at all leaves nothing on screen: the webview drops the empty
@@ -3000,7 +3370,7 @@ ${context.content}` }
 			if (fenceCount % 2 === 1) {
 				post({
 					type: 'error',
-					message: 'The response was cut off before the code block finished (likely the "openvsChat.maxTokens" limit). No edit was proposed — try a smaller selection or raise Max Tokens in settings.',
+					message: 'The response was cut off before the code block finished (likely the "stormcoder.maxTokens" limit). No edit was proposed — try a smaller selection or raise Max Tokens in settings.',
 				});
 			} else {
 				const code = extractLastCodeBlock(full);
@@ -3163,6 +3533,12 @@ ${context.content}` }
 			// Raced with `list_agent_sessions`: the tab closed between the two calls.
 			return { ok: false, error: `No open chat tab with session id "${targetSessionId}" — it may have just been closed.` };
 		}
+		// A run started from a paired phone may only talk to runs started the same way. Otherwise
+		// it could put text into a run the desktop user started, which has no approval floor, and
+		// the phone's own floor would be no protection at all.
+		if (this.runOriginLocal.get(fromSessionId)?.local === false && this.runOriginLocal.get(targetSessionId)?.local !== false) {
+			return { ok: false, error: 'A run started from a paired device cannot send messages to a chat that was started on this computer.' };
+		}
 		const senderTitle = this.sessionStore.getSession(fromSessionId)?.title || 'New chat';
 		const replyHint = expectsReply
 			? ` Reply with send_agent_message, using targetSessionId: "${fromSessionId}".`
@@ -3209,12 +3585,13 @@ ${context.content}` }
 			contextWindow: this.windowFor(provider.info.id, params.model),
 			keepHead,
 			maxRunMs: this.configuredMaxRunMs(),
-			traceTiming: vscode.workspace.getConfiguration('openvsChat').get<boolean>('agent.traceTiming') ?? false,
+			traceTiming: vscode.workspace.getConfiguration('stormcoder').get<boolean>('agent.traceTiming') ?? false,
 			...this.keyResilienceOptions(provider, params.model, post),
 			...this.compactPromptOptions(provider, params.model, post, compactSystem),
 		});
 		let stepThinking: ThinkingStreamParser | undefined;
-		return runner.run(messages, params, {
+		const workLog = new WorkLog();
+		const outcome = await runner.run(messages, params, {
 			onStepStart: () => { stepThinking = new ThinkingStreamParser(text => post({ type: 'token', delta: text })); post({ type: 'agentStepStart' }); },
 			onToken: delta => stepThinking?.push(delta),
 			onStepEnd: content => {
@@ -3227,9 +3604,11 @@ ${context.content}` }
 			},
 			onToolStart: (call, parentCallId) => post({ type: 'toolStart', id: call.id, name: call.name, args: call.args, parentCallId }),
 			onToolEnd: (call, result, isError, parentCallId) =>
-				post({ type: 'toolEnd', id: call.id, name: call.name, result, isError, parentCallId }),
+				{ if (!parentCallId) { workLog.record(call, result, isError); } post({ type: 'toolEnd', id: call.id, name: call.name, result, isError, parentCallId }); },
 			onNote: text => post({ type: 'info', message: text }),
 		});
+		this.sessionStore.attachWorkNotes(sessionId, workLog.render());
+		return outcome;
 	}
 
 	private async runAgent(
@@ -3258,7 +3637,7 @@ ${context.content}` }
 			keepHead,
 			steering: () => this.drainSteering(sessionId, runId),
 			maxRunMs: this.configuredMaxRunMs(),
-			traceTiming: vscode.workspace.getConfiguration('openvsChat').get<boolean>('agent.traceTiming') ?? false,
+			traceTiming: vscode.workspace.getConfiguration('stormcoder').get<boolean>('agent.traceTiming') ?? false,
 			// Top-level Agent-mode run only — see `buildA2A`'s own doc for why neither
 			// `runReadOnlyAgent` (Ask/Plan) nor a `spawn_subagent` delegate ever gets this.
 			a2a: this.buildA2A(sessionId),
@@ -3267,6 +3646,7 @@ ${context.content}` }
 		});
 		let stepThinking: ThinkingStreamParser | undefined;
 		post({ type: 'todos', items: [] });
+		const workLog = new WorkLog();
 		// The agent reads from disk, so a save by the user is a change it cannot otherwise
 		// see: its repeat-read guard would answer the re-read with "nothing has changed
 		// since". Deliberately only saves — a file watcher would also fire for every artifact
@@ -3285,13 +3665,21 @@ ${context.content}` }
 					this.recordAssistantTurn(sessionId, formatted);
 				},
 				onToolStart: (call, parentCallId) => post({ type: 'toolStart', id: call.id, name: call.name, args: call.args, parentCallId }),
-				onToolEnd: (call, result, isError, parentCallId) =>
-					post({ type: 'toolEnd', id: call.id, name: call.name, result, isError, parentCallId }),
+				onToolEnd: (call, result, isError, parentCallId) => {
+					if (!parentCallId) { workLog.record(call, result, isError); }
+					post({ type: 'toolEnd', id: call.id, name: call.name, result, isError, parentCallId });
+				},
 				onNote: text => post({ type: 'info', message: text }),
 				onTodos: items => post({ type: 'todos', items }),
 			});
 		} finally {
 			saves.dispose();
+			// The digest the next turn reads (see WorkLog) and the journal the next session reads.
+			this.sessionStore.attachWorkNotes(sessionId, workLog.render());
+			await this.journalRun(messages, workLog);
+			if (!params.signal.aborted) {
+				this.proposeMemory(provider, params, messages, workLog, sessionId, post);
+			}
 		}
 	}
 
@@ -3301,7 +3689,7 @@ ${context.content}` }
 	 * stopping early is what makes the assistant feel like it gave up mid-job.
 	 */
 	private configuredMaxSteps(): number {
-		const configured = vscode.workspace.getConfiguration('openvsChat').get<number>('agent.maxSteps');
+		const configured = vscode.workspace.getConfiguration('stormcoder').get<number>('agent.maxSteps');
 		return typeof configured === 'number' && configured > 0 ? configured : DEFAULT_MAX_STEPS;
 	}
 
@@ -3311,7 +3699,7 @@ ${context.content}` }
 	 * free tier is the limit that actually binds.
 	 */
 	private configuredMaxRunMs(): number {
-		const minutes = vscode.workspace.getConfiguration('openvsChat').get<number>('agent.maxRunMinutes');
+		const minutes = vscode.workspace.getConfiguration('stormcoder').get<number>('agent.maxRunMinutes');
 		if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes <= 0) {
 			return minutes === 0 ? 0 : DEFAULT_MAX_RUN_MINUTES * 60_000;
 		}
@@ -3321,7 +3709,7 @@ ${context.content}` }
 	/**
 	 * Estimated-token ceiling for the conversation sent to `model`, above which old
 	 * tool output is trimmed. Derived from the model's context window unless the user
-	 * pinned an explicit openvsChat.agent.maxContextTokens.
+	 * pinned an explicit stormcoder.agent.maxContextTokens.
 	 *
 	 * Then clamped by any per-request token allowance the backend has stated in its response
 	 * headers, because the window is the wrong number wherever the two disagree: Groq's free
@@ -3340,7 +3728,7 @@ ${context.content}` }
 	 * apart is how a request ends up fitting neither.
 	 */
 	private budgetsFor(model: string, maxOutputTokens: number, providerId?: string): { maxTokens: number; contextBudget: number } {
-		const configured = vscode.workspace.getConfiguration('openvsChat').get<number>('agent.maxContextTokens');
+		const configured = vscode.workspace.getConfiguration('stormcoder').get<number>('agent.maxContextTokens');
 		return requestBudgets({
 			model,
 			maxOutputTokens,
@@ -3369,16 +3757,16 @@ ${context.content}` }
 	// reads it to decide what a dispatcher case posts back, or mutates it from traffic the
 	// host observes on the paths below.
 
-	/** Whether `openvsChat.remote.traceSessions` is on — diagnostics only; the store itself always runs. */
+	/** Whether `stormcoder.remote.traceSessions` is on — diagnostics only; the store itself always runs. */
 	private traceSessionsEnabled(): boolean {
-		return vscode.workspace.getConfiguration('openvsChat').get<boolean>('remote.traceSessions') ?? false;
+		return vscode.workspace.getConfiguration('stormcoder').get<boolean>('remote.traceSessions') ?? false;
 	}
 
 	/**
 	 * Writes a diagnostic line when a `send` arrives for a session the store has never seen
 	 * *and* the message carries no `messages` to seed it from either — i.e. there is nothing
 	 * at all this store can recover this session's history from. Gated on
-	 * `openvsChat.remote.traceSessions`, like every other diagnostic this wiring writes.
+	 * `stormcoder.remote.traceSessions`, like every other diagnostic this wiring writes.
 	 */
 	private logUnknownSession(sessionId: string): void {
 		if (!this.traceSessionsEnabled()) {
@@ -3581,7 +3969,12 @@ ${context.content}` }
 	 */
 	private effectiveMaxTokens(mode: ChatMode, inline: boolean, providerId?: string, model?: string): number {
 		const configured = this.registry.getMaxTokens();
-		const wanted = mode === 'edit' && !inline ? Math.max(configured, 8192) : configured;
+		// Current Claude models take far more output than the 8192 default, and thinking tokens are
+		// charged to the same allowance: at 8192 a mid-sized file write is cut off and has to be
+		// redone in pieces. Raised only for them, and only from the default — other providers cap
+		// output lower and reject a larger request outright.
+		const claudeFloor = providerId === 'anthropic' && model && thinkingStyle(model) !== 'none' && configured <= 8192 ? 16_384 : 0;
+		const wanted = Math.max(claudeFloor, mode === 'edit' && !inline ? Math.max(configured, 8192) : configured);
 		// A backend that states a per-request token allowance charges the *reservation*
 		// against it, not just the prompt: on Groq's 8k free tier the default 8192 exceeds
 		// the whole allowance before a single character of conversation is added, so no
@@ -3595,19 +3988,19 @@ ${context.content}` }
 			// The compact identity already carries the brevity rule.
 			return `${base}\n\n${modeDoctrine(mode, { inline, readTools, compact })}`;
 		}
-		const thinking = vscode.workspace.getConfiguration('openvsChat').get<boolean>('persona.thinking') !== false;
+		const thinking = vscode.workspace.getConfiguration('stormcoder').get<boolean>('persona.thinking') !== false;
 		return `${base}\n\n${modeDoctrine(mode, { inline, readTools, thinking })}\n\n${ChatViewProvider.CONCISE}`;
 	}
 
 	/**
 	 * The full and compact system prompts for one send. See {@link basePrompts}.
 	 *
-	 * `openvsChat.persona.compactPrompt` is applied here, once, so no dispatch path has to
+	 * `stormcoder.persona.compactPrompt` is applied here, once, so no dispatch path has to
 	 * know about it: `always` makes both the compact one (and sets `force`, which also
 	 * condenses the tool schemas), `never` offers no compact one to fall back to.
 	 */
-	private async systemPrompts(mode: ChatMode, inline = false, readTools = false): Promise<{ full: string; compact: string | undefined; force: boolean }> {
-		const base = await this.basePrompts();
+	private async systemPrompts(mode: ChatMode, inline = false, readTools = false, sessionId?: string): Promise<{ full: string; compact: string | undefined; force: boolean }> {
+		const base = await this.basePrompts(sessionId);
 		const compact = this.buildSystemPrompt(mode, base.compact, inline, readTools, true);
 		const setting = this.compactPromptSetting();
 		if (setting === 'always') {
@@ -3620,9 +4013,9 @@ ${context.content}` }
 		};
 	}
 
-	/** `openvsChat.persona.compactPrompt`, with anything unrecognized read as the default. */
+	/** `stormcoder.persona.compactPrompt`, with anything unrecognized read as the default. */
 	private compactPromptSetting(): 'auto' | 'always' | 'never' {
-		const value = vscode.workspace.getConfiguration('openvsChat').get<string>('persona.compactPrompt');
+		const value = vscode.workspace.getConfiguration('stormcoder').get<string>('persona.compactPrompt');
 		return value === 'always' || value === 'never' ? value : 'auto';
 	}
 
@@ -3658,7 +4051,7 @@ ${context.content}` }
 		// editor tabs when nothing was attached explicitly. Plan intentionally gets only
 		// the user's requirement (plus anything they attached) — it plans, it doesn't read.
 		if (mode === 'ask' && !attached) {
-			const auto = vscode.workspace.getConfiguration('openvsChat').get<string>('ask.autoContext') ?? 'active';
+			const auto = vscode.workspace.getConfiguration('stormcoder').get<string>('ask.autoContext') ?? 'active';
 			if (auto === 'off') {
 				return undefined;
 			}
@@ -3750,7 +4143,7 @@ ${context.content}` }
 	private async postConfig(): Promise<void> {
 		const providers = await this.registry.resolveAll();
 		const roles = await this.router.resolveAll();
-		const cfg = vscode.workspace.getConfiguration('openvsChat');
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
 		this.post({
 			type: 'config',
 			providers,
@@ -3762,6 +4155,10 @@ ${context.content}` }
 			rules: cfg.get<string>('rules') ?? '',
 			maxSteps: cfg.get<number>('agent.maxSteps') ?? 100,
 			maxRunMinutes: cfg.get<number>('agent.maxRunMinutes') ?? 30,
+			memoryEnabled: cfg.get<boolean>('memory.enabled') !== false,
+			memoryRecentRuns: cfg.get<number>('memory.recentRuns') ?? 5,
+			// Shown on a paired phone ("Connected · project"): which desktop and folder it is driving.
+			workspaceName: (vscode.workspace.workspaceFolders?.[0]?.name ?? '').slice(0, 60),
 		});
 		await this.postSkills();
 		this.pushAvailableModels(providers);
@@ -3827,7 +4224,7 @@ ${context.content}` }
 	// --- Remote control (Phase 5) -------------------------------------------------
 	// A small public seam for `RemoteService`, which owns the reference to this provider
 	// rather than the other way around: remote control is optional (off unless
-	// `openvsChat.remote.enabled` is set and a relay URL is configured) and this provider is
+	// `stormcoder.remote.enabled` is set and a relay URL is configured) and this provider is
 	// not, so `RemoteService` is constructed from `extension.ts` and handed this instance,
 	// instead of this already-2000+-line file growing a dependency on the transport layer.
 	// These methods exist so `RemoteService` never needs `dispatchMessage`, `sessionStore`, or
@@ -3879,7 +4276,7 @@ ${context.content}` }
 	 * (enabling/disabling, connecting, connected, disconnected) so every sink's status
 	 * indicator (`media/pairing.js`) stays live instead of the `{enabled:false,connected:false}`
 	 * stub this used to be stuck at. `idleDisabled` (Phase 7c) marks a disconnect that
-	 * `openvsChat.remote.idleDisableHours` caused rather than settings/network — omit it (or
+	 * `stormcoder.remote.idleDisableHours` caused rather than settings/network — omit it (or
 	 * pass `false`) for every other transition, which is every existing call site.
 	 */
 	public setRemoteStatus(enabled: boolean, connected: boolean, idleDisabled?: boolean): void {
@@ -3924,8 +4321,8 @@ ${context.content}` }
 			return;
 		}
 		const panel = vscode.window.createWebviewPanel(
-			'openvsChatSettings',
-			'OpenVS Settings',
+			'stormcoderSettings',
+			'Stormcoder Settings',
 			vscode.ViewColumn.Active,
 			{
 				enableScripts: true,
@@ -3972,11 +4369,11 @@ ${context.content}` }
 	<meta http-equiv="Content-Security-Policy" content="${csp}" />
 	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 	<link href="${mediaUri('main.css')}" rel="stylesheet" />
-	<title>${settingsOnly ? 'OpenVS Settings' : 'Stormcoder'}</title>
+	<title>${settingsOnly ? 'Stormcoder Settings' : 'Stormcoder'}</title>
 </head>
 <body class="${settingsOnly ? 'settings-window' : ''}">
-	<script nonce="${nonce}">window.__OPENVS_SETTINGS_ONLY__ = ${settingsOnly ? 'true' : 'false'};
-	window.__OPENVS_HERO_URI__ = ${JSON.stringify(String(webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'shell', 'mark.svg'))))};</script>
+	<script nonce="${nonce}">window.__STORM_SETTINGS_ONLY__ = ${settingsOnly ? 'true' : 'false'};
+	window.__STORM_HERO_URI__ = ${JSON.stringify(String(webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'shell', 'mark.svg'))))};</script>
 ${CHAT_APP_HTML}
 	<script nonce="${nonce}" src="${mediaUri('qr.js')}"></script>
 	<script nonce="${nonce}" src="${mediaUri('pairing.js')}"></script>
@@ -3997,6 +4394,7 @@ ${CHAT_APP_HTML}
 	 * only to make sure no run is left waiting on a promise that will never settle.
 	 */
 	dispose(): void {
+		stopBackgroundCommands();
 		this.cancelEscalations();
 		this.promptRegistry.settleAllUnanswered();
 	}

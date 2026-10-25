@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // The cross-boundary drift check the plan calls out by name: without this, the PWA would slowly
 // reproduce the exact class of silent failure `extensions/openvs-chat/scripts/test-webview.mjs`
@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const url = p => new URL(p, import.meta.url);
-const EXT = '../../extensions/openvs-chat';
+const EXT = '../..';
 
 /** Same helper as test-webview.mjs/test-remote-policy.mjs: concatenates fixed files with every `.ts` directly under each dir. */
 function readSourceSet(fixed, dirs) {
@@ -87,8 +87,10 @@ assert.ok(hostSends.size > 20, `expected the host's outbound message set to be f
  *                    posted to the desktop webview alone (`postTo(WEBVIEW_SINK_ID, …)`), and
  *                    `pickImages` itself is `REMOTE_DENIED`. A phone attaches its own images
  *                    through `attachImage`.
+ *  - `memoryState` — the reply to the Memory panel's requests (`memoryList`, `memoryAdd`, …), all
+ *                    `REMOTE_DENIED`: memory is managed on the desktop, so a phone never asks for it.
  */
-const EXCLUDED_FROM_PWA = new Set(['selectProvider', 'newChat', 'inline', 'editProposal', 'context', 'pickedImages']);
+const EXCLUDED_FROM_PWA = new Set(['selectProvider', 'newChat', 'inline', 'editProposal', 'context', 'pickedImages', 'memoryState']);
 
 for (const excluded of EXCLUDED_FROM_PWA) {
 	assert.ok(hostSends.has(excluded), `"${excluded}" is in the exclusion list but the host no longer sends it — remove it from EXCLUDED_FROM_PWA`);

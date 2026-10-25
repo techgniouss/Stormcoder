@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Pins the code-side fallbacks of the hard guardrail lists to the manifest defaults. The two
@@ -18,8 +18,8 @@ const { DEFAULT_DENIED_COMMANDS, DEFAULT_PROTECTED_PATHS, loadGuardrails } = awa
 
 const pkg = JSON.parse(fs.readFileSync(new URL('../ext-package.reference.json', import.meta.url), 'utf8'));
 const props = Object.assign({}, ...[].concat(pkg.contributes.configuration).map(c => c.properties));
-assert.deepEqual([...DEFAULT_DENIED_COMMANDS], props['openvsChat.guardrails.deniedCommands'].default, 'denied commands match the manifest');
-assert.deepEqual([...DEFAULT_PROTECTED_PATHS], props['openvsChat.guardrails.protectedPaths'].default, 'protected paths match the manifest');
+assert.deepEqual([...DEFAULT_DENIED_COMMANDS], props['stormcoder.guardrails.deniedCommands'].default, 'denied commands match the manifest');
+assert.deepEqual([...DEFAULT_PROTECTED_PATHS], props['stormcoder.guardrails.protectedPaths'].default, 'protected paths match the manifest');
 
 const g = loadGuardrails();
 assert.equal(g.deniedCommands.length, DEFAULT_DENIED_COMMANDS.length, 'an unsupplied setting still loads every denied-command pattern');

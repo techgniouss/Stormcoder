@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -127,6 +127,15 @@ export const REMOTE_DENIED: readonly string[] = [
 	'setMaxSteps',
 	'setMaxRunMinutes',
 	'setDecompose',
+	'setMemoryEnabled',
+	'setMemoryAutoPropose',
+	'memoryList',
+	'memoryAdd',
+	'memoryEdit',
+	'memoryDelete',
+	'memoryClear',
+	'memoryProposal',
+	'setMemoryRecentRuns',
 	'attachContext',
 	// Opens VS Code's file dialog on the desktop — which the remote user can't see — and reads
 	// local files. A phone attaches its own images through `attachImage` instead.

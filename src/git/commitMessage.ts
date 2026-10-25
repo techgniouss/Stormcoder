@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -66,7 +66,7 @@ function git(args: string[], cwd: string, input?: string): Promise<string> {
 
 /**
  * Generates a commit message from the staged changes of the open project using whichever
- * provider is configured (`openvsChat.defaultProvider`), then offers to commit with it or copy
+ * provider is configured (`stormcoder.defaultProvider`), then offers to commit with it or copy
  * it. Reads the repository through the `git` command line, so it works wherever git is
  * installed — there is no editor Git extension to depend on.
  */
@@ -103,7 +103,7 @@ export async function generateCommitMessage(
 			'Configure Provider',
 		);
 		if (action) {
-			await vscode.commands.executeCommand('openvsChat.configureProvider', providerId);
+			await vscode.commands.executeCommand('stormcoder.configureProvider', providerId);
 		}
 		return;
 	}

@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Standalone unit test for src/providers/claudeCodeCli.ts. Stubs both `vscode` (for the
@@ -132,7 +132,7 @@ function baseRequest(overrides = {}) {
 	child.emit('error', enoent);
 	await assert.rejects(promise, err => {
 		assert.match(err.message, /was not found/);
-		assert.match(err.message, /openvsChat\.claude-code-cli\.cliPath/);
+		assert.match(err.message, /stormcoder\.claude-code-cli\.cliPath/);
 		return true;
 	});
 }

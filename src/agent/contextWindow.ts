@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -85,7 +85,7 @@ export function contextWindowFor(model: string, entries?: ModelEntry[]): number 
 /**
  * The estimated-token budget for the conversation sent to `model`: a share of the
  * window minus the response headroom, floored. An explicit user `override`
- * (openvsChat.agent.maxContextTokens > 0) wins outright.
+ * (stormcoder.agent.maxContextTokens > 0) wins outright.
  */
 export function contextBudgetFor(model: string, maxOutputTokens: number, override?: number, entries?: ModelEntry[]): number {
 	if (override && override > 0) {
@@ -134,7 +134,7 @@ export interface RequestBudgetInput {
 	readonly model: string;
 	/** What the user configured for the reply (already adjusted for the mode, if it is). */
 	readonly maxOutputTokens: number;
-	/** `openvsChat.agent.maxContextTokens`, when the user pinned one. */
+	/** `stormcoder.agent.maxContextTokens`, when the user pinned one. */
 	readonly override?: number;
 	/** The provider's fetched catalog, when loaded. */
 	readonly entries?: ModelEntry[];

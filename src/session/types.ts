@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -81,6 +81,12 @@ export interface TranscriptEntry {
 	 * `redactForRemote` replaces it, live and in every transcript sent to a phone.
 	 */
 	readonly fromEditor?: boolean;
+	/**
+	 * A compact digest of the tool calls the run made, attached to the run's last assistant
+	 * turn. Never rendered: it exists so the next send still knows which files were read or
+	 * changed and which commands ran, instead of only the prose the model narrated.
+	 */
+	workNotes?: string;
 }
 
 /** A task-checklist item the agent loop tracks for a run, rendered as the session's todo panel. */

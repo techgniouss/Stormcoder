@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 // Tests src/pairing.ts's pure logic: alphabet, code generation, hashing, expiry, attempt limiting.
 import assert from 'node:assert/strict';
 import {

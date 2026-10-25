@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // @ts-check
@@ -283,5 +283,5 @@
 	}
 
 	// @ts-ignore — the webview's own namespace, consumed by main.js and the card tests.
-	globalThis.OpenVSPrompts = { create };
+	globalThis.StormPrompts = { create };
 }());

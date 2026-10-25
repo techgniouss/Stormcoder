@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -30,10 +30,10 @@ import { GeminiWebProvider } from './webCookie/geminiWebProvider';
 import { XkiroProvider } from './xkiro';
 import { ZaiProvider } from './zai';
 
-const SECRET_PREFIX = 'openvsChat.apiKey.';
+const SECRET_PREFIX = 'stormcoder.apiKey.';
 /** Backup keys for a provider, stored as a JSON string array. Rotated in on a 401/403/429
  * against the primary key — see {@link ProviderRegistry.rotateApiKey}. */
-const EXTRA_KEY_PREFIX = 'openvsChat.apiKeysExtra.';
+const EXTRA_KEY_PREFIX = 'stormcoder.apiKeysExtra.';
 
 /**
  * Environment variables that can supply a provider's key, as a convenient escape hatch for
@@ -52,6 +52,7 @@ const ENV_VARS: Record<string, string | undefined> = {
 	groq: 'GROQ_API_KEY',
 	mistral: 'MISTRAL_API_KEY',
 	cloudflare: 'CLOUDFLARE_API_TOKEN',
+	custom: 'CUSTOM_API_KEY',
 };
 
 /**
@@ -122,7 +123,7 @@ export class ProviderRegistry {
 
 	constructor(private readonly secrets: vscode.SecretStorage) {
 		this.oauth = new OAuthTokenStore(secrets);
-		for (const provider of [new NvidiaProvider(), new OpenAIProvider(), new AnthropicProvider(() => vscode.workspace.getConfiguration('openvsChat').get<string>('anthropic.thinking') === 'off' ? 'off' : 'auto'), new GeminiProvider(), new AntigravityProvider(), new OpenRouterProvider(), new GroqProvider(), new MistralProvider(), new CloudflareProvider(), new KimiProvider(), new QwenProvider(), new ZaiProvider(), new OpenCodeZenProvider(), new XkiroProvider(), new CopilotProvider(), new GrokProvider(), new KiroProvider(), new GeminiWebProvider(), new ClaudeCodeCliProvider(), new CustomProvider()]) {
+		for (const provider of [new NvidiaProvider(), new OpenAIProvider(), new AnthropicProvider(() => vscode.workspace.getConfiguration('stormcoder').get<string>('anthropic.thinking') === 'off' ? 'off' : 'auto'), new GeminiProvider(), new AntigravityProvider(), new OpenRouterProvider(), new GroqProvider(), new MistralProvider(), new CloudflareProvider(), new KimiProvider(), new QwenProvider(), new ZaiProvider(), new OpenCodeZenProvider(), new XkiroProvider(), new CopilotProvider(), new GrokProvider(), new KiroProvider(), new GeminiWebProvider(), new ClaudeCodeCliProvider(), new CustomProvider()]) {
 			this.providers.set(provider.info.id, provider);
 			if (provider instanceof OAuthProxyChatProvider) {
 				provider.setCredentialPersister((previous, next) => this.replaceStoredKey(provider.info.id, previous, next));
@@ -139,7 +140,7 @@ export class ProviderRegistry {
 	}
 
 	getDefaultProviderId(): string {
-		const configured = vscode.workspace.getConfiguration('openvsChat').get<string>('defaultProvider');
+		const configured = vscode.workspace.getConfiguration('stormcoder').get<string>('defaultProvider');
 		if (configured && this.providers.has(configured)) {
 			return configured;
 		}
@@ -147,13 +148,13 @@ export class ProviderRegistry {
 	}
 
 	getModel(id: string): string {
-		const cfg = vscode.workspace.getConfiguration('openvsChat');
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
 		const configured = cfg.get<string>(`${id}.model`);
 		return configured?.trim() || this.providers.get(id)?.info.suggestedModels[0] || '';
 	}
 
 	getBaseUrl(id: string): string {
-		const cfg = vscode.workspace.getConfiguration('openvsChat');
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
 		const configured = (cfg.get<string>(`${id}.baseUrl`)?.trim() || '').replace(/\/+$/, '');
 		if (id === 'cloudflare') {
 			// Cloudflare is the one backend whose credential is split between a header and the
@@ -167,16 +168,16 @@ export class ProviderRegistry {
 	}
 
 	getAuthUrl(id: string): string {
-		const cfg = vscode.workspace.getConfiguration('openvsChat');
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
 		return (cfg.get<string>(`${id}.authUrl`)?.trim() || '');
 	}
 
 	getMaxTokens(): number {
-		return vscode.workspace.getConfiguration('openvsChat').get<number>('maxTokens') ?? 8192;
+		return vscode.workspace.getConfiguration('stormcoder').get<number>('maxTokens') ?? 8192;
 	}
 
 	getSystemPrompt(): string {
-		return vscode.workspace.getConfiguration('openvsChat').get<string>('systemPrompt') ?? '';
+		return vscode.workspace.getConfiguration('stormcoder').get<string>('systemPrompt') ?? '';
 	}
 
 	/** The environment variable that can supply this provider's key, if any. */
@@ -319,13 +320,13 @@ export class ProviderRegistry {
 	}
 
 	async setModel(id: string, model: string): Promise<void> {
-		await vscode.workspace.getConfiguration('openvsChat').update(
+		await vscode.workspace.getConfiguration('stormcoder').update(
 			`${id}.model`, model, vscode.ConfigurationTarget.Global);
 	}
 
 	/** Persists the Cloudflare account id — see `cloudflareAccountId` on {@link ResolvedProviderConfig}. */
 	async setCloudflareAccountId(accountId: string): Promise<void> {
-		await vscode.workspace.getConfiguration('openvsChat').update(
+		await vscode.workspace.getConfiguration('stormcoder').update(
 			'cloudflare.accountId', accountId.trim(), vscode.ConfigurationTarget.Global);
 	}
 
@@ -336,7 +337,7 @@ export class ProviderRegistry {
 	 */
 	async setBaseUrl(id: string, value: string): Promise<void> {
 		const trimmed = value.trim();
-		await vscode.workspace.getConfiguration('openvsChat').update(
+		await vscode.workspace.getConfiguration('stormcoder').update(
 			`${id}.baseUrl`, trimmed || undefined, vscode.ConfigurationTarget.Global);
 	}
 
@@ -380,11 +381,11 @@ export class ProviderRegistry {
 			authUrl: this.getAuthUrl(id),
 			authKind: await this.getAuthKind(id),
 			cloudflareAccountId: id === 'cloudflare'
-				? (vscode.workspace.getConfiguration('openvsChat').get<string>('cloudflare.accountId')?.trim() ?? '')
+				? (vscode.workspace.getConfiguration('stormcoder').get<string>('cloudflare.accountId')?.trim() ?? '')
 				: undefined,
 			baseUrlOverride: NO_BASE_URL_SETTING.has(id)
 				? undefined
-				: (vscode.workspace.getConfiguration('openvsChat').get<string>(`${id}.baseUrl`)?.trim() ?? ''),
+				: (vscode.workspace.getConfiguration('stormcoder').get<string>(`${id}.baseUrl`)?.trim() ?? ''),
 			extraApiKeyCount: (await this.getExtraApiKeys(id)).length,
 		};
 	}

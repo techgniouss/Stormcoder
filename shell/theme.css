@@ -288,7 +288,7 @@ body.settings-window #settingsPanel > .panel-header { display: none; }
 .provider-title .warn { color: var(--warning); }
 .provider-title .tag { margin-left: auto; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: var(--accent-soft); color: var(--accent); }
 .provider-row { gap: 8px; }
-.key-input, .general-settings input, .general-settings textarea, .settings-number, .settings-textarea, .role-model, .role-provider, .provider-row input {
+.key-input, .general-settings input, .general-settings textarea, .settings-number, .settings-textarea, .role-model, .role-provider, .provider-row input, .remote-pairing-link-input {
 	height: 36px; padding: 0 12px; border-radius: 10px; background: var(--ground); border: 1px solid var(--border-strong); color: var(--text);
 }
 .general-settings textarea, .settings-textarea { height: auto; padding: 10px 12px; line-height: 1.55; }
@@ -297,6 +297,9 @@ body.settings-window #settingsPanel > .panel-header { display: none; }
 	height: 34px; padding: 0 16px; border-radius: 10px; font-weight: 600; font-size: 12.5px; cursor: pointer;
 	background: var(--text); color: var(--ground); border: 0;
 }
+/* A group of choices (Memory: where to save, what kind): the chosen one is outlined in the accent, the rest are quiet. */
+.mini-button[aria-pressed="false"] { background: transparent; color: var(--muted); border: 1px solid var(--border-strong); }
+.mini-button[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); border: 1px solid var(--accent-line); }
 .save-key:hover, .mini-button:hover, .general-settings .settings-row button:hover, .provider-actions .sign-in:hover { filter: brightness(.9); transform: translateY(-1px); }
 .provider-actions { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .provider-actions .sign-in { background: var(--accent-fill); color: var(--accent-ink); box-shadow: 0 4px 14px var(--glow); }

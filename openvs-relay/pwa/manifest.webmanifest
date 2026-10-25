@@ -1,12 +1,17 @@
 {
-	"name": "OpenVS Remote",
-	"short_name": "OpenVS",
-	"description": "Remote control for the OpenVS Chat panel — babysit an agent run from your phone.",
+	"id": "/",
+	"name": "Stormcoder Remote",
+	"short_name": "Stormcoder",
+	"description": "Remote control for the Stormcoder chat panel: babysit an agent run from your phone.",
+	"lang": "en",
+	"dir": "ltr",
 	"start_url": "/",
 	"scope": "/",
 	"display": "standalone",
-	"background_color": "#111318",
-	"theme_color": "#111318",
+	"orientation": "any",
+	"categories": ["developer tools", "productivity"],
+	"background_color": "#111114",
+	"theme_color": "#111114",
 	"icons": [
 		{
 			"src": "/icon.svg",

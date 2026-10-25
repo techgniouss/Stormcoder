@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
@@ -51,8 +51,6 @@ const MAX_FAILED_CLAIMS = 10;
 const FAILED_CLAIM_WINDOW_MS = 10 * 60_000;
 /** The most distinct sources tracked at once. */
 const MAX_TRACKED_SOURCES = 1000;
-/** Mirrors `openvs-relay/src/pairing.ts` — Crockford base32 minus the ambiguous I, L, O, U. */
-const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 /** Mirrors `openvs-relay/src/room.ts`'s `HEARTBEAT_PONG_JSON`. */
 const PONG_JSON = JSON.stringify({ v: 1, t: 'c', seq: 0, p: { c: 'pong' } });
 /** The largest request body read (a pairing claim is a few dozen bytes). */
@@ -65,7 +63,8 @@ const MAX_BODY_BYTES = 16 * 1024;
  */
 const STATIC_SECURITY_HEADERS: Record<string, string> = {
 	'X-Frame-Options': 'DENY',
-	'Content-Security-Policy': "frame-ancestors 'none'",
+	// The app has no inline script or style, so nothing but its own files may run or load.
+	'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ws: wss:; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
 	'X-Content-Type-Options': 'nosniff',
 	'Referrer-Policy': 'no-referrer',
 };
@@ -77,6 +76,8 @@ const CONTENT_TYPES: Record<string, string> = {
 	'.svg': 'image/svg+xml',
 	'.png': 'image/png',
 	'.webmanifest': 'application/manifest+json',
+	'.woff2': 'font/woff2',
+	'.txt': 'text/plain; charset=utf-8',
 	'.json': 'application/json',
 };
 
@@ -88,7 +89,20 @@ export interface DeviceRecord {
 	readonly createdAt: number;
 	lastSeenAt: number | null;
 	revokedAt: number | null;
+	/**
+	 * The phone's end-to-end public key and the proof that it knew the pairing secret
+	 * (`docs/REMOTE-E2E.md`). The relay only stores and forwards them: it cannot check the proof,
+	 * and cannot make a valid one.
+	 */
+	pub?: string;
+	mac?: string;
 }
+
+/** The shape of a base64url public key (65 bytes) and MAC (32 bytes) the relay accepts, without decoding either. */
+const E2E_PUB_PATTERN = /^[A-Za-z0-9_-]{87}$/;
+const E2E_MAC_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+/** What a pairing code looks like: eight characters of the Crockford base32 alphabet. */
+const PAIRING_CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{8}$/;
 
 /** Everything the relay persists — per room, its paired devices. */
 export interface RelayState {
@@ -176,6 +190,20 @@ export function mergeRelayStates(disk: RelayState, memory: RelayState): RelaySta
 	return { rooms };
 }
 
+/**
+ * The devices of `roomId`, only if it is a room this relay really has. A room id comes off the
+ * wire, and `rooms` is a plain object: `__proto__` or `constructor` used to resolve to
+ * `Object.prototype` here, and the lookup after it threw inside the upgrade handler.
+ */
+function devicesOf(state: RelayState, roomId: string): DeviceRecord[] | undefined {
+	return Object.prototype.hasOwnProperty.call(state.rooms, roomId) ? state.rooms[roomId]?.devices : undefined;
+}
+
+/** `socket.setTimeout`, which a plain `Duplex` does not declare but every real TCP socket has. */
+function idleTimeout(socket: Duplex, ms: number, onTimeout?: () => void): void {
+	(socket as { setTimeout?: (ms: number, cb?: () => void) => void }).setTimeout?.(ms, onTimeout);
+}
+
 function hmacHex(pepper: string, value: string): string {
 	return createHmac('sha256', pepper).update(value).digest('hex');
 }
@@ -237,6 +265,11 @@ export class LocalRelay {
 			}
 		}));
 		server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
+		// A malformed request must cost the sender a closed socket, not this process a file
+		// descriptor: without these a half-sent request was held open indefinitely.
+		server.on('clientError', (_err, socket) => socket.destroy());
+		server.headersTimeout = 15_000;
+		server.requestTimeout = 30_000;
 		this.server = server;
 		return new Promise((resolve, reject) => {
 			server.once('error', reject);
@@ -348,7 +381,7 @@ export class LocalRelay {
 			reply(res, 404, 'unknown room');
 			return;
 		}
-		let body: { code?: unknown; name?: unknown };
+		let body: { code?: unknown; name?: unknown; pub?: unknown; mac?: unknown };
 		try {
 			body = JSON.parse(await this.readBody(req)) ?? {};
 		} catch {
@@ -357,6 +390,12 @@ export class LocalRelay {
 		}
 		if (typeof body.code !== 'string' || !body.code) {
 			reply(res, 400, 'missing code');
+			return;
+		}
+		// Pairing is end-to-end encrypted or it does not happen: an app that sends no key (an old
+		// cached copy) is told to update rather than being paired into a connection with no keys.
+		if (typeof body.pub !== 'string' || !E2E_PUB_PATTERN.test(body.pub) || typeof body.mac !== 'string' || !E2E_MAC_PATTERN.test(body.mac)) {
+			reply(res, 400, 'this app version cannot pair: reload the page to update it');
 			return;
 		}
 		const source = this.sourceOf(req);
@@ -390,15 +429,20 @@ export class LocalRelay {
 		const deviceId = randomUUID();
 		const issuedAt = this.now();
 		const token = `${deviceId}.${createHmac('sha256', this.options.pepper).update(`${deviceId}|${roomId}|${issuedAt}`).digest('base64url')}`;
-		this.state.rooms[roomId].devices.push({
+		const name = typeof body.name === 'string' && body.name ? body.name.slice(0, 80) : 'Unnamed device';
+		(devicesOf(this.state, roomId) ?? (this.state.rooms[roomId] = { devices: [] }).devices).push({
 			id: deviceId,
-			name: typeof body.name === 'string' && body.name ? body.name.slice(0, 80) : 'Unnamed device',
+			name,
 			tokenHash: hmacHex(this.options.pepper, `${roomId}|${token}`),
 			createdAt: issuedAt,
 			lastSeenAt: null,
 			revokedAt: null,
+			pub: body.pub,
+			mac: body.mac,
 		});
 		this.save();
+		// The desktop turns this into the device's keys (and drops the device if the proof is wrong).
+		this.sendControl(this.peersOf(roomId, 'host'), { c: 'deviceClaimed', deviceId, name, pub: body.pub, mac: body.mac });
 		reply(res, 200, JSON.stringify({ deviceId, token }), 'application/json');
 	}
 
@@ -440,9 +484,9 @@ export class LocalRelay {
 			reply(res, 403, 'host token mismatch');
 			return;
 		}
-		const devices = [...this.state.rooms[roomId].devices]
+		const devices = [...(devicesOf(this.state, roomId) ?? [])]
 			.sort((a, b) => b.createdAt - a.createdAt)
-			.map(({ id, name, createdAt, lastSeenAt, revokedAt }) => ({ id, name, createdAt, lastSeenAt, revokedAt }));
+			.map(({ id, name, createdAt, lastSeenAt, revokedAt, pub, mac }) => ({ id, name, createdAt, lastSeenAt, revokedAt, pub, mac }));
 		reply(res, 200, JSON.stringify({ devices }), 'application/json');
 	}
 
@@ -454,10 +498,11 @@ export class LocalRelay {
 	/** The device a token authenticates in `roomId`, if it is valid and not revoked. */
 	private verifyDevice(roomId: string, token: string): DeviceRecord | undefined {
 		const dot = token.indexOf('.');
-		if (dot <= 0 || !this.state.rooms[roomId]) {
+		const devices = dot > 0 ? devicesOf(this.state, roomId) : undefined;
+		if (!devices) {
 			return undefined;
 		}
-		const device = this.state.rooms[roomId].devices.find(d => d.id === token.slice(0, dot));
+		const device = devices.find(d => d.id === token.slice(0, dot));
 		if (!device || device.revokedAt !== null) {
 			return undefined;
 		}
@@ -472,13 +517,25 @@ export class LocalRelay {
 			this.state.rooms = merged.rooms;
 			this.options.store.save(merged);
 		} catch (err) {
-			console.warn('OpenVS local relay: could not save relay state.', err);
+			console.warn('Stormcoder local relay: could not save relay state.', err);
 		}
 	}
 
 	// ---- WebSockets ----------------------------------------------------------------------
 
 	private handleUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): void {
+		// Nothing in here may throw: an exception in this listener is uncaught, and leaves the
+		// socket neither answered nor closed. Anything unexpected closes the connection.
+		try {
+			this.routeUpgrade(req, socket, head);
+		} catch {
+			socket.destroy();
+		}
+	}
+
+	private routeUpgrade(req: http.IncomingMessage, socket: Duplex, head: Buffer): void {
+		// An upgrade that is never completed is dropped (cleared once the WebSocket is accepted).
+		idleTimeout(socket, 30_000, () => socket.destroy());
 		const url = new URL(req.url ?? '/', 'http://localhost');
 		const roomId = url.searchParams.get('room') ?? '';
 		if (url.pathname === '/ws/host') {
@@ -521,6 +578,7 @@ export class LocalRelay {
 			onClose: () => { if (peer) { this.detach(peer); } },
 		});
 		if (conn) {
+			idleTimeout(socket, 0);
 			peer = { ...identity, conn };
 			this.peers.add(peer);
 		}
@@ -552,7 +610,7 @@ export class LocalRelay {
 
 	/** Routes one frame — `room.ts`'s `webSocketMessage`. App messages are relayed verbatim, never parsed beyond the envelope. */
 	private handleMessage(peer: Peer, raw: string): void {
-		let env: { v?: unknown; t?: unknown; seq?: unknown; p?: { c?: unknown; deviceId?: unknown; reason?: unknown } };
+		let env: { v?: unknown; t?: unknown; seq?: unknown; p?: { c?: unknown; deviceId?: unknown; reason?: unknown; code?: unknown } };
 		try {
 			env = JSON.parse(raw);
 		} catch {
@@ -582,7 +640,7 @@ export class LocalRelay {
 				return;
 			case 'pair':
 				if (peer.role === 'host') {
-					this.mintCode(peer);
+					this.registerCode(peer, env.p.code);
 				}
 				return;
 			case 'revoke':
@@ -600,11 +658,14 @@ export class LocalRelay {
 		}
 	}
 
-	private mintCode(host: Peer): void {
-		const bytes = randomBytes(8);
-		let code = '';
-		for (const byte of bytes) {
-			code += ALPHABET[byte % ALPHABET.length];
+	/**
+	 * Registers the pairing code the desktop derived from its pairing secret. The relay no longer
+	 * invents codes: a code it picked would let it pair a device of its own choosing, and one
+	 * derived from the secret is what lets the phone find the code from the link alone.
+	 */
+	private registerCode(host: Peer, code: unknown): void {
+		if (typeof code !== 'string' || !PAIRING_CODE_PATTERN.test(code)) {
+			return;
 		}
 		const expiresAt = this.now() + PAIRING_TTL_MS;
 		this.codes.set(`${host.room}|${hmacHex(this.options.pepper, code)}`, { expiresAt, attempts: 0 });
@@ -612,7 +673,7 @@ export class LocalRelay {
 	}
 
 	private revoke(roomId: string, deviceId: string): void {
-		const device = this.state.rooms[roomId]?.devices.find(d => d.id === deviceId);
+		const device = devicesOf(this.state, roomId)?.find(d => d.id === deviceId);
 		if (device && device.revokedAt === null) {
 			device.revokedAt = this.now();
 			this.save();

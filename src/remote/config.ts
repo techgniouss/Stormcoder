@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -7,7 +7,7 @@ import { createHash, createHmac, randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 
 /**
- * Phase 5 of "remote control": accessors for `openvsChat.remote.*` settings and the
+ * Phase 5 of "remote control": accessors for `stormcoder.remote.*` settings and the
  * `SecretStorage`-backed per-workspace room secret. Per the plan's "Auth" section,
  * `SecretStorage` is global to the extension, not per-workspace — a room secret shared across
  * every open project would make every workspace the same room — so the secret is keyed by a
@@ -17,36 +17,36 @@ import * as vscode from 'vscode';
  */
 
 /** `workspaceState` key holding the array of every `workspaceKey` a room secret was ever minted for. */
-const KNOWN_ROOMS_KEY = 'openvsChat.remote.knownRooms';
+const KNOWN_ROOMS_KEY = 'stormcoder.remote.knownRooms';
 
 /** `SecretStorage` key prefix for a workspace's room secret; the full key appends its `workspaceKey`. */
-const ROOM_SECRET_PREFIX = 'openvsChat.remote.roomSecret.';
+const ROOM_SECRET_PREFIX = 'stormcoder.remote.roomSecret.';
 
-/** Default for `openvsChat.remote.deviceTokenDays` — the sliding device-token expiry `RemoteService`'s hygiene sweep enforces (`shouldRevokeForTokenAge` in `devices.ts`). */
+/** Default for `stormcoder.remote.deviceTokenDays` — the sliding device-token expiry `RemoteService`'s hygiene sweep enforces (`shouldRevokeForTokenAge` in `devices.ts`). */
 const DEFAULT_DEVICE_TOKEN_DAYS = 30;
 
-/** Default for `openvsChat.remote.idleDisableHours` — the no-host-activity auto-disable window `RemoteService`'s hygiene sweep enforces (`shouldDisconnectForIdle` in `devices.ts`). */
+/** Default for `stormcoder.remote.idleDisableHours` — the no-host-activity auto-disable window `RemoteService`'s hygiene sweep enforces (`shouldDisconnectForIdle` in `devices.ts`). */
 const DEFAULT_IDLE_DISABLE_HOURS = 12;
 
-/** Whether remote control is turned on (`openvsChat.remote.enabled`). Off by default. */
+/** Whether remote control is turned on (`stormcoder.remote.enabled`). Off by default. */
 export function isRemoteEnabled(): boolean {
-	return vscode.workspace.getConfiguration('openvsChat').get<boolean>('remote.enabled') === true;
+	return vscode.workspace.getConfiguration('stormcoder').get<boolean>('remote.enabled') === true;
 }
 
-/** The relay URL to dial out to (`openvsChat.remote.relayUrl`). Empty when unset — there is no default relay. */
+/** The relay URL to dial out to (`stormcoder.remote.relayUrl`). Empty when unset — there is no default relay. */
 export function getRelayUrl(): string {
-	return vscode.workspace.getConfiguration('openvsChat').get<string>('remote.relayUrl')?.trim() ?? '';
+	return vscode.workspace.getConfiguration('stormcoder').get<string>('remote.relayUrl')?.trim() ?? '';
 }
 
-/** `openvsChat.remote.deviceTokenDays`, enforced by `RemoteService`'s hourly hygiene sweep. */
+/** `stormcoder.remote.deviceTokenDays`, enforced by `RemoteService`'s hourly hygiene sweep. */
 export function getDeviceTokenDays(): number {
-	const days = vscode.workspace.getConfiguration('openvsChat').get<number>('remote.deviceTokenDays');
+	const days = vscode.workspace.getConfiguration('stormcoder').get<number>('remote.deviceTokenDays');
 	return typeof days === 'number' && days > 0 ? days : DEFAULT_DEVICE_TOKEN_DAYS;
 }
 
-/** `openvsChat.remote.idleDisableHours`, enforced by `RemoteService`'s hourly hygiene sweep. */
+/** `stormcoder.remote.idleDisableHours`, enforced by `RemoteService`'s hourly hygiene sweep. */
 export function getIdleDisableHours(): number {
-	const hours = vscode.workspace.getConfiguration('openvsChat').get<number>('remote.idleDisableHours');
+	const hours = vscode.workspace.getConfiguration('stormcoder').get<number>('remote.idleDisableHours');
 	return typeof hours === 'number' && hours > 0 ? hours : DEFAULT_IDLE_DISABLE_HOURS;
 }
 

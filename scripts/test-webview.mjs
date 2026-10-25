@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Contract tests between the extension host (src/chatViewProvider.ts) and the webview
@@ -77,10 +77,10 @@ function captures(text, re) {
 
 // 1c. Bootstrap globals are the other half of the host↔webview contract: the host writes
 // them into an inline script, the webview reads them at load. Neither side fails loudly
-// when the other drops out — a missing `__OPENVS_HERO_URI__` just silently returns the
+// when the other drops out — a missing `__STORM_HERO_URI__` just silently returns the
 // empty chat to the drawn orb, and a missing media file is a broken image with no error.
 {
-	const globals = captures(main, /window\)?\.(__OPENVS_[A-Z_]+__)/g);
+	const globals = captures(main, /window\)?\.(__STORM_[A-Z_]+__)/g);
 	assert.ok(globals.length > 0, 'expected the webview to read at least one bootstrap global');
 	const unset = globals.filter(g => !host.includes(`window.${g} =`));
 	assert.deepStrictEqual(unset, [], 'the webview reads these globals but the host never sets them');
@@ -172,6 +172,11 @@ for (const excluded of EXCLUDED_FROM_WEBVIEW) {
 	// every status update, pairing reply and error `media/pairing.js` ever needed to show,
 	// leaving the status dot stuck at "off" regardless of the real connection state.
 	assert.ok(!list[1].includes(`'remote'`), 'remote status/pairing/device updates must reach the Settings tab — it is where the Remote control panel lives');
+	// The host enforces its own copy of the list (SessionBus), and it must agree: it used to list
+	// 'remote', so the standalone app's Settings panel never saw the connection come up.
+	const hostList = /const CHAT_ONLY_MESSAGE_TYPES[^=]*= new Set\(\[([\s\S]*?)\]\);/.exec(host);
+	assert.ok(hostList, 'the host declares CHAT_ONLY_MESSAGE_TYPES');
+	assert.ok(!hostList[1].includes(`'remote'`), 'the host must not withhold remote status from the Settings sink');
 }
 
 // 5. The prompt round-trip has to name the same fields on both sides. These are read out
@@ -258,10 +263,10 @@ for (const excluded of EXCLUDED_FROM_WEBVIEW) {
 }
 
 // 6b. All five webview scripts are served, in dependency order: qr.js (no deps) before
-// pairing.js (uses OpenVSQr), pairing.js before prompts.js (no dependency between the two,
+// pairing.js (uses StormQr), pairing.js before prompts.js (no dependency between the two,
 // but this pins them anyway so a reorder is a deliberate edit, not an accident), and both
-// prompts.js and markdown.js before main.js, which reads `OpenVSPrompts.create`,
-// `OpenVSPairing.create` and `OpenVSMarkdown` at startup — the last at the top level of its
+// prompts.js and markdown.js before main.js, which reads `StormPrompts.create`,
+// `StormPairing.create` and `StormMarkdown` at startup — the last at the top level of its
 // IIFE, so a wrong order is not a degraded transcript, it is a ReferenceError that leaves
 // the whole panel blank.
 {
@@ -275,7 +280,7 @@ for (const excluded of EXCLUDED_FROM_WEBVIEW) {
 		assert.ok(positions[i] > positions[i - 1],
 			`scripts are served in the right order: …${order[i - 1]} before ${order[i]}`);
 	}
-	assert.match(main, /OpenVSMarkdown/, 'main.js takes its renderer from the markdown module');
+	assert.match(main, /StormMarkdown/, 'main.js takes its renderer from the markdown module');
 }
 
 // 7. The host must never strand a run on an unanswerable question, across the sink

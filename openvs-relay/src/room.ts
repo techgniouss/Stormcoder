@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // `WorkspaceRoom`: one Durable Object per paired workspace. Deliberately does *not* extend the
 // RPC-style `DurableObject` base class from `cloudflare:workers` — nothing here is called via
@@ -13,7 +13,7 @@
 import type { Env } from './index.ts';
 import { applyMigrations } from './schema.ts';
 import {
-	generateCode, hashCode, isExpired, recordAttempt, exceededAttempts, INITIAL_ATTEMPTS,
+	hashCode, isExpired, recordAttempt, exceededAttempts, INITIAL_ATTEMPTS,
 	PAIRING_TTL_MS, FailureLimiter, type AttemptState,
 } from './pairing.ts';
 import { mintToken, verifyToken, hashForStorage, timingSafeEqualHex } from './tokens.ts';
@@ -28,7 +28,11 @@ const FAILED_CLAIM_WINDOW_MS = 10 * 60_000;
 const MAX_PUSH_PER_DEVICE = 5;
 /** Longest device name stored, and the largest public-key JWK (serialised) accepted at pairing. */
 const MAX_DEVICE_NAME_CHARS = 80;
-const MAX_PUBKEY_JWK_CHARS = 2048;
+/** What a base64url P-256 public key (65 bytes) and an HMAC-SHA-256 (32 bytes) look like; the relay checks shape only. */
+const E2E_PUB_PATTERN = /^[A-Za-z0-9_-]{87}$/;
+const E2E_MAC_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+/** A pairing code: eight characters of the Crockford base32 alphabet. */
+const PAIRING_CODE_PATTERN = /^[0-9A-HJKMNP-TV-Z]{8}$/;
 
 /** WebSocket tag identifying the single host connection for this room. */
 export const HOST_TAG = 'host';
@@ -279,17 +283,22 @@ export class WorkspaceRoom {
 		} catch {
 			return new Response('malformed json', { status: 400 });
 		}
-		const { code, pubkeyJwk, name } = (body ?? {}) as { code?: unknown; pubkeyJwk?: unknown; name?: unknown };
+		const { code, pub, mac, name } = (body ?? {}) as { code?: unknown; pub?: unknown; mac?: unknown; name?: unknown };
 		if (typeof code !== 'string' || code.length === 0) {
 			return new Response('missing code', { status: 400 });
 		}
 		if (code.length > 64) {
 			return new Response('invalid or already-used code', { status: 403 });
 		}
-		const jwkText = JSON.stringify(pubkeyJwk ?? null);
-		if (jwkText.length > MAX_PUBKEY_JWK_CHARS) {
-			return new Response('public key too large', { status: 400 });
+		// Pairing is end-to-end encrypted or it does not happen. The relay stores the phone's public
+		// key and its proof and hands them to the desktop; it cannot check or forge the proof. An app
+		// that sends no key (an old cached copy) is told to update.
+		if (typeof pub !== 'string' || !E2E_PUB_PATTERN.test(pub) || typeof mac !== 'string' || !E2E_MAC_PATTERN.test(mac)) {
+			return new Response('this app version cannot pair: reload the page to update it', { status: 400 });
 		}
+		// Kept in the `pubkeyJwk` column (the ECDSA binding that column was reserved for was never
+		// built): `{pub, mac}` as JSON, small and of fixed shape.
+		const jwkText = JSON.stringify({ pub, mac });
 		const source = request.headers.get('CF-Connecting-IP') ?? 'unknown';
 		if (this.failedClaims.isBlocked(source, Date.now())) {
 			return new Response('too many wrong codes — try again later', { status: 429 });
@@ -340,6 +349,7 @@ export class WorkspaceRoom {
 			jwkText,
 			issuedAt,
 		);
+		this.notifyHostDeviceClaimed(deviceId, typeof name === 'string' && name.length > 0 ? name.slice(0, MAX_DEVICE_NAME_CHARS) : 'Unnamed device', pub, mac);
 		return new Response(JSON.stringify({ deviceId, token }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 	}
 
@@ -457,6 +467,15 @@ export class WorkspaceRoom {
 		return { firstConnect: row !== undefined && row.lastSeenAt === null, name: row?.name ?? 'Unnamed device' };
 	}
 
+	/** Tells the connected host a phone has claimed a pairing, with the key and proof it sent (see `DeviceClaimedFrame`). */
+	private notifyHostDeviceClaimed(deviceId: string, name: string, pub: string, mac: string): void {
+		const frame: Envelope = { v: 1, t: 'c', seq: 0, p: { c: 'deviceClaimed', deviceId, name, pub, mac } };
+		const json = JSON.stringify(frame);
+		for (const ws of this.state.getWebSockets(HOST_TAG)) {
+			ws.send(json);
+		}
+	}
+
 	/**
 	 * Sends a `deviceConnected` notice directly to the currently-connected host socket(s), if any —
 	 * Auth step 6's "new device notice", raised from `upgradeClient` right after a device's connect
@@ -497,10 +516,20 @@ export class WorkspaceRoom {
 			return new Response('host token mismatch', { status: 403 });
 		}
 		const rows = this.state.storage.sql
-			.exec<{ id: string; name: string; createdAt: number; lastSeenAt: number | null; revokedAt: number | null }>(
-				'SELECT id, name, createdAt, lastSeenAt, revokedAt FROM device ORDER BY createdAt DESC',
+			.exec<{ id: string; name: string; createdAt: number; lastSeenAt: number | null; revokedAt: number | null; pubkeyJwk: string | null }>(
+				'SELECT id, name, createdAt, lastSeenAt, revokedAt, pubkeyJwk FROM device ORDER BY createdAt DESC',
 			)
-			.toArray();
+			.toArray()
+			.map(({ pubkeyJwk, ...device }) => {
+				// The phone's public key and pairing proof go to the host (it needs them if it was offline
+				// when the claim arrived); the token hash never does.
+				try {
+					const keys = JSON.parse(pubkeyJwk ?? 'null') as { pub?: unknown; mac?: unknown } | null;
+					return typeof keys?.pub === 'string' && typeof keys.mac === 'string' ? { ...device, pub: keys.pub, mac: keys.mac } : device;
+				} catch {
+					return device;
+				}
+			});
 		return new Response(JSON.stringify({ devices: rows }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 	}
 
@@ -575,7 +604,7 @@ export class WorkspaceRoom {
 			}
 			case 'pair':
 				if (isHostTag(tag)) {
-					await this.mintPairingCode(ws);
+					await this.registerPairingCode(ws, frame.code);
 				}
 				return;
 			case 'revoke':
@@ -610,13 +639,14 @@ export class WorkspaceRoom {
 			case 'paired':
 			case 'revoked':
 			case 'deviceConnected':
+			case 'deviceClaimed':
 			case 'hostStatus':
 				// `resume`/`snapshotNeeded` (replay-from-`lastSeq`) are genuinely not built yet —
 				// see the `hello` case's own doc — and belong to Phase 5's extension-side
 				// `socket.ts` for reconnect bookkeeping the DO does not need to referee; auth is
 				// already settled at WS-upgrade time (`upgradeHost`/`upgradeClient`). `pong` is
 				// the relay's own reply, never expected back. `welcome`, `paired`, `revoked`,
-				// `deviceConnected` and `hostStatus` are all DO→peer frames, never received back.
+				// `deviceConnected`, `deviceClaimed` and `hostStatus` are all DO→peer frames, never received back.
 				return;
 			default: {
 				const unreachable: never = frame;
@@ -642,10 +672,15 @@ export class WorkspaceRoom {
 		}
 	}
 
-	private async mintPairingCode(ws: WebSocket): Promise<void> {
-		const randomBytes = new Uint8Array(8);
-		crypto.getRandomValues(randomBytes);
-		const code = generateCode(randomBytes);
+	/**
+	 * Registers the pairing code the host derived from its pairing secret. The relay no longer
+	 * invents codes: one it picked would let it pair a device of its own choosing, and one derived
+	 * from the secret is what lets the phone find the code from the link alone.
+	 */
+	private async registerPairingCode(ws: WebSocket, code: unknown): Promise<void> {
+		if (typeof code !== 'string' || !PAIRING_CODE_PATTERN.test(code)) {
+			return;
+		}
 		const codeHash = await hashCode(code, this.env.RELAY_PEPPER);
 		const expiresAt = Date.now() + PAIRING_TTL_MS;
 		this.state.storage.sql.exec('INSERT OR REPLACE INTO pairing (codeHash, expiresAt, usedAt) VALUES (?, ?, NULL)', codeHash, expiresAt);

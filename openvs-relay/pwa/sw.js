@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // Minimal service worker. Its only job of substance is the `push` handler, and per the plan it
 // must never trust the push payload — Web Push here is deliberately payload-less (see
@@ -18,10 +18,11 @@
 // redeployed relay served its new index.html (navigations were already network-first) next to
 // the *old* cached app.js and styles.css — markup and script from two different releases, which
 // breaks the moment an element id changes and otherwise just keeps showing the old UI forever.
-const CACHE_NAME = 'openvs-relay-shell-v4';
+// v5: renamed with the product. The old caches are removed on activate (see below).
+const CACHE_NAME = 'stormcoder-remote-shell-v5';
 const SHELL_ASSETS = [
-	'/', '/index.html', '/app.js', '/transcript.js', '/cards.js', '/styles.css', '/manifest.webmanifest',
-	'/icon.svg', '/icon-192.png', '/icon-512.png', '/icon-512-maskable.png', '/apple-touch-icon.png',
+	'/', '/index.html', '/app.js', '/e2e.js', '/transcript.js', '/cards.js', '/styles.css', '/manifest.webmanifest',
+	'/public-sans-latin-wght-normal.woff2', '/icon.svg', '/icon-192.png', '/icon-512.png', '/icon-512-maskable.png', '/apple-touch-icon.png',
 ];
 
 self.addEventListener('install', event => {
@@ -148,9 +149,9 @@ self.addEventListener('push', event => {
 	event.waitUntil((async () => {
 		// No payload is ever read from `event.data` here, by design — see this file's top doc.
 		const auth = await readActiveAuth();
-		let title = 'OpenVS';
-		let body = 'You have an update.';
-		let tag = 'openvs-pending';
+		let title = 'Stormcoder';
+		let body = 'Stormcoder needs your attention.';
+		let tag = 'stormcoder-pending';
 		try {
 			const headers = auth && auth.token ? { Authorization: `Bearer ${auth.token}` } : {};
 			const room = auth && auth.room ? `?room=${encodeURIComponent(auth.room)}` : '';
@@ -168,7 +169,7 @@ self.addEventListener('push', event => {
 			// Offline or the fetch failed — still show a generic notification so the user knows
 			// something happened rather than staying silent.
 		}
-		await self.registration.showNotification(title, { body, tag });
+		await self.registration.showNotification(title, { body, tag, icon: '/icon-192.png', badge: '/icon-192.png' });
 	})());
 });
 

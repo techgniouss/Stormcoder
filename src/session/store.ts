@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -319,7 +319,9 @@ export class SessionStore {
 			return [];
 		}
 		const real = session.messages.filter(m => !m.kind && !(m.role === 'assistant' && m.content === ''));
-		const tail = real.slice(session.compactedUpTo || 0);
+		const tail = real.slice(session.compactedUpTo || 0).map(m => m.workNotes
+			? { ...m, content: `${m.content}\n\n[Tool activity during that turn]\n${m.workNotes}`, workNotes: undefined }
+			: m);
 		return session.compactSummary ? [{ role: 'user', content: session.compactSummary }, ...tail] : tail;
 	}
 
@@ -431,6 +433,18 @@ export class SessionStore {
 			session.title = entry.content.length > 28 ? entry.content.slice(0, 27) + '…' : entry.content;
 		}
 		return entry;
+	}
+
+	/**
+	 * Attaches a run's tool-activity digest to the newest assistant turn, so the next send
+	 * carries what the run read, changed and executed. A no-op without an assistant turn.
+	 */
+	attachWorkNotes(sessionId: string, notes: string): void {
+		const session = this.getSession(sessionId);
+		const entry = session?.messages.slice().reverse().find(m => m.role === 'assistant' && !m.kind);
+		if (entry && notes.trim()) {
+			entry.workNotes = notes;
+		}
 	}
 
 	/**

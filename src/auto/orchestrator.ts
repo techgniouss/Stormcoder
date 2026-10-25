@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -14,7 +14,7 @@ import { modeDoctrine } from '../persona/prompts';
 import { TodoItem } from '../persona/todos';
 import { ProviderRegistry } from '../providers/registry';
 import { isKeyFailure, withProviderResilience } from '../providers/resilience';
-import { ChatMessage, ChatProvider, ModelEntry, ToolCall, isAbortError, isTransientProviderError } from '../providers/types';
+import { ChatMessage, ChatProvider, ModelEntry, ToolCall, isAbortError, isTransientProviderError, modelSupportsTools } from '../providers/types';
 import { AutoRole, CredentialMemo, RoleAssignment, RoleRouter } from './router';
 
 /** Events the orchestrator emits as it moves through the plan → code → review phases. */
@@ -46,9 +46,9 @@ export interface AutoRunParams {
 	 * model's request budget cannot carry it (see `needsCompactPrompt`).
 	 */
 	readonly compactBaseSystemPrompt?: string;
-	/** `openvsChat.persona.thinking`: whether the implementer gets the <thinking> scaffold. */
+	/** `stormcoder.persona.thinking`: whether the implementer gets the <thinking> scaffold. */
 	readonly thinking?: boolean;
-	/** `openvsChat.persona.compactPrompt` is `always`: the implementer starts on the compact prompt and condensed schemas. */
+	/** `stormcoder.persona.compactPrompt` is `always`: the implementer starts on the compact prompt and condensed schemas. */
 	readonly forceCompactPrompt?: boolean;
 	readonly signal: AbortSignal;
 	/**
@@ -72,6 +72,9 @@ export interface ChangeSink {
 	 */
 	unfinished?: string;
 }
+
+/** Step budget for the planner's read-only exploration; a plan needs a handful of reads, not a run. */
+const PLAN_MAX_STEPS = 20;
 
 /**
  * Orchestrates an "Auto" run: it plans with one model, implements with another (driving
@@ -219,11 +222,19 @@ export class AutoOrchestrator {
 		const lastUser = [...params.history].reverse().find(m => m.role === 'user')?.content ?? '';
 
 		// --- 1. PLAN ------------------------------------------------------------
-		const planText = await this.streamWithFallback('plan', planCandidates, [
-			{ role: 'system', content: planSystem(params.baseSystemPrompt) },
+		// A planner that can read the repository names real files; one that cannot invents them.
+		// Text-only streaming remains the fallback for a model without tool calling.
+		const planSeed: ChatMessage[] = [
+			{ role: 'system', content: planSystem(params.baseSystemPrompt, true) },
 			...ctxMessages,
 			...params.history,
-		], maxTokens, params.signal, cb, compactOf(params, planSystem));
+		];
+		const planText = await this.planWithTools(planCandidates, planSeed, maxTokens, params.signal, cb)
+			?? await this.streamWithFallback('plan', planCandidates, [
+				{ role: 'system', content: planSystem(params.baseSystemPrompt) },
+				...ctxMessages,
+				...params.history,
+			], maxTokens, params.signal, cb, compactOf(params, planSystem));
 
 		if (params.signal.aborted) {
 			throw new DOMException('Aborted', 'AbortError');
@@ -249,7 +260,7 @@ export class AutoOrchestrator {
 		}
 
 		// --- 3. REVIEW ----------------------------------------------------------
-		await this.streamWithFallback('review', reviewCandidates, [
+		const reviewText = await this.streamWithFallback('review', reviewCandidates, [
 			{ role: 'system', content: reviewSystem(params.baseSystemPrompt) },
 			{
 				role: 'user',
@@ -266,6 +277,76 @@ export class AutoOrchestrator {
 					`missed steps and risks. Be concise and specific. If it is correct and complete, say so.`,
 			},
 		], maxTokens, params.signal, cb, compactOf(params, reviewSystem));
+
+		// One fix round, not a loop: the reviewer has no tools and can be wrong, so what it
+		// reports is handed to the implementer as claims to verify, and the run ends after.
+		// A partial implementation is not retried here — it already says why it stopped.
+		if (!/^\s*\**VERDICT:?\**\s*ISSUES/im.test(reviewText) || params.signal.aborted || sink.unfinished) {
+			return;
+		}
+		cb.note('The review found problems — running one fix round.');
+		await this.runCode(codeCandidates, [
+			{ role: 'system', content: codeSystem(params.baseSystemPrompt, false, params.thinking) },
+			...ctxMessages,
+			...params.history,
+			{ role: 'assistant', content: `Plan that was followed:\n\n${planText}\n\nWhat I implemented:\n${sink.narration.slice(-3).join('\n') || '(see the changes above)'}` },
+			{ role: 'user', content: `An independent reviewer, who could not run anything, reported these problems:\n\n${reviewText}\n\nCheck each one against the actual code. Fix the ones that are real using your tools, ignore any that are wrong and say why, then re-run the project's build or tests.` },
+		], maxTokens, params.signal, cb, sink, params.steering, compactOf(params, (base, compact) => codeSystem(base, compact, params.thinking)));
+	}
+
+	/**
+	 * Plans with read-only tools so the plan is grounded in files the planner actually opened.
+	 * Returns undefined when no candidate can do that (no tool calling) or the attempt produced
+	 * nothing, and the caller falls back to the text-only planner.
+	 */
+	private async planWithTools(
+		candidates: RoleAssignment[],
+		seed: ChatMessage[],
+		maxTokens: number,
+		signal: AbortSignal,
+		cb: AutoCallbacks,
+	): Promise<string | undefined> {
+		const a = candidates.find(c => c.ready);
+		const provider = a ? this.registry.getProvider(a.providerId) : undefined;
+		if (!a || !provider?.runAgentStep || !modelSupportsTools(provider.info, a.model)) {
+			return undefined;
+		}
+		cb.phase('plan', a, false);
+		const runner = new AgentRunner(provider, this.approver, Math.min(this.maxSteps, PLAN_MAX_STEPS), {
+			readOnly: true,
+			guardrails: this.guardrails,
+			...this.budgetFor(provider, a, maxTokens),
+			keepHead: seed.length,
+			...this.runLimits(),
+			...this.keyResilienceOptions(a.providerId, a.model),
+		});
+		let plan = '';
+		try {
+			const outcome = await runner.run(seed, {
+				model: a.model,
+				apiKey: await this.apiKey(a.providerId),
+				baseUrl: this.registry.getBaseUrl(a.providerId),
+				maxTokens,
+				signal,
+			}, {
+				onStepStart: () => cb.agentStepStart(),
+				onToken: delta => cb.token(delta),
+				onStepEnd: content => { if (content.trim()) { plan = content; } cb.agentStepEnd(content); },
+				onToolStart: (call, parentCallId) => cb.onToolStart(call, parentCallId),
+				onToolEnd: (call, result, isError, parentCallId) => cb.onToolEnd(call, result, isError, parentCallId),
+				onNote: text => cb.note(text),
+			});
+			if (outcome.reason !== 'done' && outcome.detail) {
+				cb.note(`Planning: ${outcome.detail}`);
+			}
+		} catch (err) {
+			if (signal.aborted || isAbortError(err)) {
+				throw err;
+			}
+			cb.note(`Planning with tools failed (${err instanceof Error ? err.message : String(err)}) — planning from the request alone instead.`);
+			return undefined;
+		}
+		return plan.trim() ? plan : undefined;
 	}
 
 	/**
@@ -349,7 +430,7 @@ export class AutoOrchestrator {
 		if (truncated) {
 			// A cut-off plan or review feeds the next phase; say so rather than passing a
 			// half-finished document downstream silently.
-			cb.note(`The ${assignment.roleLabel} output is still incomplete after several continuations — raise "openvsChat.maxTokens" for a fuller result.`);
+			cb.note(`The ${assignment.roleLabel} output is still incomplete after several continuations — raise "stormcoder.maxTokens" for a fuller result.`);
 		}
 		return text;
 	}
@@ -718,6 +799,10 @@ export function recordChangeStart(sink: ChangeSink, raw: ToolCall): void {
 		const path = asString(call.args.path);
 		sink.pending?.set(raw.id, `Wrote \`${path}\`:\n\`\`\`\n${truncate(asString(call.args.content), 2000)}\n\`\`\``);
 	}
+	if (call.name === 'edit_notebook') {
+		const path = asString(call.args.path);
+		sink.pending?.set(raw.id, `Edited notebook \`${path}\` (${asString(call.args.op) || 'replace'} cell ${asString(call.args.cell)}):\n\`\`\`\n${truncate(asString(call.args.source), 1500)}\n\`\`\``);
+	}
 	if (call.name === 'edit_file') {
 		const path = asString(call.args.path);
 		// `edits` is canonical after normalization; a single-edit call is the one-element case.
@@ -753,11 +838,14 @@ function compactOf(params: AutoRunParams, phaseSystem: (base: string, compact: b
 	return params.compactBaseSystemPrompt === undefined ? undefined : phaseSystem(params.compactBaseSystemPrompt, true);
 }
 
-function planSystem(base: string): string {
+function planSystem(base: string, tools = false): string {
 	return `${base}\n\nYou are the PLANNER in an automated plan→implement→review pipeline. ` +
 		`Read the user's request and produce a clear, concise, numbered plan: the concrete steps, ` +
-		`which files to touch, and any risks or unknowns. Do NOT write the full solution and do NOT ` +
-		`call tools — output only the plan, as tightly as possible.`;
+		`which files to touch, and any risks or unknowns. Do NOT write the full solution. ` +
+		(tools
+			? `You have read-only tools (read_file, list_dir, glob_files, search_files): use them briefly to find the real files and ` +
+			`symbols involved, then name actual paths in the plan. When you have enough, reply with only the plan, as tightly as possible.`
+			: `Do NOT call tools — output only the plan, as tightly as possible.`);
 }
 
 /**
@@ -777,5 +865,6 @@ function reviewSystem(base: string): string {
 	return `${base}\n\nYou are the REVIEWER in an automated plan→implement→review pipeline. You did NOT ` +
 		`write this code. Critically review the implementation against the original request and plan: ` +
 		`correctness, missed steps, bugs and risks. Be concise and specific. If it is correct and complete, ` +
-		`say so plainly; otherwise list concrete issues and suggested fixes.`;
+		`say so plainly; otherwise list concrete issues and suggested fixes. ` +
+		`End with exactly one final line: "VERDICT: PASS" if nothing needs fixing, or "VERDICT: ISSUES" if the implementer must fix something.`;
 }

@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -187,7 +187,7 @@ export async function readCookies(profilePath: string, hostSuffixes: readonly st
 	// In the OS temp directory, not beside the source: that wrote into the user's own Chrome
 	// profile (leaving a stray file there if the host died before cleanup), and a fixed per-pid
 	// name let two concurrent reads in one process overwrite and delete each other's copy.
-	const tmp = path.join(os.tmpdir(), `openvs-cookies-${crypto.randomBytes(8).toString('hex')}.tmp`);
+	const tmp = path.join(os.tmpdir(), `stormcoder-cookies-${crypto.randomBytes(8).toString('hex')}.tmp`);
 	let bytes: Buffer;
 	try {
 		await fs.promises.copyFile(source, tmp);

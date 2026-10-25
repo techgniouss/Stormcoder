@@ -22,11 +22,19 @@ Engine requests for UI (`showInformationMessage`, `showQuickPick`, `showInputBox
 
 Opening a folder asks once whether to trust it. A trusted folder lets the agent write files and run commands and lets project MCP servers start; a read-only one does not. Changing folder restarts the engine against the new folder (state such as chats is per project; settings and secrets are global). User data lives in Electron's `userData` directory: `settings.json`, `secrets.json`, `state/`, `logs/`.
 
+## Memory
+
+`src/memory/projectMemory.ts` holds everything. A `MemoryStore` is a folder with `memory.md` (typed, dated one-line facts, `*` after the type marks a pin; written by the `remember` tool, the panel, `/memory add`, or by hand). A project's store (`<project>/.stormcoder`) also keeps `journal.jsonl` (one line per run that changed files: goal, files, whether a verification command passed afterwards, taken from `WorkLog`) and `proposals.json` (suggestions waiting for a yes or no). The user's own store lives under the app's data folder and is shared by every project. A legacy `.openvs/memory.md` is read, never written. Read-modify-writes are queued per folder so parallel chats cannot overwrite each other.
+
+`buildPromptBlock` assembles the system-prompt block once per chat session (the user's notes, the project's facts with pins first, the last few journal lines) and `ChatViewProvider` reuses it for the whole session, so a fact saved mid-conversation does not change the prompt prefix a caching backend matches on; it appears in the next session. The block is capped at about 1,700 tokens, the compact prompt gets a smaller cut, and the project half is skipped in an untrusted folder (a cloned repository's memory file is text anyone could have written). `recall` (read-only, so Ask and Plan have it) searches both stores, the whole journal and past chats by keyword, which is how memory can outgrow the block. `remember` asks for approval unless the policy is full auto-approve (even `auto-edits` asks: what is saved steers every later session, so a fetched page must not be able to plant it silently), refuses anything that looks like a credential, skips repeats, and drops the oldest agent-written lines, never pinned or hand-written ones, when the file outgrows its budget. A request that contains a credential is not quoted in the journal or in a suggestion.
+
+With `stormcoder.memory.autoPropose` on, `ChatViewProvider.proposeMemory` makes one detached model request after a run that changed files and queues what it suggests in `proposals.json`; nothing is saved until the user accepts it in Settings > Memory. The panel and `/memory` are desktop-only (`REMOTE_DENIED`).
+
 ## Security notes
 
 - Secrets use `safeStorage` (OS keychain). Without one, AES-256-GCM with a random key in a `0600` file: protection against copying the file, not against another process running as you.
 - The asset protocol serves only `media/`, `shell/`, `skills/`, `relay-pwa/` and generated view HTML, with path traversal refused.
-- The built-in file editor only opens files inside the user data directory and the project's `.openvs/` and `.vscode/` folders.
+- The built-in file editor only opens files inside the user data directory and the project's `.stormcoder/` and `.vscode/` folders.
 - Windows, navigation and `window.open` from the page are blocked; links open in the system browser.
 - The agent's guardrails (`src/agent/guardrails.ts`) are enforced in code and are unchanged.
 

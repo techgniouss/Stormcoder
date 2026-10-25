@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // The PWA's core client: pairing-code claim, the envelope protocol (mirrored from
 // ../src/protocol.ts — this file ships as a plain browser module with no bundler, so it cannot
@@ -12,6 +12,7 @@
 
 import { render as renderTranscript, renderPending, appendEntry, updateToolRow, appendNotice, renderTodos } from './transcript.js';
 import { create as createCards } from './cards.js';
+import { b32decode, deriveCode, makeClaim, completeHandshake, seal, open as openFrame, ReplayGuard, nextStreamId } from './e2e.js';
 
 // ---- Envelope protocol (mirrors ../src/protocol.ts) ------------------------------------------
 
@@ -124,10 +125,14 @@ const els = {
 	attachImageBtn: document.getElementById('attachImageBtn'),
 	attachActiveBtn: document.getElementById('attachActiveBtn'),
 	pairForm: document.getElementById('pairForm'),
+	scanBtn: document.getElementById('scanBtn'),
+	modeSeg: document.getElementById('modeSeg'),
+	pairScreenRoot: document.getElementById('pairScreen'),
 	pairCode: /** @type {HTMLInputElement} */ (document.getElementById('pairCode')),
 	pairError: document.getElementById('pairError'),
 	app: document.getElementById('app'),
 	pairScreen: document.getElementById('pairScreen'),
+	unpairBtn: document.getElementById('unpairBtn'),
 };
 
 const cards = createCards({ container: els.messages, post: sendApp });
@@ -222,6 +227,21 @@ let attachedContext = null;
 // ---- Storage (bearer-token-only for this phase; the non-extractable ECDSA key binding from
 // the plan's Auth step 5 is Phase 7 work, tracked in src/room.ts's upgradeClient comment) -------
 
+/**
+ * The native shell (android/), when this page runs inside one. It sets `globalThis.StormcoderNative`
+ * before this file loads: `{ platform, scanQr?() }`. In a browser it is undefined and nothing below
+ * changes. A shell serves this app from its own bundle, so the relay is not the page's origin and
+ * its address is learned from the pairing link and remembered with the device.
+ */
+const native = globalThis.StormcoderNative;
+/** The relay's origin when the app is bundled in a native shell (`https://host`); unused in a browser. */
+let nativeOrigin = '';
+
+/** Where the relay is: the page's own origin in a browser, the paired relay's in a native shell. */
+function relayBase() {
+	return native ? nativeOrigin : location.origin;
+}
+
 function storageKey(room) {
 	return `openvsRelay.device.${room}`;
 }
@@ -274,6 +294,188 @@ function loadLastRoom() {
 	}
 }
 
+// ---- End-to-end encryption state (docs/REMOTE-E2E.md) ------------------------------------------
+//
+// After pairing, every `t: 'm'` payload is sealed with a key the relay never sees (e2e.js). The
+// keys are non-extractable CryptoKeys kept in IndexedDB (they structured-clone, localStorage
+// cannot hold them). Until they exist the app is "securing the connection" and sends nothing.
+
+const E2E_DB_NAME = 'openvs-relay-e2e';
+const E2E_STORE_NAME = 'e2e';
+/** How long a freshly paired phone waits for the desktop's handshake frame before giving up. */
+const HANDSHAKE_TIMEOUT_MS = 20_000;
+/** Persist the receive replay state at least this often (in accepted frames); it is also saved whenever the stream changes and when the page is hidden. */
+const RECV_PERSIST_EVERY = 25;
+const SECURING_TEXT = 'Securing the connection…';
+
+/** Keys for this room, once the handshake finished. @type {{ deviceId: string, c2h: CryptoKey, h2c: CryptoKey } | null} */
+let e2eKeys = null;
+/** The claimed-but-not-yet-completed pairing: the secret and the phone's private key. @type {{ deviceId: string, ps: Uint8Array, privateKey: CryptoKey, phonePub: Uint8Array } | null} */
+let pendingHs = null;
+/** Frames from the desktop are accepted only if newer than the last one seen. */
+let recvGuard = new ReplayGuard();
+let recvSincePersist = 0;
+let lastRecvStream = -1;
+/** The last stream id this phone used to send; persisted so stream ids only ever grow. */
+let lastStreamId = 0;
+/** The stream the phone is currently sending on. */
+let sendStream = { s: 0, n: 0 };
+/** Whether `welcome` has arrived on the current socket (the app bootstrap waits for keys and welcome). */
+let welcomeSeen = false;
+/** @type {number | undefined} */
+let handshakeTimer;
+/** Serializes sealing and opening so frame counters stay in order even though WebCrypto is async. @type {Promise<void>} */
+let sendChain = Promise.resolve();
+/** @type {Promise<void>} */
+let recvChain = Promise.resolve();
+
+/** @returns {Promise<IDBDatabase>} */
+function openE2eDb() {
+	return new Promise((resolve, reject) => {
+		const req = indexedDB.open(E2E_DB_NAME, 1);
+		req.onupgradeneeded = () => {
+			if (!req.result.objectStoreNames.contains(E2E_STORE_NAME)) {
+				req.result.createObjectStore(E2E_STORE_NAME);
+			}
+		};
+		req.onsuccess = () => resolve(req.result);
+		req.onerror = () => reject(req.error);
+	});
+}
+
+/**
+ * Runs one request against the E2E store. Best-effort: resolves `undefined` if IndexedDB is
+ * unavailable, so the app still works for the life of the page.
+ * @param {'readonly' | 'readwrite'} mode
+ * @param {(store: IDBObjectStore) => IDBRequest} run
+ * @returns {Promise<any>}
+ */
+async function e2eStore(mode, run) {
+	try {
+		const db = await openE2eDb();
+		try {
+			return await new Promise((resolve, reject) => {
+				const tx = db.transaction(E2E_STORE_NAME, mode);
+				const req = run(tx.objectStore(E2E_STORE_NAME));
+				tx.oncomplete = () => resolve(req.result);
+				tx.onerror = () => reject(tx.error);
+				tx.onabort = () => reject(tx.error);
+			});
+		} finally {
+			db.close();
+		}
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * @param {string} kind `keys`, `pending`, `recv` or `stream`
+ * @param {string} room
+ */
+function e2eKey(kind, room) {
+	return `${kind}:${room}`;
+}
+const e2eGet = (/** @type {string} */ kind, /** @type {string} */ room) => e2eStore('readonly', s => s.get(e2eKey(kind, room)));
+const e2ePut = (/** @type {string} */ kind, /** @type {string} */ room, /** @type {unknown} */ value) => e2eStore('readwrite', s => s.put(value, e2eKey(kind, room)));
+const e2eDel = (/** @type {string} */ kind, /** @type {string} */ room) => e2eStore('readwrite', s => s.delete(e2eKey(kind, room)));
+
+/** Deletes the keys, the pending pairing and the receive state for `room` (the stream counter is kept so ids stay monotonic). @param {string} room */
+async function wipeE2e(room) {
+	if (!room) { return; }
+	await Promise.all([e2eDel('keys', room), e2eDel('pending', room), e2eDel('recv', room)]);
+}
+
+/** Saves the receive replay state so a reload does not reopen the door to old frames. */
+function persistRecvState() {
+	if (!roomId || !e2eKeys) { return; }
+	const state = recvGuard.state();
+	if (state.s < 0) { return; }
+	recvSincePersist = 0;
+	lastRecvStream = state.s;
+	void e2ePut('recv', roomId, state);
+}
+
+/** Begins a new sending stream (`n` restarts at 0) and persists the id. */
+function startSendStream() {
+	lastStreamId = nextStreamId(lastStreamId);
+	sendStream = { s: lastStreamId, n: 0 };
+	if (roomId) { void e2ePut('stream', roomId, lastStreamId); }
+}
+
+/** Loads keys, pending pairing, replay state and the stream counter for `room` into memory. @param {string} room */
+async function loadE2e(room) {
+	e2eKeys = null;
+	pendingHs = null;
+	recvGuard = new ReplayGuard();
+	lastStreamId = 0;
+	if (!room) { return; }
+	const [keys, pending, recv, stream] = await Promise.all([e2eGet('keys', room), e2eGet('pending', room), e2eGet('recv', room), e2eGet('stream', room)]);
+	if (keys && typeof keys.deviceId === 'string' && keys.c2h && keys.h2c) {
+		e2eKeys = { deviceId: keys.deviceId, c2h: keys.c2h, h2c: keys.h2c };
+		recvGuard = new ReplayGuard(recv);
+		lastRecvStream = recvGuard.state().s;
+	} else if (pending && typeof pending.deviceId === 'string' && pending.ps instanceof Uint8Array && pending.privateKey && pending.phonePub instanceof Uint8Array) {
+		pendingHs = { deviceId: pending.deviceId, ps: pending.ps, privateKey: pending.privateKey, phonePub: pending.phonePub };
+	}
+	if (typeof stream === 'number' && Number.isSafeInteger(stream) && stream > 0) { lastStreamId = stream; }
+}
+
+function clearHandshakeTimer() {
+	if (handshakeTimer) { window.clearTimeout(handshakeTimer); handshakeTimer = undefined; }
+}
+
+/** Gives the desktop {@link HANDSHAKE_TIMEOUT_MS} to answer the claim, then abandons the pairing with a clear message. */
+function armHandshakeTimer() {
+	clearHandshakeTimer();
+	handshakeTimer = window.setTimeout(() => {
+		handshakeTimer = undefined;
+		if (!e2eKeys && pendingHs) {
+			void resetPairing('The desktop did not finish securing the connection. Pair again from the desktop.');
+		}
+	}, HANDSHAKE_TIMEOUT_MS);
+}
+
+/**
+ * Forgets this pairing completely (device token, keys, pending handshake, service-worker record)
+ * and returns to the pairing screen with `message`. Used for a revoke, a failed or timed-out
+ * handshake, a pairing from before end-to-end encryption, and "Unpair this phone".
+ * @param {string} message shown on the pairing screen
+ */
+async function resetPairing(message) {
+	clearHandshakeTimer();
+	stopHeartbeat();
+	const dead = ws;
+	ws = null;
+	if (dead) { try { dead.close(); } catch { /* already closed */ } }
+	const room = roomId;
+	deviceToken = '';
+	nativeOrigin = '';
+	e2eKeys = null;
+	if (pendingHs) { pendingHs.ps.fill(0); }
+	pendingHs = null;
+	recvGuard = new ReplayGuard();
+	welcomeSeen = false;
+	if (room) {
+		try { localStorage.removeItem(storageKey(room)); } catch { /* best-effort */ }
+	}
+	// The copies a revoked token must not outlive: the "last room" pointer, and the record the
+	// service worker reads to fetch pending notifications.
+	try { localStorage.removeItem(LAST_ROOM_KEY); } catch { /* best-effort */ }
+	void clearAuthRecord();
+	showPairScreen(message);
+	await wipeE2e(room);
+}
+
+/** @param {string} message */
+function showPairScreen(message) {
+	setStatus(message, 'status-warn');
+	if (els.app) { els.app.hidden = true; }
+	if (els.pairScreen) { els.pairScreen.hidden = false; }
+	if (els.historyPanel) { els.historyPanel.hidden = true; }
+	if (els.pairError) { els.pairError.textContent = message; }
+}
+
 // ---- Service worker auth handoff (Phase 6b: web push triggers) -------------------------------
 //
 // `sw.js`'s `readActiveAuth()` needs the active device token + room id to authenticate its own
@@ -305,6 +507,21 @@ function openAuthDb() {
 	});
 }
 
+/** Removes the `{room, token}` record the service worker reads. Best-effort, like every write to it. */
+async function clearAuthRecord() {
+	try {
+		const db = await openAuthDb();
+		await new Promise((resolve, reject) => {
+			const tx = db.transaction(AUTH_STORE_NAME, 'readwrite');
+			tx.objectStore(AUTH_STORE_NAME).delete(AUTH_RECORD_KEY);
+			tx.oncomplete = () => resolve(undefined);
+			tx.onerror = () => reject(tx.error);
+		});
+	} catch {
+		// Not fatal: the token it holds is revoked, so it opens nothing.
+	}
+}
+
 /**
  * Writes `{room, token}` to the shared auth store, then — for an already-running service worker
  * — also posts it directly so a live worker doesn't have to wait for a restart to see it.
@@ -326,7 +543,7 @@ async function syncAuthToServiceWorker(room, token) {
 	} catch {
 		// See this function's doc — not fatal, sw.js's own read just misses this update.
 	}
-	if (!('serviceWorker' in navigator)) { return; }
+	if (native || !('serviceWorker' in navigator)) { return; }
 	try {
 		const registration = await navigator.serviceWorker.ready;
 		if (registration.active) {
@@ -339,7 +556,8 @@ async function syncAuthToServiceWorker(room, token) {
 
 /** Registers `/sw.js`, if this browser supports service workers at all. Idempotent — a second registration for the same script/scope is a no-op per the spec. */
 function registerServiceWorker() {
-	if ('serviceWorker' in navigator) {
+	// A native shell serves the app from its bundle: no worker to cache it, no Web Push to receive.
+	if (!native && 'serviceWorker' in navigator) {
 		navigator.serviceWorker.register('/sw.js').catch(() => { /* offline-support is best-effort */ });
 	}
 }
@@ -347,15 +565,33 @@ function registerServiceWorker() {
 // ---- Pairing claim ------------------------------------------------------------------------
 
 /**
- * Exchanges a pairing code for a device token via POST /pair/claim (plan's Auth step 4).
- * @param {string} room
- * @param {string} code
+ * A name that tells this phone apart from the others in the desktop's device list ("Pixel 8",
+ * "iPhone", "Mac · Chrome") instead of every device being the same string.
  */
-async function claim(room, code) {
-	const res = await fetch(`/pair/claim?room=${encodeURIComponent(room)}`, {
+function deviceName() {
+	const ua = navigator.userAgent || '';
+	const device = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android[^;]*;\s*([^;)]+)/.exec(ua)?.[1]?.replace(/\s*Build.*$/, '').trim()
+		|| (/Android/.test(ua) ? 'Android' : /Macintosh/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows PC' : /Linux/.test(ua) ? 'Linux' : 'Phone');
+	const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /(Chrome|CriOS)\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : '';
+	return `${device}${browser ? ` · ${browser}` : ''} (Stormcoder PWA)`.slice(0, 80);
+}
+
+/**
+ * Claims the pairing with the secret from the link: derives the relay code from it, sends the
+ * phone's public key with a proof that the sender knew the secret (docs/REMOTE-E2E.md), and keeps
+ * the private key and secret as the pending handshake until the desktop answers.
+ * @param {string} room
+ * @param {Uint8Array} ps the 16-byte pairing secret
+ * @returns {Promise<string>} the device token
+ */
+async function claim(room, ps) {
+	const name = deviceName();
+	const code = await deriveCode(ps);
+	const proof = await makeClaim(ps, name);
+	const res = await fetch(`${relayBase()}/pair/claim?room=${encodeURIComponent(room)}`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ code, name: 'OpenVS Remote (PWA)' }),
+		body: JSON.stringify({ code, name, pub: proof.pub, mac: proof.mac }),
 	});
 	if (!res.ok) {
 		// `room.ts`'s handlePairClaim responds with a plain-text reason (`code expired`, `invalid
@@ -366,7 +602,17 @@ async function claim(room, code) {
 		throw new Error(reason || `pairing failed (${res.status})`);
 	}
 	const body = await res.json();
-	saveDevice(room, { deviceId: body.deviceId, token: body.token });
+	if (!body || typeof body.deviceId !== 'string' || typeof body.token !== 'string') {
+		throw new Error('pairing failed (unexpected reply)');
+	}
+	// A new pairing replaces whatever keys this room had.
+	roomId = room;
+	await wipeE2e(room);
+	e2eKeys = null;
+	pendingHs = { deviceId: body.deviceId, ps: Uint8Array.from(ps), privateKey: proof.privateKey, phonePub: proof.phonePub };
+	recvGuard = new ReplayGuard();
+	await e2ePut('pending', room, pendingHs);
+	saveDevice(room, { deviceId: body.deviceId, token: body.token, ...(native ? { origin: nativeOrigin } : {}) });
 	// Fire-and-forget, not awaited: `syncAuthToServiceWorker` is explicitly best-effort (see its
 	// own doc) and — critically — `navigator.serviceWorker.ready` never rejects or times out on
 	// its own. On a first-ever pairing no service worker has registered yet at this point
@@ -380,18 +626,78 @@ async function claim(room, code) {
 	return body.token;
 }
 
+/**
+ * Reads a pairing secret from what the person pasted or typed: the whole link
+ * (`https://host/p/<room>#<key>`), the part after the `#`, or just the key, with or without
+ * spaces and hyphens.
+ * @param {string} input
+ * @returns {{ ps: Uint8Array, room?: string, origin?: string }}
+ * @throws {Error} with a message fit to show
+ */
+function parsePairingInput(input) {
+	let text = String(input).trim();
+	let room;
+	let origin;
+	const hash = text.lastIndexOf('#');
+	if (hash >= 0) {
+		const link = text.slice(0, hash);
+		text = text.slice(hash + 1);
+		if (/^[a-z][a-z0-9+.-]*:\/\//i.test(link)) {
+			let url;
+			try { url = new URL(link); } catch { throw new Error('That link is not valid. Paste the whole pairing link from the desktop.'); }
+			if (native) {
+				// The shell has no relay of its own: the link says where it is. Only https, so the
+				// pairing claim and token never cross the network in the clear.
+				if (url.protocol !== 'https:') { throw new Error('That pairing link is not an https link.'); }
+				origin = url.origin;
+			} else if (url.origin !== location.origin) {
+				throw new Error('That pairing link is for a different relay than this page.');
+			}
+			const m = /^\/p\/([^/]+)/.exec(url.pathname);
+			if (m) { room = decodeURIComponent(m[1]); }
+		}
+	}
+	try { text = decodeURIComponent(text); } catch { /* keep as typed */ }
+	const compact = text.replace(/[\s-]+/g, '');
+	if (!compact) { throw new Error('Paste the pairing link from the desktop, or type the key shown under the QR code.'); }
+	if (compact.length === 8) {
+		throw new Error('That is the old 8-character code. Paste the whole pairing link, or type the 26-character key shown under the QR code.');
+	}
+	let ps;
+	try { ps = b32decode(compact); } catch { throw new Error('That is not a pairing key. Paste the pairing link, or type the key shown under the QR code.'); }
+	if (ps.length !== 16) { throw new Error('That key is the wrong length. Paste the whole pairing link, or type all 26 characters of the key.'); }
+	return { ps, room, origin };
+}
+
 // ---- Wire send helpers ----------------------------------------------------------------------
 
 /**
- * Wraps `payload` in a `t: 'm'` envelope and sends it. Every call site below must construct a
- * `type` that appears in {@link REMOTE_ALLOWED} — see this file's own top-of-file doc.
+ * Seals `payload` and sends it as a `t: 'm'` envelope. Every call site below must construct a
+ * `type` that appears in {@link REMOTE_ALLOWED} — see this file's own top-of-file doc. Nothing is
+ * ever sent unsealed: with no keys yet the call does nothing. Sealing is asynchronous, so frames
+ * go through one queue that keeps their counters in order.
  * @param {Record<string, unknown> & { type: string }} payload
+ * @returns {boolean} whether the frame was accepted for sending — callers that clear UI state (composer text, chips, …) on send must check this instead of assuming success (see `sendMessage`).
  */
-/** @returns {boolean} whether the frame actually went out — callers that clear UI state (composer text, chips, …) on send must check this instead of assuming success (see `sendMessage`). */
 function sendApp(payload) {
-	if (!ws || ws.readyState !== WebSocket.OPEN) { return false; }
-	outSeq += 1;
-	ws.send(JSON.stringify({ v: 1, t: 'm', seq: outSeq, p: payload }));
+	const sock = ws;
+	const keys = e2eKeys;
+	if (!sock || sock.readyState !== WebSocket.OPEN || !keys) { return false; }
+	let snapshot;
+	try {
+		// Copied now: callers may keep editing the objects they passed.
+		snapshot = JSON.parse(JSON.stringify(payload));
+	} catch {
+		return false;
+	}
+	sendChain = sendChain.then(async () => {
+		if (ws !== sock || sock.readyState !== WebSocket.OPEN || e2eKeys !== keys) { return; }
+		const stream = sendStream;
+		const sealed = await seal(keys.c2h, { deviceId: keys.deviceId, dir: 'c2h', s: stream.s, n: stream.n++ }, snapshot);
+		if (ws !== sock || sock.readyState !== WebSocket.OPEN || e2eKeys !== keys) { return; }
+		outSeq += 1;
+		sock.send(JSON.stringify({ v: 1, t: 'm', seq: outSeq, p: sealed }));
+	}).catch(() => { /* a frame that cannot be sealed is dropped, like one sent into a closed socket */ });
 	return true;
 }
 
@@ -431,6 +737,8 @@ function sessionFor(msg) {
 function renderTabs() {
 	if (!els.tabs) { return; }
 	els.tabs.replaceChildren();
+	// One chat needs no strip: the header already says where this is, and the space goes to the chat.
+	if (sessions.length < 2) { return; }
 	for (const session of sessions) {
 		// A wrapper div, not a button: it holds two independently-clickable controls
 		// (switch, close), and a button can't nest a button per HTML's interactive-content rule.
@@ -449,6 +757,7 @@ function renderTabs() {
 		// silently drop that for the switch half.
 		const title = el('button', 'tab-title', session.title || 'Chat');
 		title.type = 'button';
+		if (session.id === activeSessionId) { title.setAttribute('aria-current', 'true'); }
 		title.addEventListener('click', () => switchSession(session.id));
 		const close = el('button', 'tab-close');
 		close.type = 'button';
@@ -459,7 +768,8 @@ function renderTabs() {
 			closeSession(session.id);
 		});
 		tab.appendChild(title);
-		tab.appendChild(close);
+		// Only the chat being read can be closed, so a thumb aimed at another tab cannot close it.
+		if (session.id === activeSessionId) { tab.appendChild(close); }
 		els.tabs.appendChild(tab);
 		if (session.id === activeSessionId && typeof tab.scrollIntoView === 'function') {
 			tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -532,7 +842,7 @@ function renderChrome() {
 	const session = activeSession();
 	if (!session) { return; }
 	if (els.todos) { renderTodos(els.todos, session.todos || []); }
-	if (els.modeSelect) { els.modeSelect.value = session.mode || 'ask'; }
+	if (els.modeSelect) { els.modeSelect.value = session.mode || 'ask'; syncModeSeg(); }
 	if (els.stopBtn) { els.stopBtn.hidden = !session.streaming; }
 	if (els.composer) {
 		els.composer.placeholder = session.streaming
@@ -869,6 +1179,119 @@ function closeHistoryPanel() {
 	els.historyPanel.hidden = true;
 }
 
+/** Draws the Ask / Plan / Agent segmented control; the hidden `#modeSelect` stays the source of truth. */
+function buildModeSeg() {
+	if (!els.modeSeg || !els.modeSelect) { return; }
+	for (const option of [...els.modeSelect.querySelectorAll('option')]) {
+		const button = el('button', 'seg-btn', option.textContent || option.value);
+		button.type = 'button';
+		button.setAttribute('role', 'radio');
+		button.dataset.mode = option.value;
+		button.addEventListener('click', () => {
+			if (!els.modeSelect || els.modeSelect.value === option.value) { return; }
+			els.modeSelect.value = option.value;
+			els.modeSelect.dispatchEvent(new Event('change'));
+		});
+		els.modeSeg.appendChild(button);
+	}
+	syncModeSeg();
+}
+
+/** Marks the segment matching the select's value. */
+function syncModeSeg() {
+	if (!els.modeSeg || !els.modeSelect) { return; }
+	for (const button of els.modeSeg.querySelectorAll('.seg-btn')) {
+		button.setAttribute('aria-checked', String(/** @type {HTMLElement} */ (button).dataset.mode === els.modeSelect.value));
+	}
+}
+
+// ---- Picker sheet ------------------------------------------------------------------------------
+// On a touch phone the OS draws a select's list: a small system dialog that clips long model ids
+// and looks different on every device. There the list is an in-app sheet instead, with the full
+// names. A pointer device keeps the styled popover from styles.css.
+
+/** The open sheet's backdrop, if any. @type {HTMLElement | null} */
+let pickerSheet = null;
+/** What had focus before the sheet opened. @type {Element | null} */
+let pickerReturnFocus = null;
+
+/**
+ * Routes a select's opening to {@link openPickerSheet} on touch devices.
+ * @param {HTMLSelectElement | null} select
+ */
+function enableSheetPicker(select) {
+	if (!select) { return; }
+	const touch = window.matchMedia('(hover: none)');
+	const open = (/** @type {Event} */ event) => {
+		if (!touch.matches || select.disabled) { return; }
+		event.preventDefault();
+		openPickerSheet(select);
+	};
+	select.addEventListener('mousedown', open);
+	select.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { open(event); } });
+}
+
+/**
+ * A bottom sheet listing every option of `select`, the current one marked. Choosing one sets the
+ * select and fires its `change`, so every handler written for the select still runs.
+ * @param {HTMLSelectElement} select
+ */
+function openPickerSheet(select) {
+	closePickerSheet();
+	pickerReturnFocus = document.activeElement;
+	const title = select.getAttribute('aria-label') || 'Choose';
+	const backdrop = el('div', 'sheet-backdrop');
+	backdrop.addEventListener('click', event => { if (event.target === backdrop) { closePickerSheet(); } });
+	const sheet = el('div', 'sheet');
+	sheet.setAttribute('role', 'dialog');
+	sheet.setAttribute('aria-modal', 'true');
+	sheet.setAttribute('aria-label', title);
+	sheet.appendChild(el('h2', 'sheet-title', title));
+	const list = el('div', 'sheet-list');
+	list.setAttribute('role', 'listbox');
+	/** @type {HTMLElement | null} */
+	let current = null;
+	for (const option of select.querySelectorAll('option')) {
+		const item = el('button', 'sheet-option', option.textContent || option.value);
+		item.type = 'button';
+		item.setAttribute('role', 'option');
+		item.dataset.value = option.value;
+		const selected = option.value === select.value;
+		item.setAttribute('aria-selected', String(selected));
+		if (option.disabled) { item.disabled = true; }
+		if (selected) { current = item; }
+		item.addEventListener('click', () => {
+			closePickerSheet();
+			if (select.value !== option.value) {
+				select.value = option.value;
+				select.dispatchEvent(new Event('change'));
+			}
+		});
+		list.appendChild(item);
+	}
+	sheet.appendChild(list);
+	backdrop.appendChild(sheet);
+	document.body.appendChild(backdrop);
+	pickerSheet = backdrop;
+	// What is behind the sheet cannot be reached by keyboard or screen reader while it is open.
+	if (els.app) { els.app.inert = true; }
+	if (current) { current.scrollIntoView({ block: 'center' }); }
+	(current || list.querySelector('button'))?.focus();
+}
+
+/** Closes the sheet, if open, and returns focus to where it was. */
+function closePickerSheet() {
+	if (!pickerSheet) { return false; }
+	pickerSheet.remove();
+	pickerSheet = null;
+	if (els.app) { els.app.inert = false; }
+	if (pickerReturnFocus instanceof HTMLElement) { pickerReturnFocus.focus(); }
+	pickerReturnFocus = null;
+	return true;
+}
+
+document.addEventListener('keydown', event => { if (event.key === 'Escape') { closePickerSheet(); } });
+
 function historyPanelOpen() {
 	return !!els.historyPanel && !els.historyPanel.hidden;
 }
@@ -959,18 +1382,29 @@ function loadEarlier() {
 }
 
 /** The steady-state status line once the relay has welcomed this device — see {@link hostOnline}. */
+/** The desktop's folder name, from the host's `config`: shown beside "Connected" so the phone names what it is driving. */
+let workspaceName = '';
+
 function refreshStatus() {
 	if (!ws || ws.readyState !== WebSocket.OPEN) { return; }
-	if (hostOnline === false) {
-		setStatus('VS Code is offline — open it to continue', 'status-warn');
+	if (!e2eKeys) {
+		setStatus(SECURING_TEXT, 'status-warn');
+	} else if (hostOnline === false) {
+		setStatus('Stormcoder is closed on your computer — open it to continue', 'status-warn');
 	} else {
-		setStatus('Connected', 'status-ok');
+		setStatus('Connected', 'status-ok', workspaceName);
 	}
 }
 
-function setStatus(text, className) {
+/**
+ * @param {string} text
+ * @param {string} [className]
+ * @param {string} [scope] what the status is about (the desktop's folder), muted after the text
+ */
+function setStatus(text, className, scope) {
 	if (!els.status) { return; }
 	els.status.textContent = text;
+	if (scope) { els.status.appendChild(el('span', 'status-scope', `· ${scope}`)); }
 	els.status.className = `status ${className || ''}`.trim();
 }
 
@@ -1351,8 +1785,10 @@ function handleAppMessage(msg) {
 					pendingModel = null;
 				}
 			}
+			if (typeof msg.workspaceName === 'string') { workspaceName = msg.workspaceName.slice(0, 60); }
 			renderProviderSelect();
 			renderModelSelect();
+			refreshStatus();
 			break;
 		}
 		case 'sessions': {
@@ -1719,31 +2155,43 @@ function handleAppMessage(msg) {
 
 // ---- Control-frame dispatch ---------------------------------------------------------------------
 
+/**
+ * What the app asks the host for once the link is secure: the same catch-up the plain `welcome`
+ * used to trigger. Runs when both the relay's `welcome` and the keys exist.
+ */
+function bootstrapApp() {
+	sendApp({ type: 'ready' });
+	resyncOwnSession();
+	sendApp({ type: 'listSkills' });
+	sendApp({ type: 'listMcp' });
+	// Replays any queue edit this device made that never reached the host before the
+	// socket dropped (see `pendingQueues`'s own doc) — otherwise a chip removed or added
+	// while offline silently reverts once the fresh `ready` catch-up's `sessions`
+	// snapshot arrives, since that snapshot only ever reflects what the host actually saw.
+	for (const [sessionId, queue] of pendingQueues) {
+		sendApp({ type: 'setQueue', sessionId, queue });
+	}
+}
+
 function handleControlFrame(frame) {
 	switch (frame.c) {
 		case 'welcome':
 			hostOnline = typeof frame.hostOnline === 'boolean' ? frame.hostOnline : null;
+			welcomeSeen = true;
+			// The desktop is there (again): start a fresh stream so it accepts what follows.
+			if (hostOnline) { startSendStream(); }
 			refreshStatus();
 			markStreamGaps();
-			sendApp({ type: 'ready' });
-			resyncOwnSession();
-			sendApp({ type: 'listSkills' });
-			sendApp({ type: 'listMcp' });
-			// Replays any queue edit this device made that never reached the host before the
-			// socket dropped (see `pendingQueues`'s own doc) — otherwise a chip removed or added
-			// while offline silently reverts once the fresh `ready` catch-up's `sessions`
-			// snapshot arrives, since that snapshot only ever reflects what the host actually saw.
-			for (const [sessionId, queue] of pendingQueues) {
-				sendApp({ type: 'setQueue', sessionId, queue });
-			}
+			if (e2eKeys) { bootstrapApp(); }
 			break;
 		case 'hostStatus': {
 			const wasOffline = hostOnline === false;
 			hostOnline = !!frame.online;
+			if (hostOnline) { startSendStream(); }
 			refreshStatus();
 			// VS Code (re)joined after this device did: the `ready` sent at `welcome` went to
 			// nobody, so ask again — otherwise the app stays empty until the next reconnect.
-			if (hostOnline && wasOffline) {
+			if (hostOnline && wasOffline && e2eKeys) {
 				markStreamGaps();
 				sendApp({ type: 'ready' });
 				resyncOwnSession();
@@ -1779,16 +2227,65 @@ function handleControlFrame(frame) {
  * — if a later relay change starts sending it — an explicit `{c: 'revoke'}` app frame.
  */
 function handleRevoked() {
-	if (heartbeatTimer) { window.clearInterval(heartbeatTimer); }
-	if (ws) { const dead = ws; ws = null; dead.close(); }
-	deviceToken = '';
-	if (roomId) {
-		try { localStorage.removeItem(storageKey(roomId)); } catch { /* best-effort */ }
+	void resetPairing('This device was revoked. Scan a new QR code or paste a fresh pairing link to reconnect.');
+}
+
+/**
+ * Handles the desktop's plaintext handshake frame `{ e: 0, d, hk, hm }` for a pending pairing:
+ * verifies it with the pairing secret, derives the keys and stores them. Anything else is
+ * ignored; a frame that fails verification abandons the pairing (the relay may be interfering).
+ * @param {any} p
+ */
+async function handleHandshake(p) {
+	const hs = pendingHs;
+	if (e2eKeys || !hs || p.d !== hs.deviceId || typeof p.hk !== 'string' || typeof p.hm !== 'string') { return; }
+	let derived;
+	try {
+		derived = await completeHandshake({ ps: hs.ps, privateKey: hs.privateKey, phonePub: hs.phonePub, deviceId: hs.deviceId, hk: p.hk, hm: p.hm });
+	} catch {
+		if (pendingHs === hs) { await resetPairing('The desktop’s reply did not match. Pair again from the desktop.'); }
+		return;
 	}
-	setStatus('This device was revoked.', 'status-warn');
-	if (els.app) { els.app.hidden = true; }
-	if (els.pairScreen) { els.pairScreen.hidden = false; }
-	if (els.pairError) { els.pairError.textContent = 'This device was revoked. Scan a new QR code or enter a fresh pairing code to reconnect.'; }
+	if (pendingHs !== hs || e2eKeys) { return; }
+	const room = roomId;
+	e2eKeys = { deviceId: hs.deviceId, c2h: derived.c2h, h2c: derived.h2c };
+	pendingHs = null;
+	hs.ps.fill(0);
+	clearHandshakeTimer();
+	recvGuard = new ReplayGuard();
+	startSendStream();
+	refreshStatus();
+	if (welcomeSeen) { bootstrapApp(); }
+	await e2ePut('keys', room, e2eKeys);
+	await e2eDel('pending', room);
+}
+
+/**
+ * Handles one `t: 'm'` payload from the relay: only sealed frames for this device that
+ * authenticate and are newer than the last one accepted reach the app; everything else is dropped
+ * silently.
+ * @param {any} p
+ */
+async function handleInbound(p) {
+	if (!p || typeof p !== 'object') { return; }
+	if (p.e === 0) { await handleHandshake(p); return; }
+	const keys = e2eKeys;
+	if (p.e !== 1 || !keys || p.d !== keys.deviceId) { return; }
+	let opened;
+	try {
+		opened = await openFrame(keys.h2c, { deviceId: keys.deviceId, dir: 'h2c' }, p);
+	} catch {
+		return;
+	}
+	if (e2eKeys !== keys || !recvGuard.accept(opened.s, opened.n)) { return; }
+	recvSincePersist++;
+	if (opened.s !== lastRecvStream || recvSincePersist >= RECV_PERSIST_EVERY) { persistRecvState(); }
+	if (!opened.message || typeof opened.message !== 'object') { return; }
+	try {
+		handleAppMessage(opened.message);
+	} catch (err) {
+		console.error('message handler failed:', err instanceof Error ? err.message : 'error');
+	}
 }
 
 /** Stops the heartbeat interval and any armed missed-pong timeout. Mirrors socket.ts's `stopHeartbeat`. */
@@ -1836,11 +2333,17 @@ function handleMissedPong() {
 }
 
 function connect() {
-	const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-	const url = `${scheme}//${location.host}/ws/client?room=${encodeURIComponent(roomId)}&token=${encodeURIComponent(deviceToken)}`;
+	if (!deviceToken) { return; }
+	const base = new URL(relayBase());
+	const scheme = base.protocol === 'https:' ? 'wss:' : 'ws:';
+	const url = `${scheme}//${base.host}/ws/client?room=${encodeURIComponent(roomId)}&token=${encodeURIComponent(deviceToken)}`;
 	setStatus('Connecting…', 'status-warn');
-	ws = new WebSocket(url);
+	const sock = new WebSocket(url);
+	ws = sock;
 	ws.addEventListener('open', () => {
+		welcomeSeen = false;
+		// A new link, a new stream: the desktop only accepts frames newer than the last it saw.
+		startSendStream();
 		reconnectDelayMs = RECONNECT_MIN_MS;
 		consecutiveReconnectFailures = 0;
 		// "Connected" waits for `welcome` (see `refreshStatus`), which also says whether VS Code is there.
@@ -1862,12 +2365,15 @@ function connect() {
 		}
 		if (!envelope || envelope.v !== 1 || typeof envelope.seq !== 'number') { return; }
 		if (envelope.t === 'm') {
-			handleAppMessage(envelope.p);
+			const payload = envelope.p;
+			recvChain = recvChain.then(() => handleInbound(payload)).catch(() => { /* dropped */ });
 		} else if (envelope.t === 'c') {
 			handleControlFrame(envelope.p);
 		}
 	});
 	ws.addEventListener('close', event => {
+		// A socket that was replaced or abandoned (revoke, unpair) must not schedule a reconnect.
+		if (ws !== sock) { return; }
 		// A revoked device must stay locked out, not retry forever with the same dead token —
 		// see `handleRevoked`'s own doc. `room.ts`'s `revokeDevice` closes a *live* socket with
 		// this exact code; `/ws/client` rejecting a stale token on a fresh connect attempt (the
@@ -1903,51 +2409,99 @@ function connect() {
 
 // ---- Boot -------------------------------------------------------------------------------------
 
-/** Reads `/p/<roomId>#<code>` — the shape the pairing QR encodes, per the plan's Auth step 3. */
+/** Reads `/p/<roomId>#<key>` — the shape the pairing QR encodes (the key is the 26-character pairing secret). */
 function parseLocation() {
 	const match = /^\/p\/([^/]+)/.exec(location.pathname);
 	const fromUrl = match ? decodeURIComponent(match[1]) : new URLSearchParams(location.search).get('room') || '';
+	let secret = '';
+	try { secret = location.hash ? decodeURIComponent(location.hash.slice(1)) : ''; } catch { secret = location.hash.slice(1); }
 	return {
 		// A launch with no room of its own (see `loadLastRoom`'s doc — chiefly the installed
 		// icon's fixed `start_url`) falls back to whichever room this browser paired to last,
 		// so it can still find that pairing's saved device token in `boot()` below.
 		room: fromUrl || loadLastRoom(),
-		code: location.hash ? decodeURIComponent(location.hash.slice(1)) : '',
+		secret,
 	};
 }
 
+/** Shows the app, starts the service worker and dials the relay. */
+function startApp() {
+	if (els.pairScreen) { els.pairScreen.hidden = true; }
+	if (els.app) { els.app.hidden = false; }
+	setStatus(e2eKeys ? 'Connecting…' : SECURING_TEXT, 'status-warn');
+	registerServiceWorker();
+	connect();
+}
+
+/**
+ * Pairs with a secret: claims, then waits (at most {@link HANDSHAKE_TIMEOUT_MS}) for the desktop's
+ * handshake. Shows errors on the pairing screen.
+ * @param {string} room
+ * @param {Uint8Array} ps
+ * @returns {Promise<boolean>} whether the claim was accepted
+ */
+async function pairWith(room, ps) {
+	if (els.pairError) { els.pairError.textContent = ''; }
+	try {
+		deviceToken = await claim(room, ps);
+	} catch (err) {
+		if (els.pairError) { els.pairError.textContent = err instanceof Error ? err.message : String(err); }
+		return false;
+	}
+	if (!native) { try { history.replaceState(null, '', `/p/${encodeURIComponent(room)}`); } catch { /* cosmetic */ } }
+	armHandshakeTimer();
+	startApp();
+	return true;
+}
+
 async function boot() {
-	const { room, code } = parseLocation();
+	const { room, secret } = parseLocation();
 	roomId = room;
+	await loadE2e(roomId);
 	const stored = roomId ? loadDevice(roomId) : undefined;
-	if (stored && stored.token) {
+	let ps;
+	let linkError = '';
+	if (secret) {
+		try {
+			ps = b32decode(secret);
+			if (ps.length !== 16) { throw new Error('length'); }
+		} catch {
+			ps = undefined;
+			linkError = 'This pairing link is not valid. Paste the full link, or type the key shown under the QR code.';
+		}
+	}
+	if (native && stored && typeof stored.origin === 'string') { nativeOrigin = stored.origin; }
+	const usable = !!(stored && stored.token && (e2eKeys || (pendingHs && pendingHs.deviceId === stored.deviceId)));
+	// A fresh link scanned over an unfinished pairing starts over; over a finished one it is ignored.
+	if (usable && (!ps || e2eKeys)) {
 		deviceToken = stored.token;
 		// A returning session's service worker may not have current auth (e.g. a token refresh
 		// since the last visit, or a service-worker eviction that dropped its own IndexedDB
-		// cache) — re-post every boot, not just the first pairing. `claim()` does the same for
-		// the freshly-paired path just below. Not awaited — same reasoning as `claim()`'s own
-		// call: `navigator.serviceWorker.ready` can hang indefinitely (no SW registered yet, or
-		// registration still in flight), and blocking boot() on it held the whole app on a blank
-		// screen for the same reason a first-time pairing did.
+		// cache) — re-post every boot, not just the first pairing. Not awaited — see `claim()`:
+		// `navigator.serviceWorker.ready` can hang indefinitely.
 		void syncAuthToServiceWorker(roomId, deviceToken);
-	} else if (roomId && code) {
-		if (els.pairError) { els.pairError.textContent = ''; }
-		try {
-			deviceToken = await claim(roomId, code);
-			history.replaceState(null, '', `/p/${encodeURIComponent(roomId)}`);
-		} catch (err) {
-			if (els.pairError) { els.pairError.textContent = err instanceof Error ? err.message : String(err); }
-			return;
-		}
-	} else {
-		if (els.pairScreen) { els.pairScreen.hidden = false; }
-		if (els.app) { els.app.hidden = true; }
+		if (secret && !native) { try { history.replaceState(null, '', `/p/${encodeURIComponent(roomId)}`); } catch { /* cosmetic */ } }
+		if (!e2eKeys) { armHandshakeTimer(); }
+		startApp();
 		return;
 	}
-	if (els.pairScreen) { els.pairScreen.hidden = true; }
-	if (els.app) { els.app.hidden = false; }
-	registerServiceWorker();
-	connect();
+	if (stored && stored.token && !ps) {
+		// Paired before end-to-end encryption (a token but no keys): it cannot work any more.
+		await resetPairing('This phone was paired before end-to-end encryption. Pair it again from the desktop.');
+		return;
+	}
+	if (roomId && ps) {
+		if (stored && stored.token) { await resetPairing(''); }
+		await pairWith(roomId, ps);
+		if (!deviceToken) {
+			if (els.pairScreen) { els.pairScreen.hidden = false; }
+			if (els.app) { els.app.hidden = true; }
+		}
+		return;
+	}
+	if (els.pairScreen) { els.pairScreen.hidden = false; }
+	if (els.app) { els.app.hidden = true; }
+	if (linkError && els.pairError) { els.pairError.textContent = linkError; }
 }
 
 // A backgrounded phone (screen lock, app-switch) can silently zombie the WebSocket: mobile
@@ -1964,11 +2518,17 @@ async function boot() {
 // and self-heals exactly this desync when something was: `case 'sync':`
 // (chatViewProvider.ts) answers with the store's authoritative per-session `streaming`.
 document.addEventListener('visibilitychange', () => {
+	if (document.visibilityState === 'hidden') { persistRecvState(); }
 	if (document.visibilityState === 'visible' && ws && ws.readyState === WebSocket.OPEN) {
 		sendApp({ type: 'sync', ...(activeSessionId ? { sessionId: activeSessionId } : {}) });
 	}
 });
 
+window.addEventListener('pagehide', persistRecvState);
+
+buildModeSeg();
+enableSheetPicker(els.providerSelect);
+enableSheetPicker(els.modelSelect);
 withSelectButton(els.modeSelect);
 withSelectButton(els.providerSelect);
 withSelectButton(els.modelSelect);
@@ -1990,7 +2550,7 @@ if (els.composer) {
 	});
 }
 if (els.enhanceBtn) { els.enhanceBtn.addEventListener('click', enhancePrompt); }
-if (els.modeSelect) { els.modeSelect.addEventListener('change', () => setMode(els.modeSelect.value)); }
+if (els.modeSelect) { els.modeSelect.addEventListener('change', () => { setMode(els.modeSelect.value); syncModeSeg(); }); }
 if (els.providerSelect) { els.providerSelect.addEventListener('change', () => setProvider(els.providerSelect.value)); }
 if (els.modelSelect) { els.modelSelect.addEventListener('change', () => setModel(els.modelSelect.value)); }
 if (els.attachImageBtn && els.attachImageInput) {
@@ -2002,21 +2562,73 @@ if (els.attachImageBtn && els.attachImageInput) {
 	});
 }
 if (els.attachActiveBtn) { els.attachActiveBtn.addEventListener('click', () => sendApp({ type: 'attachActive' })); }
+/**
+ * Pairs from what was pasted, typed, scanned or handed over by the native shell (a deep link).
+ * @param {string} input a pairing link or key
+ * @returns {Promise<boolean>} whether the claim was accepted
+ */
+async function pairFromInput(input) {
+	let parsed;
+	try {
+		parsed = parsePairingInput(input);
+	} catch (err) {
+		if (els.pairError) { els.pairError.textContent = err instanceof Error ? err.message : String(err); }
+		return false;
+	}
+	if (parsed.room) { roomId = parsed.room; }
+	if (parsed.origin) { nativeOrigin = parsed.origin; }
+	if (!roomId || (native && !nativeOrigin)) {
+		if (els.pairError) {
+			els.pairError.textContent = native
+				? 'Paste the whole pairing link from the desktop (or scan its QR code) so the app knows which desktop to pair with.'
+				: 'Open the pairing link from the desktop (or scan its QR code) so this page knows which desktop to pair with.';
+		}
+		return false;
+	}
+	return pairWith(roomId, parsed.ps);
+}
+
 if (els.pairForm) {
 	els.pairForm.addEventListener('submit', async event => {
 		event.preventDefault();
 		if (!els.pairCode) { return; }
-		const code = els.pairCode.value.trim();
-		if (!roomId || !code) { return; }
-		try {
-			deviceToken = await claim(roomId, code);
-			if (els.pairScreen) { els.pairScreen.hidden = true; }
-			if (els.app) { els.app.hidden = false; }
-			registerServiceWorker();
-			connect();
-		} catch (err) {
-			if (els.pairError) { els.pairError.textContent = err instanceof Error ? err.message : String(err); }
-		}
+		if (await pairFromInput(els.pairCode.value)) { els.pairCode.value = ''; }
+	});
+}
+if (native) {
+	// "Add to Home Screen" advice is for browsers; this is already an installed app.
+	const note = document.querySelector('.pair-note');
+	if (note) { note.hidden = true; }
+	// Scanning is the main way in here and pasting a link the fallback (see `.pair-native` in styles.css).
+	if (els.pairScreenRoot) { els.pairScreenRoot.classList.add('pair-native'); }
+	if (els.pairCode) { els.pairCode.placeholder = 'Or paste the pairing link'; }
+	const intro = document.getElementById('pairIntro');
+	if (intro) { intro.textContent = 'Scan the QR code shown on your computer to pair this phone.'; }
+	// The Android Back button: close what is open first, and only leave the app from a plain screen.
+	window.addEventListener('stormcoder:back', event => {
+		let handled = false;
+		if (closePickerSheet()) { handled = true; }
+		else if (historyPanelOpen()) { closeHistoryPanel(); handled = true; }
+		else if (els.slashMenu && !els.slashMenu.hidden) { els.slashMenu.hidden = true; handled = true; }
+		const detail = /** @type {CustomEvent} */ (event).detail;
+		if (detail && typeof detail === 'object') { detail.handled = handled; }
+	});
+	if (typeof native.scanQr === 'function' && els.scanBtn) {
+		const scanBtn = els.scanBtn;
+		scanBtn.hidden = false;
+		scanBtn.addEventListener('click', async () => {
+			try {
+				const text = await native.scanQr();
+				if (typeof text === 'string' && text) { await pairFromInput(text); }
+			} catch (err) {
+				if (els.pairError) { els.pairError.textContent = err instanceof Error ? err.message : 'Could not scan.'; }
+			}
+		});
+	}
+}
+if (els.unpairBtn) {
+	els.unpairBtn.addEventListener('click', () => {
+		void resetPairing('This phone is unpaired. Scan a new QR code or paste a fresh pairing link to pair again.');
 	});
 }
 

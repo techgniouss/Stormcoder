@@ -5,7 +5,7 @@
 	'use strict';
 	const settingsWindow = document.body.classList.contains('settings-window');
 	const AREAS = [
-		['providers', 'Providers'], ['general', 'General'], ['permissions', 'Agent permissions'],
+		['providers', 'Providers'], ['general', 'General'], ['permissions', 'Agent permissions'], ['memory', 'Memory'],
 		['skills', 'Skills'], ['mcp', 'MCP servers'], ['auto', 'Auto routing'], ['remote', 'Remote control'],
 	];
 	/** 16px outline icons, one per settings area. */
@@ -13,6 +13,7 @@
 		providers: '<path d="M3 5.5h10M3 10.5h10"/><circle cx="6" cy="5.5" r="1.6"/><circle cx="10.5" cy="10.5" r="1.6"/>',
 		general: '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1"/>',
 		permissions: '<path d="M8 1.8l5 1.8v4c0 3-2.1 5.1-5 6.6C5.1 12.7 3 10.6 3 7.6v-4z"/><path d="M5.8 8l1.6 1.6L10.4 6.6"/>',
+		memory: '<path d="M3 4.5c0-1.1 2.2-2 5-2s5 .9 5 2-2.2 2-5 2-5-.9-5-2z"/><path d="M3 4.5v3.5c0 1.1 2.2 2 5 2s5-.9 5-2V4.5M3 8v3.5c0 1.1 2.2 2 5 2s5-.9 5-2V8"/>',
 		skills: '<path d="M3.5 2.5h7l2 2v9h-9z"/><path d="M5.5 7h5M5.5 9.5h5"/>',
 		mcp: '<path d="M6 2.5v3M10 2.5v3M4.5 5.5h7v2.5a3.5 3.5 0 0 1-7 0zM8 11.5v2"/>',
 		auto: '<path d="M2.5 8h3l2-4 2 8 2-4h2"/>',

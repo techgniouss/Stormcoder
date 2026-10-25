@@ -1,8 +1,9 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { HostE2E } from './e2e';
 import { MessageSink } from '../session/bus';
 import { CoalescedMessage, TokenCoalescer } from './coalescer';
 import { Envelope } from './protocol';
@@ -54,6 +55,12 @@ const SECRET_PATTERNS: readonly [RegExp, string][] = [
 	[/\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[redacted jwt]'],
 	[/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{16,}/gi, '$1 [redacted]'],
 	[/\b((?:api[_-]?key|secret|token|passw(?:or)?d|authorization|private[_-]?key)["']?\s*[:=]\s*["']?)[^\s"',;&]{6,}/gi, '$1[redacted]'],
+	// Environment-style names that merely contain one of those words: AWS_SECRET_ACCESS_KEY=…, DB_PASSWORD=…
+	[/\b([A-Z][A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|TOKEN|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY)[A-Z0-9_]*\s*=\s*["']?)[^\s"',;&]{4,}/g, '$1[redacted]'],
+	// Credentials inside a URL: postgres://user:password@host
+	[/\b([a-z][a-z0-9+.-]*:\/\/[^\/\s:@]+:)[^@\s\/]+@/gi, '$1[redacted]@'],
+	// A password given on the command line to the database clients that take it as -pPASSWORD.
+	[/(\b(?:mysql|mysqldump|mariadb)\b[^\n;&|]*?\s-p)\S+/g, '$1[redacted]'],
 ];
 
 /** Masks the credential shapes in {@link SECRET_PATTERNS} inside `text`. */
@@ -67,6 +74,55 @@ export function scrubSecrets(text: string): string {
 
 /** The deepest nesting {@link scrubValue} walks; past it a value is replaced rather than copied. */
 const SCRUB_MAX_DEPTH = 8;
+
+/** The most one string may carry to a remote device, whatever the message (a stray multi-megabyte delta must not reach a phone). */
+const REMOTE_MAX_STRING_BYTES = 256 * 1024;
+
+/**
+ * Masks credential shapes in every string of `value`, at any depth, without shortening the
+ * text (beyond a very large ceiling). The per-field scrubbing above covers the fields known to
+ * carry tool output; this is the net under everything else, so a message type nobody thought
+ * of (an MCP status line, a transcript replayed after a reconnect, a todo) is covered too.
+ */
+function scrubDeep(value: unknown, depth = 0): unknown {
+	if (typeof value === 'string') {
+		const scrubbed = scrubSecrets(value);
+		return Buffer.byteLength(scrubbed, 'utf8') > REMOTE_MAX_STRING_BYTES ? truncateUtf8(scrubbed, REMOTE_MAX_STRING_BYTES) + TRUNCATION_SUFFIX : scrubbed;
+	}
+	if (typeof value !== 'object' || value === null || depth >= 16) {
+		return value;
+	}
+	if (Array.isArray(value)) {
+		return value.map(entry => scrubDeep(entry, depth + 1));
+	}
+	const out: Record<string, unknown> = {};
+	for (const [key, entry] of Object.entries(value)) {
+		out[key] = scrubDeep(entry, depth + 1);
+	}
+	return out;
+}
+
+/** How much of each end of an over-long approval is shown; the middle is what gets hidden. */
+const APPROVAL_HEAD_BYTES = 5 * 1024;
+const APPROVAL_TAIL_BYTES = 2 * 1024;
+
+/**
+ * Shortens an approval's text without hiding its end. A command or file that is longer than a
+ * phone should render used to be cut after the first 8KB, which let a long run of padding push
+ * the part that matters out of view while the card still offered "Allow". Both ends are kept,
+ * the hidden size is stated, and the caller marks the card so it can say to decide on the desktop.
+ */
+function headAndTail(text: string): { text: string; hidden: number } {
+	const bytes = Buffer.from(text, 'utf8');
+	if (bytes.length <= REMOTE_TRUNCATE_BYTES) {
+		return { text, hidden: 0 };
+	}
+	const hidden = bytes.length - APPROVAL_HEAD_BYTES - APPROVAL_TAIL_BYTES;
+	return {
+		text: `${bytes.subarray(0, APPROVAL_HEAD_BYTES).toString('utf8')}\n… [${hidden} bytes hidden: too long to review on a phone, check it on the desktop] …\n${bytes.subarray(bytes.length - APPROVAL_TAIL_BYTES).toString('utf8')}`,
+		hidden,
+	};
+}
 
 /** Scrubs and truncates every string inside `value`, recursively through arrays and plain objects. */
 function scrubValue(value: unknown, depth = 0): unknown {
@@ -96,40 +152,27 @@ function truncateForPush(text: string, maxChars: number): string {
 }
 
 /**
- * Builds `{title, body, tag}` for a `push` control frame from the host message that triggered
- * it, per the "remote control" plan's Web Push section. `tag` is the prompt's `id` for
- * `approvalRequest`/`askRequest` (so a later phase can close a matching desktop notification once
- * it's answered) and the message `type` otherwise.
+ * Builds `{title, body, tag}` for a `push` control frame. The text is generic on purpose: a push
+ * passes through the relay and the browser vendor's push service, neither of which is inside the
+ * end-to-end encryption (`docs/REMOTE-E2E.md`), so it says that something needs attention, never
+ * what (no command, path, question or error text). `tag` is the prompt's `id` for
+ * `approvalRequest`/`askRequest` (so a later notification can replace it) and the message
+ * `type` otherwise.
  *
  * Written as `if`/`else` rather than a `switch` on purpose — same reason as `push.ts`'s
  * `shouldPush`: a `switch` here would put these event names into
- * `scripts/test-remote-policy.mjs`'s `case '<word>':` scan by accident. See that function's doc.
+ * `scripts/test-remote-policy.mjs`'s `case '<word>':` scan by accident.
  */
 function composePush(message: Record<string, unknown> & { type: string }, eventType: PushableEventType): { title: string; body: string; tag: string } {
-	const short = (text: string) => truncateForPush(scrubSecrets(text.split('\n', 1)[0]), PUSH_BODY_TRUNCATE_CHARS);
+	const tag = typeof message.id === 'string' ? message.id : message.type;
 	if (eventType === 'approvalRequest') {
-		// A command's text is the one thing a notification (shown on a lock screen, relayed
-		// through a push service's tray) must not carry; the phone shows it after unlocking.
-		const isCommand = typeof message.kind === 'string' && /command|shell|run|exec/i.test(message.kind);
-		return {
-			title: 'Approval needed',
-			body: !isCommand && typeof message.title === 'string' ? short(message.title) : 'A tool call needs your approval.',
-			tag: typeof message.id === 'string' ? message.id : message.type,
-		};
+		return { title: 'Approval needed', body: 'Open Stormcoder to review a request.', tag };
 	}
 	if (eventType === 'askRequest') {
-		return {
-			title: 'Question',
-			body: typeof message.question === 'string' ? short(message.question) : 'The agent has a question.',
-			tag: typeof message.id === 'string' ? message.id : message.type,
-		};
+		return { title: 'Question', body: 'The agent has a question for you.', tag };
 	}
 	if (eventType === 'error') {
-		return {
-			title: 'Error',
-			body: short(typeof message.message === 'string' ? message.message : 'An error occurred.'),
-			tag: message.type,
-		};
+		return { title: 'Error', body: 'A run stopped with an error.', tag: message.type };
 	}
 	// eventType === 'done', the only remaining member of PushableEventType.
 	return { title: 'Run finished', body: 'A long-running task finished.', tag: message.type };
@@ -182,7 +225,27 @@ function redactProviders(providers: unknown): unknown {
  */
 export function redactForRemote(message: Record<string, unknown> & { type: string }): Record<string, unknown> & { type: string } {
 	const clone: Record<string, unknown> = { ...message };
+	// An approval is shown with both ends of anything long (see headAndTail), before the
+	// general truncation below could cut the end off.
+	let hiddenInApproval = 0;
+	if (message.type === 'approvalRequest') {
+		for (const field of ['title', 'detail', 'preview'] as const) {
+			const value = clone[field];
+			if (typeof value === 'string') {
+				const shown = headAndTail(scrubSecrets(value));
+				clone[field] = shown.text;
+				hiddenInApproval += shown.hidden;
+			}
+		}
+		if (hiddenInApproval) {
+			clone.reviewOnDesktop = true;
+			clone.hiddenBytes = hiddenInApproval;
+		}
+	}
 	for (const field of ['content', 'preview'] as const) {
+		if (message.type === 'approvalRequest') {
+			break;
+		}
 		const value = clone[field];
 		if (typeof value === 'string') {
 			clone[field] = truncateUtf8(value, REMOTE_TRUNCATE_BYTES) + (Buffer.byteLength(value, 'utf8') > REMOTE_TRUNCATE_BYTES ? TRUNCATION_SUFFIX : '');
@@ -197,6 +260,9 @@ export function redactForRemote(message: Record<string, unknown> & { type: strin
 		clone.result = scrubValue(clone.result);
 	}
 	for (const field of ['title', 'detail', 'question', 'preview', 'content'] as const) {
+		if (message.type === 'approvalRequest' && (field === 'title' || field === 'detail' || field === 'preview')) {
+			continue;
+		}
 		if (typeof clone[field] === 'string' && (field !== 'content' || message.type === 'toolEnd')) {
 			clone[field] = scrubValue(clone[field]);
 		}
@@ -242,7 +308,8 @@ export function redactForRemote(message: Record<string, unknown> & { type: strin
 	if (message.type === 'config' && 'providers' in clone) {
 		clone.providers = redactProviders(clone.providers);
 	}
-	return clone as Record<string, unknown> & { type: string };
+	// The net under everything above: every string of every message, at any depth.
+	return scrubDeep(clone) as Record<string, unknown> & { type: string };
 }
 
 /**
@@ -275,7 +342,10 @@ export class RemoteSink implements MessageSink {
 	/** Session id -> the `Date.now()` its current run started at, from the run's `runStart` message — needed for `shouldPush`'s `done` threshold. */
 	private readonly runStartedAtMs = new Map<string, number>();
 
-	constructor(readonly id: string, private readonly socket: RemoteSocket) {
+	/** Sealing is asynchronous; frames are chained so they leave in the order they were posted. */
+	private sending: Promise<void> = Promise.resolve();
+
+	constructor(readonly id: string, private readonly socket: RemoteSocket, private readonly e2e: HostE2E) {
 		this.coalescer = new TokenCoalescer(message => this.transmit(message));
 		this.socket.onRtt(rttMs => this.coalescer.setRttMs(rttMs));
 	}
@@ -285,6 +355,15 @@ export class RemoteSink implements MessageSink {
 		this.coalescer.feed(redactForRemote(message) as CoalescedMessage);
 	}
 
+	/**
+	 * Sends the one frame that is not sealed: the key-agreement reply to a phone that has just
+	 * paired (`docs/REMOTE-E2E.md`). It carries only the desktop's public key and a proof the relay
+	 * cannot forge.
+	 */
+	sendHandshake(payload: unknown): void {
+		this.socket.send({ v: 1, t: 'm', seq: ++this.seq, p: payload });
+	}
+
 	dispose(): void {
 		// Anything still buffered when the sink tears down is worth sending — a disconnect
 		// arriving mid-batch should not silently drop the tail of a streamed reply.
@@ -292,9 +371,18 @@ export class RemoteSink implements MessageSink {
 		this.socket.dispose();
 	}
 
+	/**
+	 * Seals the message for every paired device and sends one frame each. There is no plaintext
+	 * path: a message that cannot be sealed (no device has keys yet, or sealing failed) is not
+	 * sent at all, and the relay only ever carries ciphertext (`docs/REMOTE-E2E.md`).
+	 */
 	private transmit(message: Record<string, unknown> & { type: string }): void {
-		const envelope: Envelope = { v: 1, t: 'm', seq: ++this.seq, p: message };
-		this.socket.send(envelope);
+		this.sending = this.sending.then(async () => {
+			for (const frame of await this.e2e.sealForAll(message)) {
+				const envelope: Envelope = { v: 1, t: 'm', seq: ++this.seq, p: frame };
+				this.socket.send(envelope);
+			}
+		}).catch(() => { /* dropped, never sent in the clear */ });
 	}
 
 	/**

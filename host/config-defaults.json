@@ -1,92 +1,94 @@
 {
 	"defaults": {
-		"openvsChat.defaultProvider": "nvidia",
-		"openvsChat.openai.model": "gpt-4o-mini",
-		"openvsChat.openai.baseUrl": "https://api.openai.com/v1",
-		"openvsChat.openai.authUrl": "",
-		"openvsChat.anthropic.model": "claude-sonnet-5",
-		"openvsChat.anthropic.baseUrl": "https://api.anthropic.com/v1",
-		"openvsChat.anthropic.authUrl": "",
-		"openvsChat.anthropic.thinking": "auto",
-		"openvsChat.nvidia.model": "meta/llama-3.3-70b-instruct",
-		"openvsChat.nvidia.baseUrl": "https://integrate.api.nvidia.com/v1",
-		"openvsChat.nvidia.authUrl": "",
-		"openvsChat.gemini.model": "gemini-2.5-flash",
-		"openvsChat.gemini.baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
-		"openvsChat.gemini.authUrl": "",
-		"openvsChat.antigravity.model": "gemini-2.5-flash",
-		"openvsChat.openrouter.model": "deepseek/deepseek-chat-v3-0324:free",
-		"openvsChat.openrouter.baseUrl": "https://openrouter.ai/api/v1",
-		"openvsChat.openrouter.authUrl": "",
-		"openvsChat.groq.model": "llama-3.3-70b-versatile",
-		"openvsChat.groq.baseUrl": "https://api.groq.com/openai/v1",
-		"openvsChat.groq.authUrl": "",
-		"openvsChat.mistral.model": "mistral-medium-latest",
-		"openvsChat.mistral.baseUrl": "https://api.mistral.ai/v1",
-		"openvsChat.mistral.authUrl": "",
-		"openvsChat.cloudflare.accountId": "",
-		"openvsChat.cloudflare.model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-		"openvsChat.cloudflare.baseUrl": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
-		"openvsChat.cloudflare.authUrl": "",
-		"openvsChat.kimi.model": "kimi-k2.5",
-		"openvsChat.kimi.baseUrl": "https://api.moonshot.ai/v1",
-		"openvsChat.kimi.authUrl": "",
-		"openvsChat.qwen.model": "qwen-plus",
-		"openvsChat.qwen.baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-		"openvsChat.qwen.authUrl": "",
-		"openvsChat.zai.model": "glm-4.6-flash",
-		"openvsChat.zai.baseUrl": "https://api.z.ai/api/paas/v4",
-		"openvsChat.zai.authUrl": "",
-		"openvsChat.opencode_zen.model": "laguna-s-2.1-free",
-		"openvsChat.opencode_zen.baseUrl": "https://opencode.ai/zen/v1",
-		"openvsChat.opencode_zen.authUrl": "",
-		"openvsChat.xkiro.model": "mistralai/mistral-medium-3.5",
-		"openvsChat.xkiro.baseUrl": "https://xkiro.com/v1",
-		"openvsChat.xkiro.authUrl": "",
-		"openvsChat.copilot.model": "gpt-4.1",
-		"openvsChat.grok.model": "grok-4.6",
-		"openvsChat.kiro.model": "claude-sonnet-4-5",
-		"openvsChat.web_gemini.model": "gemini-2.5-flash",
-		"openvsChat.webGemini.enabled": false,
-		"openvsChat.claude-code-cli.model": "",
-		"openvsChat.claude-code-cli.cliPath": "",
-		"openvsChat.custom.model": "llama3.1",
-		"openvsChat.custom.baseUrl": "http://localhost:11434/v1",
-		"openvsChat.custom.authUrl": "",
-		"openvsChat.agent.maxSteps": 100,
-		"openvsChat.agent.maxContextTokens": 0,
-		"openvsChat.ask.autoContext": "active",
-		"openvsChat.stream.idleTimeoutMs": 120000,
-		"openvsChat.agent.commandTimeoutMs": 300000,
-		"openvsChat.agent.shell": "",
-		"openvsChat.agent.maxSubagents": 4,
-		"openvsChat.agent.maxSubagentDepth": 2,
-		"openvsChat.agent.maxAgentMessages": 3,
-		"openvsChat.agent.parallelResearch": true,
-		"openvsChat.agent.parallelReads": true,
-		"openvsChat.agent.maxRunMinutes": 30,
-		"openvsChat.agent.traceTiming": false,
-		"openvsChat.remote.traceSessions": false,
-		"openvsChat.remote.loopback": false,
-		"openvsChat.remote.promptEscalationSeconds": 30,
-		"openvsChat.remote.enabled": false,
-		"openvsChat.remote.relayUrl": "",
-		"openvsChat.remote.relayMode": "auto",
-		"openvsChat.remote.cloudflaredPath": "",
-		"openvsChat.remote.tunnelHostname": "",
-		"openvsChat.remote.localPort": 0,
-		"openvsChat.remote.deviceTokenDays": 30,
-		"openvsChat.remote.idleDisableHours": 12,
-		"openvsChat.remote.approvalFloor": "auto-edits",
-		"openvsChat.rules": "",
-		"openvsChat.ruleFiles": [
+		"stormcoder.defaultProvider": "nvidia",
+		"stormcoder.openai.model": "gpt-4o-mini",
+		"stormcoder.openai.baseUrl": "https://api.openai.com/v1",
+		"stormcoder.openai.authUrl": "",
+		"stormcoder.anthropic.model": "claude-sonnet-5",
+		"stormcoder.anthropic.baseUrl": "https://api.anthropic.com/v1",
+		"stormcoder.anthropic.authUrl": "",
+		"stormcoder.anthropic.thinking": "auto",
+		"stormcoder.nvidia.model": "meta/llama-3.3-70b-instruct",
+		"stormcoder.nvidia.baseUrl": "https://integrate.api.nvidia.com/v1",
+		"stormcoder.nvidia.authUrl": "",
+		"stormcoder.gemini.model": "gemini-2.5-flash",
+		"stormcoder.gemini.baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+		"stormcoder.gemini.authUrl": "",
+		"stormcoder.antigravity.model": "gemini-2.5-flash",
+		"stormcoder.openrouter.model": "deepseek/deepseek-chat-v3-0324:free",
+		"stormcoder.openrouter.baseUrl": "https://openrouter.ai/api/v1",
+		"stormcoder.openrouter.authUrl": "",
+		"stormcoder.groq.model": "llama-3.3-70b-versatile",
+		"stormcoder.groq.baseUrl": "https://api.groq.com/openai/v1",
+		"stormcoder.groq.authUrl": "",
+		"stormcoder.mistral.model": "mistral-medium-latest",
+		"stormcoder.mistral.baseUrl": "https://api.mistral.ai/v1",
+		"stormcoder.mistral.authUrl": "",
+		"stormcoder.cloudflare.accountId": "",
+		"stormcoder.cloudflare.model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+		"stormcoder.cloudflare.baseUrl": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+		"stormcoder.cloudflare.authUrl": "",
+		"stormcoder.kimi.model": "kimi-k2.5",
+		"stormcoder.kimi.baseUrl": "https://api.moonshot.ai/v1",
+		"stormcoder.kimi.authUrl": "",
+		"stormcoder.qwen.model": "qwen-plus",
+		"stormcoder.qwen.baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+		"stormcoder.qwen.authUrl": "",
+		"stormcoder.zai.model": "glm-4.6-flash",
+		"stormcoder.zai.baseUrl": "https://api.z.ai/api/paas/v4",
+		"stormcoder.zai.authUrl": "",
+		"stormcoder.opencode_zen.model": "laguna-s-2.1-free",
+		"stormcoder.opencode_zen.baseUrl": "https://opencode.ai/zen/v1",
+		"stormcoder.opencode_zen.authUrl": "",
+		"stormcoder.xkiro.model": "mistralai/mistral-medium-3.5",
+		"stormcoder.xkiro.baseUrl": "https://xkiro.com/v1",
+		"stormcoder.xkiro.authUrl": "",
+		"stormcoder.copilot.model": "gpt-4.1",
+		"stormcoder.grok.model": "grok-4.6",
+		"stormcoder.kiro.model": "claude-sonnet-4-5",
+		"stormcoder.web_gemini.model": "gemini-2.5-flash",
+		"stormcoder.webGemini.enabled": false,
+		"stormcoder.claude-code-cli.model": "",
+		"stormcoder.claude-code-cli.cliPath": "",
+		"stormcoder.custom.model": "llama3.1",
+		"stormcoder.custom.baseUrl": "http://localhost:11434/v1",
+		"stormcoder.custom.authUrl": "",
+		"stormcoder.agent.maxSteps": 100,
+		"stormcoder.agent.maxContextTokens": 0,
+		"stormcoder.ask.autoContext": "active",
+		"stormcoder.stream.idleTimeoutMs": 120000,
+		"stormcoder.agent.commandTimeoutMs": 300000,
+		"stormcoder.agent.shell": "",
+		"stormcoder.agent.maxSubagents": 4,
+		"stormcoder.agent.maxSubagentDepth": 2,
+		"stormcoder.agent.maxAgentMessages": 3,
+		"stormcoder.agent.parallelResearch": true,
+		"stormcoder.agent.parallelReads": true,
+		"stormcoder.agent.maxRunMinutes": 30,
+		"stormcoder.agent.traceTiming": false,
+		"stormcoder.remote.traceSessions": false,
+		"stormcoder.remote.loopback": false,
+		"stormcoder.remote.promptEscalationSeconds": 30,
+		"stormcoder.remote.enabled": false,
+		"stormcoder.remote.relayUrl": "",
+		"stormcoder.remote.relayMode": "auto",
+		"stormcoder.remote.cloudflaredPath": "",
+		"stormcoder.remote.tunnelHostname": "",
+		"stormcoder.remote.localPort": 0,
+		"stormcoder.remote.deviceTokenDays": 30,
+		"stormcoder.remote.idleDisableHours": 12,
+		"stormcoder.remote.approvalFloor": "auto-edits",
+		"stormcoder.rules": "",
+		"stormcoder.ruleFiles": [
+			".stormcoder/rules.md",
 			".openvs/rules.md",
 			"AGENTS.md",
+			"CLAUDE.md",
 			".github/copilot-instructions.md",
 			".cursorrules"
 		],
-		"openvsChat.guardrails.approval": "yolo",
-		"openvsChat.guardrails.deniedCommands": [
+		"stormcoder.guardrails.approval": "auto-edits",
+		"stormcoder.guardrails.deniedCommands": [
 			"rm\\s+-[a-z]*r[a-z]*f|rm\\s+-[a-z]*f[a-z]*r",
 			":\\(\\)\\s*\\{\\s*:\\s*\\|\\s*:",
 			"\\bmkfs\\b",
@@ -106,10 +108,25 @@
 			"\\bgit\\b[^;&|\\n]*\\bpush\\b[^;&|\\n]*(\\s--(force|delete|mirror)\\b|\\s-[a-z]*[fd][a-z]*\\b|\\s\\+\\S|\\s:[^\\s:])",
 			"(^|[\\s;&|(])(su|doas|pkexec)\\s+(\\S+\\s+)*?-c\\b|\\b(doas|pkexec)\\b",
 			"\\bfind\\b[^;&|\\n]*(\\s-delete\\b|-exec(dir)?\\s+rm\\b)",
-			"<\\(\\s*(curl|wget)\\b|\\b(eval|source|(ba|z|da)?sh\\s+-c)\\s+[\"\\']?\\$\\(\\s*(curl|wget)\\b"
+			"<\\(\\s*(curl|wget)\\b|\\b(eval|source|(ba|z|da)?sh\\s+-c)\\s+[\"\\']?\\$\\(\\s*(curl|wget)\\b",
+			"\\bgit\\b[^;&|\\n]*\\breset\\b[^;&|\\n]*--hard\\b",
+			"\\bgit\\b[^;&|\\n]*\\bclean\\b[^;&|\\n]*\\s-[a-z]*f",
+			"\\bgit\\b[^;&|\\n]*\\b(checkout|restore)\\b[^;&|\\n]*(\\s--\\s+\\.|\\s\\.\\s*($|[;&|]))",
+			"\\bgit\\b[^;&|\\n]*\\bstash\\b[^;&|\\n]*\\b(drop|clear)\\b",
+			"\\b(python[0-9.]*|node|nodejs|perl|ruby|php|deno|bun)\\b[^&|\\n]*(rmtree|rmSync|rmdirSync|rm_rf|remove_tree|unlinkSync|shutil\\.rm|rm\\s+-[a-z]*r)",
+			"\\b(npm|yarn|pnpm|cargo|twine|gem)\\s+publish\\b|\\btwine\\s+upload\\b",
+			"(\\.ssh|\\.aws|\\.gnupg|\\.netrc|\\.npmrc|\\.env\\b|id_rsa|credentials)[^;&\\n]*\\|\\s*(curl|wget|nc|ncat|socat)\\b",
+			"\\b(env|printenv|set)\\s*\\|\\s*(curl|wget|nc|ncat|socat)\\b",
+			"\\b(curl|wget)\\b[^;&\\n]*(\\s(-d|--data[a-z-]*|-F|--form|--upload-file|-T)\\s*[\\\"']?[\\w.-]*=?@)",
+			">>?\\s*[\\\"']?[^\\s;&|\\\"']*(\\.env(\\.[\\w-]+)?|\\.pem|\\.key|id_rsa|\\.ssh/[^\\s;&|]*|\\.git/[^\\s;&|]*)[\\\"']?(\\s|$|[;&|])",
+			"\\btee\\b[^;&|\\n]*(\\.env(\\.[\\w-]+)?|\\.pem|\\.key|id_rsa|\\.ssh/|\\.git/)",
+			">>?\\s*[\\\"']?[^\\s;&|\\\"']*\\.(stormcoder|openvs)/(memory\\.md|journal\\.jsonl|proposals\\.json)|\\btee\\b[^;&|\\n]*\\.(stormcoder|openvs)/(memory\\.md|journal\\.jsonl|proposals\\.json)"
 		],
-		"openvsChat.guardrails.allowedCommands": [],
-		"openvsChat.guardrails.protectedPaths": [
+		"stormcoder.guardrails.allowedCommands": [],
+		"stormcoder.agent.sandbox": "off",
+		"stormcoder.agent.sandboxWritablePaths": [],
+		"stormcoder.hooks": [],
+		"stormcoder.guardrails.protectedPaths": [
 			".git",
 			".env",
 			".env.*",
@@ -118,21 +135,24 @@
 			"id_rsa",
 			".ssh"
 		],
-		"openvsChat.mcp.servers": {},
-		"openvsChat.skills": [],
-		"openvsChat.auto.planModel": "",
-		"openvsChat.auto.codeModel": "",
-		"openvsChat.auto.reviewModel": "",
-		"openvsChat.auto.enableReview": true,
-		"openvsChat.auto.decompose": false,
-		"openvsChat.persona.thinking": true,
-		"openvsChat.persona.environment": true,
-		"openvsChat.persona.compactPrompt": "auto",
-		"openvsChat.systemPrompt": "You are a helpful AI coding assistant in the Stormcoder desktop app. Answer concisely and use Markdown for code.",
-		"openvsChat.maxTokens": 8192
+		"stormcoder.mcp.servers": {},
+		"stormcoder.skills": [],
+		"stormcoder.memory.enabled": true,
+		"stormcoder.memory.autoPropose": false,
+		"stormcoder.memory.recentRuns": 5,
+		"stormcoder.auto.planModel": "",
+		"stormcoder.auto.codeModel": "",
+		"stormcoder.auto.reviewModel": "",
+		"stormcoder.auto.enableReview": true,
+		"stormcoder.auto.decompose": false,
+		"stormcoder.persona.thinking": true,
+		"stormcoder.persona.environment": true,
+		"stormcoder.persona.compactPrompt": "auto",
+		"stormcoder.systemPrompt": "You are a helpful AI coding assistant in the Stormcoder desktop app. Answer concisely and use Markdown for code.",
+		"stormcoder.maxTokens": 8192
 	},
 	"schema": {
-		"openvsChat.defaultProvider": {
+		"stormcoder.defaultProvider": {
 			"type": "string",
 			"enum": [
 				"openai",
@@ -180,31 +200,31 @@
 			],
 			"description": "%config.defaultProvider%"
 		},
-		"openvsChat.openai.model": {
+		"stormcoder.openai.model": {
 			"type": "string",
 			"description": "%config.openai.model%"
 		},
-		"openvsChat.openai.baseUrl": {
+		"stormcoder.openai.baseUrl": {
 			"type": "string",
 			"description": "%config.openai.baseUrl%"
 		},
-		"openvsChat.openai.authUrl": {
+		"stormcoder.openai.authUrl": {
 			"type": "string",
 			"description": "%config.authUrl%"
 		},
-		"openvsChat.anthropic.model": {
+		"stormcoder.anthropic.model": {
 			"type": "string",
 			"description": "%config.anthropic.model%"
 		},
-		"openvsChat.anthropic.baseUrl": {
+		"stormcoder.anthropic.baseUrl": {
 			"type": "string",
 			"description": "%config.anthropic.baseUrl%"
 		},
-		"openvsChat.anthropic.authUrl": {
+		"stormcoder.anthropic.authUrl": {
 			"type": "string",
 			"description": "%config.authUrl%"
 		},
-		"openvsChat.anthropic.thinking": {
+		"stormcoder.anthropic.thinking": {
 			"type": "string",
 			"enum": [
 				"auto",
@@ -216,199 +236,199 @@
 			],
 			"description": "%config.anthropic.thinking%"
 		},
-		"openvsChat.nvidia.model": {
+		"stormcoder.nvidia.model": {
 			"type": "string",
 			"description": "%config.nvidia.model%"
 		},
-		"openvsChat.nvidia.baseUrl": {
+		"stormcoder.nvidia.baseUrl": {
 			"type": "string",
 			"description": "%config.nvidia.baseUrl%"
 		},
-		"openvsChat.nvidia.authUrl": {
+		"stormcoder.nvidia.authUrl": {
 			"type": "string",
 			"description": "%config.authUrl%"
 		},
-		"openvsChat.gemini.model": {
+		"stormcoder.gemini.model": {
 			"type": "string",
 			"description": "%config.gemini.model%"
 		},
-		"openvsChat.gemini.baseUrl": {
+		"stormcoder.gemini.baseUrl": {
 			"type": "string",
 			"description": "%config.gemini.baseUrl%"
 		},
-		"openvsChat.gemini.authUrl": {
+		"stormcoder.gemini.authUrl": {
 			"type": "string",
 			"description": "%config.authUrl%"
 		},
-		"openvsChat.antigravity.model": {
+		"stormcoder.antigravity.model": {
 			"type": "string",
 			"description": "%config.antigravity.model%"
 		},
-		"openvsChat.openrouter.model": {
+		"stormcoder.openrouter.model": {
 			"type": "string",
 			"description": "%config.openrouter.model%"
 		},
-		"openvsChat.openrouter.baseUrl": {
+		"stormcoder.openrouter.baseUrl": {
 			"type": "string",
 			"description": "%config.openrouter.baseUrl%"
 		},
-		"openvsChat.openrouter.authUrl": {
+		"stormcoder.openrouter.authUrl": {
 			"type": "string",
 			"description": "%config.authUrl%"
 		},
-		"openvsChat.groq.model": {
+		"stormcoder.groq.model": {
 			"type": "string",
 			"description": "%config.groq.model%"
 		},
-		"openvsChat.groq.baseUrl": {
+		"stormcoder.groq.baseUrl": {
 			"type": "string",
 			"description": "%config.groq.baseUrl%"
 		},
-		"openvsChat.groq.authUrl": {
+		"stormcoder.groq.authUrl": {
 			"type": "string",
 			"description": "%config.authUrl%"
 		},
-		"openvsChat.mistral.model": {
+		"stormcoder.mistral.model": {
 			"type": "string",
 			"description": "%config.mistral.model%"
 		},
-		"openvsChat.mistral.baseUrl": {
+		"stormcoder.mistral.baseUrl": {
 			"type": "string",
 			"description": "%config.mistral.baseUrl%"
 		},
-		"openvsChat.mistral.authUrl": {
+		"stormcoder.mistral.authUrl": {
 			"type": "string",
 			"description": "%config.authUrl%"
 		},
-		"openvsChat.cloudflare.accountId": {
+		"stormcoder.cloudflare.accountId": {
 			"type": "string",
 			"description": "%config.cloudflare.accountId%"
 		},
-		"openvsChat.cloudflare.model": {
+		"stormcoder.cloudflare.model": {
 			"type": "string",
 			"description": "%config.cloudflare.model%"
 		},
-		"openvsChat.cloudflare.baseUrl": {
+		"stormcoder.cloudflare.baseUrl": {
 			"type": "string",
 			"description": "%config.cloudflare.baseUrl%"
 		},
-		"openvsChat.cloudflare.authUrl": {
+		"stormcoder.cloudflare.authUrl": {
 			"type": "string",
 			"description": "%config.authUrl%"
 		},
-		"openvsChat.kimi.model": {
+		"stormcoder.kimi.model": {
 			"type": "string",
 			"description": "%config.kimi.model%"
 		},
-		"openvsChat.kimi.baseUrl": {
+		"stormcoder.kimi.baseUrl": {
 			"type": "string",
 			"description": "%config.kimi.baseUrl%"
 		},
-		"openvsChat.kimi.authUrl": {
+		"stormcoder.kimi.authUrl": {
 			"type": "string",
 			"description": "%config.authUrl%"
 		},
-		"openvsChat.qwen.model": {
+		"stormcoder.qwen.model": {
 			"type": "string",
 			"description": "%config.qwen.model%"
 		},
-		"openvsChat.qwen.baseUrl": {
+		"stormcoder.qwen.baseUrl": {
 			"type": "string",
 			"description": "%config.qwen.baseUrl%"
 		},
-		"openvsChat.qwen.authUrl": {
+		"stormcoder.qwen.authUrl": {
 			"type": "string",
 			"description": "%config.authUrl%"
 		},
-		"openvsChat.zai.model": {
+		"stormcoder.zai.model": {
 			"type": "string",
 			"description": "%config.zai.model%"
 		},
-		"openvsChat.zai.baseUrl": {
+		"stormcoder.zai.baseUrl": {
 			"type": "string",
 			"description": "%config.zai.baseUrl%"
 		},
-		"openvsChat.zai.authUrl": {
+		"stormcoder.zai.authUrl": {
 			"type": "string",
 			"description": "%config.authUrl%"
 		},
-		"openvsChat.opencode_zen.model": {
+		"stormcoder.opencode_zen.model": {
 			"type": "string",
 			"description": "%config.opencode_zen.model%"
 		},
-		"openvsChat.opencode_zen.baseUrl": {
+		"stormcoder.opencode_zen.baseUrl": {
 			"type": "string",
 			"description": "%config.opencode_zen.baseUrl%"
 		},
-		"openvsChat.opencode_zen.authUrl": {
+		"stormcoder.opencode_zen.authUrl": {
 			"type": "string",
 			"description": "%config.authUrl%"
 		},
-		"openvsChat.xkiro.model": {
+		"stormcoder.xkiro.model": {
 			"type": "string",
 			"description": "%config.xkiro.model%"
 		},
-		"openvsChat.xkiro.baseUrl": {
+		"stormcoder.xkiro.baseUrl": {
 			"type": "string",
 			"description": "%config.xkiro.baseUrl%"
 		},
-		"openvsChat.xkiro.authUrl": {
+		"stormcoder.xkiro.authUrl": {
 			"type": "string",
 			"description": "%config.authUrl%"
 		},
-		"openvsChat.copilot.model": {
+		"stormcoder.copilot.model": {
 			"type": "string",
 			"description": "%config.copilot.model%"
 		},
-		"openvsChat.grok.model": {
+		"stormcoder.grok.model": {
 			"type": "string",
 			"description": "%config.grok.model%"
 		},
-		"openvsChat.kiro.model": {
+		"stormcoder.kiro.model": {
 			"type": "string",
 			"description": "%config.kiro.model%"
 		},
-		"openvsChat.web_gemini.model": {
+		"stormcoder.web_gemini.model": {
 			"type": "string",
 			"description": "%config.web_gemini.model%"
 		},
-		"openvsChat.webGemini.enabled": {
+		"stormcoder.webGemini.enabled": {
 			"type": "boolean",
 			"description": "%config.webGemini.enabled%"
 		},
-		"openvsChat.claude-code-cli.model": {
+		"stormcoder.claude-code-cli.model": {
 			"type": "string",
 			"description": "%config.claude-code-cli.model%"
 		},
-		"openvsChat.claude-code-cli.cliPath": {
+		"stormcoder.claude-code-cli.cliPath": {
 			"type": "string",
 			"description": "%config.claude-code-cli.cliPath%"
 		},
-		"openvsChat.custom.model": {
+		"stormcoder.custom.model": {
 			"type": "string",
 			"description": "%config.custom.model%"
 		},
-		"openvsChat.custom.baseUrl": {
+		"stormcoder.custom.baseUrl": {
 			"type": "string",
 			"description": "%config.custom.baseUrl%"
 		},
-		"openvsChat.custom.authUrl": {
+		"stormcoder.custom.authUrl": {
 			"type": "string",
 			"description": "%config.authUrl%"
 		},
-		"openvsChat.agent.maxSteps": {
+		"stormcoder.agent.maxSteps": {
 			"type": "number",
 			"description": "%config.agent.maxSteps%",
 			"minimum": 1,
 			"maximum": 1000
 		},
-		"openvsChat.agent.maxContextTokens": {
+		"stormcoder.agent.maxContextTokens": {
 			"type": "number",
 			"description": "%config.agent.maxContextTokens%",
 			"minimum": 0,
 			"maximum": 10000000
 		},
-		"openvsChat.ask.autoContext": {
+		"stormcoder.ask.autoContext": {
 			"type": "string",
 			"enum": [
 				"active",
@@ -417,81 +437,81 @@
 			],
 			"description": "%config.ask.autoContext%"
 		},
-		"openvsChat.stream.idleTimeoutMs": {
+		"stormcoder.stream.idleTimeoutMs": {
 			"type": "number",
 			"description": "%config.stream.idleTimeoutMs%",
 			"minimum": 0,
 			"maximum": 3600000
 		},
-		"openvsChat.agent.commandTimeoutMs": {
+		"stormcoder.agent.commandTimeoutMs": {
 			"type": "number",
 			"description": "%config.agent.commandTimeoutMs%",
 			"minimum": 1000,
 			"maximum": 3600000
 		},
-		"openvsChat.agent.shell": {
+		"stormcoder.agent.shell": {
 			"type": "string",
 			"description": "%config.agent.shell%"
 		},
-		"openvsChat.agent.maxSubagents": {
+		"stormcoder.agent.maxSubagents": {
 			"type": "number",
 			"description": "%config.agent.maxSubagents%",
 			"minimum": 0,
 			"maximum": 16
 		},
-		"openvsChat.agent.maxSubagentDepth": {
+		"stormcoder.agent.maxSubagentDepth": {
 			"type": "number",
 			"description": "%config.agent.maxSubagentDepth%",
 			"minimum": 0,
 			"maximum": 4
 		},
-		"openvsChat.agent.maxAgentMessages": {
+		"stormcoder.agent.maxAgentMessages": {
 			"type": "number",
 			"description": "%config.agent.maxAgentMessages%",
 			"minimum": 0,
 			"maximum": 50
 		},
-		"openvsChat.agent.parallelResearch": {
+		"stormcoder.agent.parallelResearch": {
 			"type": "boolean",
 			"description": "%config.agent.parallelResearch%"
 		},
-		"openvsChat.agent.parallelReads": {
+		"stormcoder.agent.parallelReads": {
 			"type": "boolean",
 			"description": "%config.agent.parallelReads%"
 		},
-		"openvsChat.agent.maxRunMinutes": {
+		"stormcoder.agent.maxRunMinutes": {
 			"type": "number",
 			"description": "%config.agent.maxRunMinutes%",
 			"minimum": 1,
 			"maximum": 1440
 		},
-		"openvsChat.agent.traceTiming": {
+		"stormcoder.agent.traceTiming": {
 			"type": "boolean",
 			"description": "%config.agent.traceTiming%"
 		},
-		"openvsChat.remote.traceSessions": {
+		"stormcoder.remote.traceSessions": {
 			"type": "boolean",
 			"description": "%config.remote.traceSessions%"
 		},
-		"openvsChat.remote.loopback": {
+		"stormcoder.remote.loopback": {
 			"type": "boolean",
 			"description": "%config.remote.loopback%"
 		},
-		"openvsChat.remote.promptEscalationSeconds": {
+		"stormcoder.remote.promptEscalationSeconds": {
 			"type": "number",
 			"description": "%config.remote.promptEscalationSeconds%",
 			"minimum": 0,
 			"maximum": 3600
 		},
-		"openvsChat.remote.enabled": {
+		"stormcoder.remote.enabled": {
 			"type": "boolean",
 			"description": "%config.remote.enabled%"
 		},
-		"openvsChat.remote.relayUrl": {
+		"stormcoder.remote.relayUrl": {
 			"type": "string",
 			"description": "%config.remote.relayUrl%"
 		},
-		"openvsChat.remote.relayMode": {
+		"stormcoder.remote.relayMode": {
 			"type": "string",
 			"enum": [
 				"auto",
@@ -505,33 +525,33 @@
 			],
 			"description": "%config.remote.relayMode%"
 		},
-		"openvsChat.remote.cloudflaredPath": {
+		"stormcoder.remote.cloudflaredPath": {
 			"type": "string",
 			"description": "%config.remote.cloudflaredPath%"
 		},
-		"openvsChat.remote.tunnelHostname": {
+		"stormcoder.remote.tunnelHostname": {
 			"type": "string",
 			"description": "%config.remote.tunnelHostname%"
 		},
-		"openvsChat.remote.localPort": {
+		"stormcoder.remote.localPort": {
 			"type": "number",
 			"description": "%config.remote.localPort%",
 			"minimum": 0,
 			"maximum": 65535
 		},
-		"openvsChat.remote.deviceTokenDays": {
+		"stormcoder.remote.deviceTokenDays": {
 			"type": "number",
 			"description": "%config.remote.deviceTokenDays%",
 			"minimum": 1,
 			"maximum": 3650
 		},
-		"openvsChat.remote.idleDisableHours": {
+		"stormcoder.remote.idleDisableHours": {
 			"type": "number",
 			"description": "%config.remote.idleDisableHours%",
 			"minimum": 1,
 			"maximum": 8760
 		},
-		"openvsChat.remote.approvalFloor": {
+		"stormcoder.remote.approvalFloor": {
 			"type": "string",
 			"enum": [
 				"always",
@@ -545,15 +565,15 @@
 			],
 			"description": "%config.remote.approvalFloor%"
 		},
-		"openvsChat.rules": {
+		"stormcoder.rules": {
 			"type": "string",
 			"description": "%config.rules%"
 		},
-		"openvsChat.ruleFiles": {
+		"stormcoder.ruleFiles": {
 			"type": "array",
 			"description": "%config.ruleFiles%"
 		},
-		"openvsChat.guardrails.approval": {
+		"stormcoder.guardrails.approval": {
 			"type": "string",
 			"enum": [
 				"always",
@@ -567,55 +587,91 @@
 			],
 			"description": "%config.guardrails.approval%"
 		},
-		"openvsChat.guardrails.deniedCommands": {
+		"stormcoder.guardrails.deniedCommands": {
 			"type": "array",
 			"description": "%config.guardrails.deniedCommands%"
 		},
-		"openvsChat.guardrails.allowedCommands": {
+		"stormcoder.guardrails.allowedCommands": {
 			"type": "array",
 			"description": "%config.guardrails.allowedCommands%"
 		},
-		"openvsChat.guardrails.protectedPaths": {
+		"stormcoder.agent.sandbox": {
+			"type": "string",
+			"enum": [
+				"off",
+				"workspace",
+				"workspace-offline"
+			],
+			"enumDescriptions": [
+				"%config.agent.sandbox.off%",
+				"%config.agent.sandbox.workspace%",
+				"%config.agent.sandbox.offline%"
+			],
+			"description": "%config.agent.sandbox%"
+		},
+		"stormcoder.agent.sandboxWritablePaths": {
+			"type": "array",
+			"description": "%config.agent.sandboxWritablePaths%"
+		},
+		"stormcoder.hooks": {
+			"type": "array",
+			"description": "%config.hooks%"
+		},
+		"stormcoder.guardrails.protectedPaths": {
 			"type": "array",
 			"description": "%config.guardrails.protectedPaths%"
 		},
-		"openvsChat.mcp.servers": {
+		"stormcoder.mcp.servers": {
 			"type": "object",
 			"description": "%config.mcp.servers%"
 		},
-		"openvsChat.skills": {
+		"stormcoder.skills": {
 			"type": "array",
 			"description": "%config.skills%"
 		},
-		"openvsChat.auto.planModel": {
+		"stormcoder.memory.enabled": {
+			"type": "boolean",
+			"description": "%config.memory.enabled%"
+		},
+		"stormcoder.memory.autoPropose": {
+			"type": "boolean",
+			"description": "%config.memory.autoPropose%"
+		},
+		"stormcoder.memory.recentRuns": {
+			"type": "number",
+			"description": "%config.memory.recentRuns%",
+			"minimum": 0,
+			"maximum": 20
+		},
+		"stormcoder.auto.planModel": {
 			"type": "string",
 			"description": "%config.auto.planModel%"
 		},
-		"openvsChat.auto.codeModel": {
+		"stormcoder.auto.codeModel": {
 			"type": "string",
 			"description": "%config.auto.codeModel%"
 		},
-		"openvsChat.auto.reviewModel": {
+		"stormcoder.auto.reviewModel": {
 			"type": "string",
 			"description": "%config.auto.reviewModel%"
 		},
-		"openvsChat.auto.enableReview": {
+		"stormcoder.auto.enableReview": {
 			"type": "boolean",
 			"description": "%config.auto.enableReview%"
 		},
-		"openvsChat.auto.decompose": {
+		"stormcoder.auto.decompose": {
 			"type": "boolean",
 			"description": "%config.auto.decompose%"
 		},
-		"openvsChat.persona.thinking": {
+		"stormcoder.persona.thinking": {
 			"type": "boolean",
 			"description": "%config.persona.thinking%"
 		},
-		"openvsChat.persona.environment": {
+		"stormcoder.persona.environment": {
 			"type": "boolean",
 			"description": "%config.persona.environment%"
 		},
-		"openvsChat.persona.compactPrompt": {
+		"stormcoder.persona.compactPrompt": {
 			"type": "string",
 			"enum": [
 				"auto",
@@ -629,11 +685,11 @@
 			],
 			"description": "%config.persona.compactPrompt%"
 		},
-		"openvsChat.systemPrompt": {
+		"stormcoder.systemPrompt": {
 			"type": "string",
 			"description": "%config.systemPrompt%"
 		},
-		"openvsChat.maxTokens": {
+		"stormcoder.maxTokens": {
 			"type": "number",
 			"description": "%config.maxTokens%",
 			"minimum": 1,

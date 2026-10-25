@@ -1,9 +1,11 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import { HookSpec, loadHooks } from './hooks';
+import { SandboxMode, parseSandboxMode } from './sandbox';
 
 /**
  * When the agent stops for permission, laxest last:
@@ -20,14 +22,15 @@ export type ApprovalPolicy = 'always' | 'auto-edits' | 'yolo';
 /**
  * The shipped policy, used for an unset or unrecognized setting.
  *
- * `yolo` because a confirmation card in front of every build, test and git command is the
- * difference between an agent that finishes a task and one that stalls waiting on a click
- * the user never noticed. Nothing here is unguarded: the deny-list, the protected paths,
+ * `auto-edits`: file edits inside the workspace flow, while commands (which can do anything a
+ * deny-list of regular expressions did not think of) are confirmed once and can then be
+ * allowed for the run. `yolo` is one setting away for anyone who wants no cards at all.
+ * Nothing here is unguarded: the deny-list, the protected paths,
  * workspace-root confinement and the untrusted-workspace block are all enforced in code
  * regardless of policy, and the agent still has `ask_user` for decisions that are genuinely
- * the user's. Tighten it with `openvsChat.guardrails.approval`.
+ * the user's. Tighten it with `stormcoder.guardrails.approval`.
  */
-export const DEFAULT_APPROVAL: ApprovalPolicy = 'yolo';
+export const DEFAULT_APPROVAL: ApprovalPolicy = 'auto-edits';
 
 /** Every policy the setting and the webview picker accept, strictest first. */
 export const APPROVAL_POLICIES: readonly ApprovalPolicy[] = ['always', 'auto-edits', 'yolo'];
@@ -55,7 +58,7 @@ const APPROVAL_STRICTNESS: readonly ApprovalPolicy[] = ['always', 'auto-edits', 
  * origin this is always exactly `configured` — the desktop user's own setting, unchanged,
  * because a local run must never regress. For a `remote` origin, the stricter of
  * `configured` and `floor` wins, so a remotely-initiated run can never end up looser than
- * `openvsChat.remote.approvalFloor` even when the desktop's own `guardrails.approval` is
+ * `stormcoder.remote.approvalFloor` even when the desktop's own `guardrails.approval` is
  * `yolo` — see this file's header on why `yolo` is defensible only when the person who can
  * see and veto every action is the one who triggered it.
  */
@@ -85,6 +88,8 @@ export interface Guardrails {
 	readonly deniedCommands: RegExp[];
 	readonly allowedCommands: RegExp[];
 	readonly protectedPaths: string[];
+	/** Extra write-protected path patterns (matched against the whole relative path), added for some runs, e.g. ones started from a paired phone. */
+	readonly protectedRegex?: readonly RegExp[];
 	readonly commandTimeoutMs: number;
 	readonly maxSubagents: number;
 	readonly maxSubagentDepth: number;
@@ -107,6 +112,12 @@ export interface Guardrails {
 	readonly parallelReads: boolean;
 	/** Shell `run_command` executes through; empty means the platform default. */
 	readonly shell: string;
+	/** `stormcoder.hooks`: commands run before and after tool calls. Absent means none. */
+	readonly hooks?: readonly HookSpec[];
+	/** `stormcoder.agent.sandbox`: run commands inside an OS sandbox. Absent means off. */
+	readonly sandbox?: SandboxMode;
+	/** `stormcoder.agent.sandboxWritablePaths`: extra folders a sandboxed command may write. */
+	readonly sandboxWritablePaths?: readonly string[];
 }
 
 /**
@@ -136,6 +147,19 @@ export const DEFAULT_DENIED_COMMANDS: readonly string[] = [
 	'(^|[\\s;&|(])(su|doas|pkexec)\\s+(\\S+\\s+)*?-c\\b|\\b(doas|pkexec)\\b',
 	'\\bfind\\b[^;&|\\n]*(\\s-delete\\b|-exec(dir)?\\s+rm\\b)',
 	'<\\(\\s*(curl|wget)\\b|\\b(eval|source|(ba|z|da)?sh\\s+-c)\\s+["\\\']?\\$\\(\\s*(curl|wget)\\b',
+	'\\bgit\\b[^;&|\\n]*\\breset\\b[^;&|\\n]*--hard\\b',
+	'\\bgit\\b[^;&|\\n]*\\bclean\\b[^;&|\\n]*\\s-[a-z]*f',
+	'\\bgit\\b[^;&|\\n]*\\b(checkout|restore)\\b[^;&|\\n]*(\\s--\\s+\\.|\\s\\.\\s*($|[;&|]))',
+	'\\bgit\\b[^;&|\\n]*\\bstash\\b[^;&|\\n]*\\b(drop|clear)\\b',
+	'\\b(python[0-9.]*|node|nodejs|perl|ruby|php|deno|bun)\\b[^&|\\n]*(rmtree|rmSync|rmdirSync|rm_rf|remove_tree|unlinkSync|shutil\\.rm|rm\\s+-[a-z]*r)',
+	'\\b(npm|yarn|pnpm|cargo|twine|gem)\\s+publish\\b|\\btwine\\s+upload\\b',
+	'(\\.ssh|\\.aws|\\.gnupg|\\.netrc|\\.npmrc|\\.env\\b|id_rsa|credentials)[^;&\\n]*\\|\\s*(curl|wget|nc|ncat|socat)\\b',
+	'\\b(env|printenv|set)\\s*\\|\\s*(curl|wget|nc|ncat|socat)\\b',
+	'\\b(curl|wget)\\b[^;&\\n]*(\\s(-d|--data[a-z-]*|-F|--form|--upload-file|-T)\\s*[\\"\']?[\\w.-]*=?@)',
+	'>>?\\s*[\\"\']?[^\\s;&|\\"\']*(\\.env(\\.[\\w-]+)?|\\.pem|\\.key|id_rsa|\\.ssh/[^\\s;&|]*|\\.git/[^\\s;&|]*)[\\"\']?(\\s|$|[;&|])',
+	'\\btee\\b[^;&|\\n]*(\\.env(\\.[\\w-]+)?|\\.pem|\\.key|id_rsa|\\.ssh/|\\.git/)',
+	// Project memory is written through the remember tool (see MEMORY_FILES), not by shell redirection.
+	'>>?\\s*[\\"\']?[^\\s;&|\\"\']*\\.(stormcoder|openvs)/(memory\\.md|journal\\.jsonl|proposals\\.json)|\\btee\\b[^;&|\\n]*\\.(stormcoder|openvs)/(memory\\.md|journal\\.jsonl|proposals\\.json)',
 ];
 
 export const DEFAULT_PROTECTED_PATHS: readonly string[] = [
@@ -147,6 +171,14 @@ export const DEFAULT_PROTECTED_PATHS: readonly string[] = [
 	'id_rsa',
 	'.ssh',
 ];
+
+/**
+ * Files the agent may never write directly, whatever `protectedPaths` says. They are read back
+ * into the model's prompt in every later session, so an edit that skipped the `remember` tool
+ * would skip its approval, its credential check and its size limit, and a page the agent had
+ * fetched could plant standing instructions. The tool is the way in.
+ */
+const MEMORY_FILES = /(^|\/)\.(stormcoder|openvs)\/(memory\.md|journal\.jsonl|proposals\.json)$/i;
 
 function compile(patterns: string[]): RegExp[] {
 	const out: RegExp[] = [];
@@ -167,7 +199,7 @@ function sanitizeTimeout(value: unknown): number {
 
 /** Reads the guardrail configuration from settings. */
 export function loadGuardrails(): Guardrails {
-	const cfg = vscode.workspace.getConfiguration('openvsChat');
+	const cfg = vscode.workspace.getConfiguration('stormcoder');
 	return {
 		approval: parseApprovalPolicy(cfg.get<string>('guardrails.approval')),
 		deniedCommands: compile(cfg.get<string[]>('guardrails.deniedCommands') ?? [...DEFAULT_DENIED_COMMANDS]),
@@ -184,6 +216,9 @@ export function loadGuardrails(): Guardrails {
 		parallelResearch: cfg.get<boolean>('agent.parallelResearch') ?? true,
 		parallelReads: cfg.get<boolean>('agent.parallelReads') ?? true,
 		shell: cfg.get<string>('agent.shell')?.trim() ?? '',
+		hooks: loadHooks(),
+		sandbox: parseSandboxMode(cfg.get<string>('agent.sandbox')),
+		sandboxWritablePaths: cfg.get<string[]>('agent.sandboxWritablePaths') ?? [],
 	};
 }
 
@@ -200,11 +235,11 @@ export function checkCommand(command: string, g: Guardrails): GuardrailCheck {
 	const bare = cmd.replace(/["'\\]/g, '');
 	for (const re of g.deniedCommands) {
 		if (re.test(cmd) || re.test(bare)) {
-			return { ok: false, reason: `Command blocked by a guardrail (matches /${re.source}/). Adjust openvsChat.guardrails.deniedCommands to allow it.` };
+			return { ok: false, reason: `Command blocked by a guardrail (matches /${re.source}/). Adjust stormcoder.guardrails.deniedCommands to allow it.` };
 		}
 	}
 	if (g.allowedCommands.length && !g.allowedCommands.some(re => re.test(cmd))) {
-		return { ok: false, reason: 'Command blocked: an allow-list is configured (openvsChat.guardrails.allowedCommands) and this command does not match it.' };
+		return { ok: false, reason: 'Command blocked: an allow-list is configured (stormcoder.guardrails.allowedCommands) and this command does not match it.' };
 	}
 	return { ok: true };
 }
@@ -390,6 +425,12 @@ export function checkPath(root: vscode.Uri, relativePath: string, forWrite: bool
 		return { ok: false, reason: `Path "${relativePath}" escapes the workspace root and was blocked.` };
 	}
 	if (forWrite) {
+		if (MEMORY_FILES.test(clean.replace(/\\/g, '/'))) {
+			return { ok: false, reason: `Writing "${relativePath}" is blocked: it is project memory. Use the remember tool to save a fact (the user can edit the file in Settings > Memory).` };
+		}
+		if (g.protectedRegex?.some(re => re.test(clean.replace(/\\/g, '/')))) {
+			return { ok: false, reason: `Writing "${relativePath}" is blocked for runs started from a paired device: it holds instructions or process configuration that outlive the run. Do it on the desktop.` };
+		}
 		const segments = clean.split(/[/\\]+/).filter(Boolean);
 		const basename = segments[segments.length - 1] ?? '';
 		for (const pattern of g.protectedPaths) {

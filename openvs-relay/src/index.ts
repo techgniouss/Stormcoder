@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // The Worker's `fetch` entry point. Kept thin on purpose (per the plan's "index.ts should be a
 // thin router, room.ts should hold the actual DO logic" split): this file only decides *which*
@@ -50,6 +50,9 @@ function locationHintFor(continent: string | undefined): DurableObjectLocationHi
 	}
 }
 
+/** The shape `derivePublicRoomId` (src/remote/config.ts in the app) produces: base32 of a 32-byte digest, Crockford alphabet. */
+const ROOM_ID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{52}$/;
+
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		const url = new URL(request.url);
@@ -57,6 +60,11 @@ export default {
 			const roomId = url.searchParams.get('room');
 			if (!roomId) {
 				return new Response('missing room id', { status: 400 });
+			}
+			// A real room id is the desktop's 52-character Crockford base32 digest. Anything else would
+			// still create a Durable Object (with its own storage and a recurring alarm) for whoever asked.
+			if (!ROOM_ID_PATTERN.test(roomId)) {
+				return new Response('invalid room id', { status: 400 });
 			}
 			// `request.cf` is typed as a union that includes `RequestInitCfProperties` (the
 			// *outbound*-fetch shape, which has no `continent` field), so a direct `.continent`

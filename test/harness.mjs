@@ -56,10 +56,10 @@ export async function startHost({ mockPort, settings = {}, files = {} } = {}) {
 		fs.writeFileSync(path.join(project, name), content);
 	}
 	fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify({
-		'openvsChat.defaultProvider': 'custom',
-		'openvsChat.custom.baseUrl': `http://127.0.0.1:${mockPort}/v1`,
-		'openvsChat.custom.model': 'mock-model',
-		'openvsChat.guardrails.approval': 'yolo',
+		'stormcoder.defaultProvider': 'custom',
+		'stormcoder.custom.baseUrl': `http://127.0.0.1:${mockPort}/v1`,
+		'stormcoder.custom.model': 'mock-model',
+		'stormcoder.guardrails.approval': 'yolo',
 		...settings,
 	}));
 	const host = spawn(process.execPath, [path.join(root, 'dist/dev-host.js')], {

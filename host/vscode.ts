@@ -18,6 +18,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
+import { GitIgnore } from './gitignore';
 import * as path from 'path';
 import { host, quarantineFile, readJsonFileChecked, ViewId, writeJsonFile } from './env';
 import CONFIG_DEFAULTS from './config-defaults.json';
@@ -343,11 +344,46 @@ function readObjectFile<V>(file: string): Record<string, V> {
 	return {};
 }
 
+/** Prefix every setting and stored key had before the product was renamed. */
+const LEGACY_SETTINGS_PREFIX = 'openvsChat.';
+
+/**
+ * Moves entries stored under the pre-rename `openvsChat.` prefix to `stormcoder.` and saves the
+ * file. The prefix names API keys, sign-in sessions, chat history, remote-control secrets and
+ * consent decisions, so without this an existing install would lose all of them at the rename.
+ * A key already present under the new name wins. Values are moved as stored (secrets stay
+ * encrypted), so nothing needs decrypting.
+ */
+function migrateLegacyKeys<V>(data: Record<string, V>, file: string): Record<string, V> {
+	const legacy = Object.keys(data).filter(k => k.startsWith(LEGACY_SETTINGS_PREFIX));
+	if (!legacy.length) {
+		return data;
+	}
+	const migrated: Record<string, V> = {};
+	for (const [key, value] of Object.entries(data)) {
+		if (!key.startsWith(LEGACY_SETTINGS_PREFIX)) {
+			migrated[key] = value;
+		}
+	}
+	for (const key of legacy) {
+		const next = 'stormcoder.' + key.slice(LEGACY_SETTINGS_PREFIX.length);
+		if (!(next in migrated)) {
+			migrated[next] = data[key];
+		}
+	}
+	try {
+		writeJsonFile(file, migrated);
+	} catch (err) {
+		logHost(`could not save migrated keys in ${file}: ${err instanceof Error ? err.message : String(err)}`);
+	}
+	return migrated;
+}
+
 /** A JSON-file-backed key/value store, written through on every update. */
 class FileMemento implements Memento {
 	private data: Record<string, unknown>;
 	constructor(private readonly file: string) {
-		this.data = readObjectFile<unknown>(file);
+		this.data = migrateLegacyKeys(readObjectFile<unknown>(file), file);
 	}
 	keys(): readonly string[] { return Object.keys(this.data); }
 	get<T>(key: string, defaultValue?: T): T | undefined {
@@ -371,7 +407,7 @@ export class SecretStorage {
 	readonly onDidChange = this.emitter.event;
 	private data: Record<string, string>;
 	constructor(private readonly file: string) {
-		this.data = readObjectFile<string>(file);
+		this.data = migrateLegacyKeys(readObjectFile<string>(file), file);
 	}
 	async get(key: string): Promise<string | undefined> {
 		const raw = this.data[key];
@@ -418,6 +454,37 @@ let settings: Record<string, unknown> = {};
 /** Why settings.json could not be parsed; while set, writes are refused so the file is never clobbered. */
 let settingsError: string | undefined;
 
+
+/**
+ * Moves settings saved under the pre-rename `openvsChat.` namespace to `stormcoder.` and
+ * saves the file, so an existing install keeps its provider choices, guardrails and MCP
+ * servers. A key already present under the new name wins: the user set it after the rename.
+ */
+function migrateLegacySettings(loaded: Record<string, unknown>, file: string): Record<string, unknown> {
+	const legacy = Object.keys(loaded).filter(k => k.startsWith(LEGACY_SETTINGS_PREFIX));
+	if (!legacy.length) {
+		return loaded;
+	}
+	const migrated: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(loaded)) {
+		if (!key.startsWith(LEGACY_SETTINGS_PREFIX)) {
+			migrated[key] = value;
+		}
+	}
+	for (const key of legacy) {
+		const next = 'stormcoder.' + key.slice(LEGACY_SETTINGS_PREFIX.length);
+		if (!(next in migrated)) {
+			migrated[next] = loaded[key];
+		}
+	}
+	try {
+		writeJsonFile(file, migrated);
+	} catch (err) {
+		logHost(`could not save migrated settings: ${err instanceof Error ? err.message : String(err)}`);
+	}
+	return migrated;
+}
+
 function loadSettings(): void {
 	const file = path.join(host().userDataDir, 'settings.json');
 	if (file !== settingsFile) {
@@ -426,7 +493,7 @@ function loadSettings(): void {
 	settingsFile = file;
 	const read = readJsonFileChecked<unknown>(file, {});
 	if (!read.error && isPlainObject(read.value)) {
-		settings = read.value;
+		settings = migrateLegacySettings(read.value, file);
 		settingsError = undefined;
 		return;
 	}
@@ -616,14 +683,40 @@ async function findFiles(include: GlobPattern, exclude?: GlobPattern | null, max
 	const results: Uri[] = [];
 	const pruneDirs = /(^|\/)(node_modules|\.git)$/;
 	for (const root of roots) {
-		const stack = [''];
-		while (stack.length && results.length < limit) {
-			const rel = stack.pop() as string;
+		// Breadth first, so a capped result holds the shallow files (the project's own source)
+		// rather than whatever the deepest-last directory happened to contain.
+		const queue = [''];
+		// `.gitignore` files met on the way down, keyed by the directory holding each.
+		const ignores = new Map<string, GitIgnore>();
+		const ignored = (childRel: string, isDir: boolean): boolean => {
+			let dir = childRel;
+			// The nearest `.gitignore` that has an opinion decides, as git does.
+			for (;;) {
+				const cut = dir.lastIndexOf('/');
+				dir = cut < 0 ? '' : dir.slice(0, cut);
+				const verdict = ignores.get(dir)?.ignores(dir ? childRel.slice(dir.length + 1) : childRel, isDir);
+				if (verdict !== undefined) {
+					return verdict;
+				}
+				if (!dir) {
+					return false;
+				}
+			}
+		};
+		while (queue.length && results.length < limit) {
+			const rel = queue.shift() as string;
 			let entries: fs.Dirent[];
 			try {
 				entries = await fs.promises.readdir(path.join(root.dir, rel), { withFileTypes: true });
 			} catch {
 				continue;
+			}
+			if (entries.some(e => e.name === '.gitignore')) {
+				try {
+					ignores.set(rel, new GitIgnore(await fs.promises.readFile(path.join(root.dir, rel, '.gitignore'), 'utf8')));
+				} catch {
+					// Unreadable: treated as absent.
+				}
 			}
 			for (const e of entries) {
 				const childRel = rel ? `${rel}/${e.name}` : e.name;
@@ -636,10 +729,10 @@ async function findFiles(include: GlobPattern, exclude?: GlobPattern | null, max
 					isFile = target?.isFile() === true;
 				}
 				if (isDir) {
-					if (!pruneDirs.test(childRel) && !(excludeRe && excludeRe.test(`${childRel}/x`))) {
-						stack.push(childRel);
+					if (!pruneDirs.test(childRel) && !(excludeRe && excludeRe.test(`${childRel}/x`)) && !ignored(childRel, true)) {
+						queue.push(childRel);
 					}
-				} else if (isFile && includeRe.test(childRel) && !(excludeRe && excludeRe.test(childRel))) {
+				} else if (isFile && includeRe.test(childRel) && !(excludeRe && excludeRe.test(childRel)) && !ignored(childRel, false)) {
 					results.push(Uri.file(path.join(root.dir, childRel)));
 					if (results.length >= limit) {
 						break;
@@ -768,7 +861,7 @@ export const commands = {
 		return new Disposable(() => commandTable.delete(id));
 	},
 	async executeCommand<T = unknown>(id: string, ...args: unknown[]): Promise<T | undefined> {
-		if (id === 'openvsChat.view.focus') {
+		if (id === 'stormcoder.view.focus') {
 			host().notify({ kind: 'focus', view: 'chat' });
 			return undefined;
 		}

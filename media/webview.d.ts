@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -27,23 +27,23 @@ declare function acquireVsCodeApi(): {
 
 interface Window {
 	/** Set by the host: true when this webview is the detached Settings editor tab. */
-	__OPENVS_SETTINGS_ONLY__?: boolean;
+	__STORM_SETTINGS_ONLY__?: boolean;
 	/**
 	 * Set by the host: the `vscode-webview://` URI of `shell/mark.svg`, the brand mark
 	 * drawn on the empty chat. The webview cannot build this itself — relative paths
 	 * resolve against the document, not the extension's media folder.
 	 */
-	__OPENVS_HERO_URI__?: string;
+	__STORM_HERO_URI__?: string;
 }
 
 /** One selectable answer offered by an `ask_user` question. */
-interface OpenVSAskOption {
+interface StormAskOption {
 	label: string;
 	description?: string;
 }
 
 /** A prompt the extension host is blocked on, as it arrives over postMessage. */
-interface OpenVSPromptRequest {
+interface StormPromptRequest {
 	id: string;
 	type: string;
 	sessionId?: string;
@@ -52,7 +52,7 @@ interface OpenVSPromptRequest {
 	preview?: string;
 	previewLanguage?: string;
 	question?: string;
-	options?: OpenVSAskOption[];
+	options?: StormAskOption[];
 	multiSelect?: boolean;
 	chosen?: string[];
 }
@@ -61,14 +61,14 @@ interface OpenVSPromptRequest {
  * Approval/question card rendering, provided by `media/prompts.js`, which the host loads
  * immediately before `media/main.js`.
  */
-declare const OpenVSPrompts: {
+declare const StormPrompts: {
 	create(deps: {
 		container: { appendChild(node: any): void };
 		post: (message: any) => void;
 		scroll?: () => void;
 	}): {
-		render(request: OpenVSPromptRequest): any;
-		track(request: OpenVSPromptRequest): void;
+		render(request: StormPromptRequest): any;
+		track(request: StormPromptRequest): void;
 		reattach(sessionId: string): void;
 		cancel(id: string, reason?: string): void;
 		has(id: string): boolean;
@@ -77,14 +77,14 @@ declare const OpenVSPrompts: {
 };
 
 /** A freshly minted pairing code, as answered by the host's `remote` message's `pairing` field. */
-interface OpenVSPairingResult {
+interface StormPairingResult {
 	code: string;
 	expiresAt: number;
 	url: string;
 }
 
 /** One paired device, as answered by the host's `remote` message's `devices` field (Phase 7c). */
-interface OpenVSDeviceInfo {
+interface StormDeviceInfo {
 	id: string;
 	name: string;
 	createdAt: number;
@@ -97,14 +97,14 @@ interface OpenVSDeviceInfo {
  * before `media/main.js`. Pure string → HTML: no DOM, so `scripts/test-markdown.mjs` drives
  * it directly.
  */
-declare const OpenVSMarkdown: {
+declare const StormMarkdown: {
 	render(text: string): string;
 	escapeHtml(text: string): string;
 	THOR_BOLT_PATH: string;
 };
 
 /** Byte-mode QR encoder (ECC level L, versions 1-6), provided by `media/qr.js`. */
-declare const OpenVSQr: {
+declare const StormQr: {
 	encode(text: string): { size: number; modules: boolean[][] };
 };
 
@@ -112,7 +112,7 @@ declare const OpenVSQr: {
  * Remote-control status indicator + pairing card, provided by `media/pairing.js`, which the
  * host loads after `media/qr.js` and before `media/main.js`.
  */
-declare const OpenVSPairing: {
+declare const StormPairing: {
 	create(deps: {
 		container: { appendChild(node: any): void };
 		post: (message: any) => void;
@@ -122,8 +122,8 @@ declare const OpenVSPairing: {
 			enabled: boolean;
 			connected: boolean;
 			idleDisabled?: boolean;
-			pairing?: OpenVSPairingResult;
-			devices?: OpenVSDeviceInfo[];
+			pairing?: StormPairingResult;
+			devices?: StormDeviceInfo[];
 		}): void;
 	};
 };

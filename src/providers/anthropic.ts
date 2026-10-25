@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -33,7 +33,7 @@ const MIN_THINKING_BUDGET = 1_024;
 /** Reply left over after the budget; thinking tokens are charged against `max_tokens`. */
 const MIN_ANSWER_TOKENS = 1_024;
 
-/** `openvsChat.anthropic.thinking`: request extended thinking where a model supports it, or never. */
+/** `stormcoder.anthropic.thinking`: request extended thinking where a model supports it, or never. */
 export type AnthropicThinkingMode = 'auto' | 'off';
 
 /**
@@ -101,7 +101,7 @@ export class AnthropicProvider implements ChatProvider {
 	private readonly rateLimits = new RateLimitTracker();
 
 	/**
-	 * @param thinkingMode Reads `openvsChat.anthropic.thinking` on each request; injected so
+	 * @param thinkingMode Reads `stormcoder.anthropic.thinking` on each request; injected so
 	 * this module stays free of the host API (the registry wires the real setting).
 	 */
 	constructor(private readonly thinkingMode: () => AnthropicThinkingMode = () => 'auto') { }

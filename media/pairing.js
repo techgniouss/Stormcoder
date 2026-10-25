@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // @ts-check
@@ -7,7 +7,7 @@
  * The "Remote control" panel in Settings: a persistent connection-status indicator plus a
  * "Pair a device" card (QR code + manually-typeable code + expiry countdown). Phase 5b of
  * "remote control" — see `i-need-your-help-unified-scott.md`'s "Auth" section — replacing the
- * `openvsChat.remotePair` command-palette stopgap.
+ * `stormcoder.remotePair` command-palette stopgap.
  *
  * Follows `media/prompts.js`'s house rules exactly, for the same reasons that file states:
  * every node is built with createElement/createElementNS + textContent — no `innerHTML`, no
@@ -48,7 +48,7 @@
 	 * @param {string} text
 	 */
 	function buildQrSvg(text) {
-		const { size, modules } = OpenVSQr.encode(text);
+		const { size, modules } = StormQr.encode(text);
 		const MODULE_PX = 4;
 		const QUIET_ZONE_MODULES = 4; // the spec's minimum quiet zone, so a phone camera can find the finder patterns
 		const dim = (size + QUIET_ZONE_MODULES * 2) * MODULE_PX;
@@ -93,10 +93,13 @@
 	 *   container: { appendChild(node: any): void },
 	 *   post: (message: any) => void,
 	 *   now?: () => number,
+	 *   copy?: (text: string) => Promise<void>,
 	 * }} deps
 	 */
 	function create(deps) {
 		const now = deps.now || (() => Date.now());
+		/** Puts text on the clipboard; injected so tests need no browser. */
+		const copyText = deps.copy || (text => navigator.clipboard.writeText(text));
 
 		/** @type {{ enabled: boolean, connected: boolean, idleDisabled?: boolean }} */
 		let status = { enabled: false, connected: false };
@@ -107,9 +110,12 @@
 		const statusRow = el('div', 'remote-status-row');
 		const statusDot = el('span', 'remote-status-dot remote-status-off');
 		const statusLabel = el('span', 'remote-status-label', 'Remote: off');
+		// Announced when it changes (off, connecting, connected, paused), so a screen reader hears the outcome of the switch.
+		statusLabel.setAttribute('role', 'status');
+		statusLabel.setAttribute('aria-live', 'polite');
 		statusRow.appendChild(statusDot);
 		statusRow.appendChild(statusLabel);
-		// The on/off switch for `openvsChat.remote.enabled` — so turning remote on doesn't mean
+		// The on/off switch for `stormcoder.remote.enabled` — so turning remote on doesn't mean
 		// finding a Command Palette entry. The host answers with the real state (see
 		// `setRemoteEnabled` in chatViewProvider.ts), which is what finally sets `checked`: a
 		// switch that couldn't turn on flips back rather than claiming to be on.
@@ -122,15 +128,19 @@
 		});
 		toggle.appendChild(toggleInput);
 		toggle.appendChild(el('span', 'remote-toggle-text', 'On'));
+		// Drawn first (`order` in main.css): the switch, then the state it controls.
 		statusRow.appendChild(toggle);
-		deps.container.appendChild(statusRow);
+		// The switch and the one action share a row: state on the left, what to do about it on the right.
+		const controls = el('div', 'remote-controls');
+		controls.appendChild(statusRow);
+		deps.container.appendChild(controls);
 
 		function renderStatus() {
 			statusDot.className = 'remote-status-dot ' + (
 				!status.enabled ? 'remote-status-off' : status.connected ? 'remote-status-connected' : 'remote-status-connecting');
 			statusLabel.textContent = !status.enabled ? 'Remote: off'
 				: status.connected ? 'Remote: connected'
-				// Phase 7c: `openvsChat.remote.idleDisableHours` tore the connection down without
+				// Phase 7c: `stormcoder.remote.idleDisableHours` tore the connection down without
 				// touching the `enabled` setting — say so, rather than looking like an ordinary drop.
 				: status.idleDisabled ? 'Remote: paused (idle)'
 				: 'Remote: connecting…';
@@ -143,16 +153,21 @@
 		// instead of the generic chat-tab error notice, which is invisible while this panel is
 		// open on top of it). Empty and unrendered until the first error arrives. ----
 		const errorLine = el('div', 'remote-error hidden');
+		errorLine.setAttribute('role', 'alert');
 		deps.container.appendChild(errorLine);
 
 		// ---- "Pair a device" trigger. ----
 		const actions = el('div', 'remote-actions');
-		const pairButton = el('button', 'mini-button', 'Pair a device');
+		const pairButton = /** @type {HTMLButtonElement} */ (el('button', 'mini-button', 'Pair a device'));
 		pairButton.addEventListener('click', () => {
+			if (!status.connected) { return; }
 			deps.post({ type: 'requestPairing' });
 		});
 		actions.appendChild(pairButton);
-		deps.container.appendChild(actions);
+		// Why the button is off, instead of letting it fail with an error on a fresh install.
+		const pairHint = el('span', 'hint remote-pair-hint', '');
+		actions.appendChild(pairHint);
+		controls.appendChild(actions);
 
 		const cardMount = el('div', 'remote-card-mount');
 		deps.container.appendChild(cardMount);
@@ -160,14 +175,31 @@
 		// ---- Paired-device list (Phase 7c): name, relative last-seen, revoke. ----
 		const deviceHeader = el('div', 'remote-device-header');
 		deviceHeader.appendChild(el('span', 'remote-pairing-title', 'Paired devices'));
-		const refreshButton = el('button', 'mini-button', 'Refresh');
-		refreshButton.addEventListener('click', () => { deps.post({ type: 'listDevices' }); });
+		const refreshButton = /** @type {HTMLButtonElement} */ (el('button', 'mini-button', 'Refresh'));
+		refreshButton.addEventListener('click', () => { if (status.connected) { deps.post({ type: 'listDevices' }); } });
 		deviceHeader.appendChild(refreshButton);
 		deps.container.appendChild(deviceHeader);
 
 		const deviceList = el('div', 'remote-device-list');
 		deps.container.appendChild(deviceList);
-		deps.post({ type: 'listDevices' });
+
+		/**
+		 * Pairing and the device list need a live connection to the relay. Without one the button
+		 * and Refresh are off and say why, and the list shows a note instead of asking the host
+		 * for something it can only refuse: a fresh install used to open this panel on a red
+		 * "not connected yet" error for doing nothing wrong.
+		 */
+		function renderGate() {
+			const on = status.connected;
+			pairButton.disabled = !on;
+			refreshButton.disabled = !on;
+			pairHint.textContent = on ? '' : status.enabled ? 'Waiting for the relay to connect…' : 'Turn Remote on to pair a device.';
+			if (!on) {
+				deviceList.textContent = '';
+				deviceList.appendChild(el('div', 'hint remote-device-empty', status.enabled ? 'Paired devices appear once Remote is connected.' : 'Turn Remote on to see paired devices.'));
+			}
+		}
+		renderGate();
 
 		/** Relative last-seen time, mirroring `main.js`'s own `relTime` helper — duplicated, not shared, since this is a separate script with no module boundary between the two. */
 		function relDeviceTime(ts) {
@@ -192,9 +224,17 @@
 			}
 			for (const device of active) {
 				const row = el('div', 'remote-device-row');
-				row.appendChild(el('span', 'remote-device-name', device.name));
-				row.appendChild(el('span', 'remote-device-lastseen', relDeviceTime(device.lastSeenAt)));
-				const revokeButton = el('button', 'mini-button', 'Revoke');
+				// The name, then when it was paired and last seen, stacked: a list of phones is
+				// told apart by those two facts, not by a bare name and a time.
+				const info = el('div', 'remote-device-info');
+				info.appendChild(el('span', 'remote-device-name', device.name.replace(/ \(Stormcoder (?:PWA|app)\)$/, '')));
+				const meta = el('div', 'remote-device-meta');
+				if (device.createdAt) { meta.appendChild(el('span', undefined, `Paired ${relDeviceTime(device.createdAt)} · `)); }
+				meta.appendChild(el('span', undefined, 'last seen '));
+				meta.appendChild(el('span', 'remote-device-lastseen', relDeviceTime(device.lastSeenAt)));
+				info.appendChild(meta);
+				row.appendChild(info);
+				const revokeButton = el('button', 'mini-button remote-revoke', 'Revoke');
 				revokeButton.addEventListener('click', () => {
 					// No follow-up `listDevices` here: `chatViewProvider.ts`'s `case
 					// 'revokeDevice':` now awaits the relay's confirmation and pushes the
@@ -223,26 +263,69 @@
 
 			const card = el('div', 'remote-pairing-card');
 			card.appendChild(el('div', 'remote-pairing-title', 'Pair a device'));
-			card.appendChild(el('div', 'hint', 'Scan with the OpenVS PWA, or enter the code by hand.'));
-			card.appendChild(buildQrSvg(pairing.url));
+			card.appendChild(el('div', 'hint', 'Scan the code with the Stormcoder app, or open the link on your phone. The pairing key never leaves the link.'));
 
+			// The code on the left, the key and the clock on the right; they stack when the panel is narrow.
+			const body = el('div', 'remote-pairing-body');
+			try {
+				body.appendChild(buildQrSvg(pairing.url));
+			} catch {
+				// A long tunnel address can outgrow the small QR encoder: the link below still works.
+				body.appendChild(el('div', 'hint', 'The link is too long for a QR code. Copy the link below instead.'));
+			}
+			const side = el('div', 'remote-pairing-side');
+			side.appendChild(el('div', 'hint', 'Pairing key'));
 			const codeRow = el('div', 'remote-pairing-code', pairing.code);
-			card.appendChild(codeRow);
+			side.appendChild(codeRow);
+			const expiry = el('div', 'remote-pairing-expiry');
+			side.appendChild(expiry);
+			// The time left as a line that shortens, so it can be read without reading the number.
+			const timer = el('div', 'remote-pairing-timer');
+			const timerFill = el('div', 'remote-pairing-timer-fill');
+			timer.appendChild(timerFill);
+			side.appendChild(timer);
+			body.appendChild(side);
+			card.appendChild(body);
+
+			// The link as text too: the QR needs a camera, and a phone that cannot scan (or a
+			// code read off another screen) needs the address to type or paste.
+			const linkRow = el('div', 'remote-pairing-link');
+			const linkInput = /** @type {HTMLInputElement} */ (el('input', 'remote-pairing-link-input'));
+			linkInput.setAttribute('type', 'text');
+			linkInput.setAttribute('readonly', 'readonly');
+			linkInput.setAttribute('aria-label', 'Pairing link');
+			linkInput.value = pairing.url;
+			linkInput.addEventListener('focus', () => { if (typeof linkInput.select === 'function') { linkInput.select(); } });
+			const copyButton = el('button', 'mini-button', 'Copy link');
+			copyButton.addEventListener('click', () => {
+				copyText(pairing.url).then(() => {
+					copyButton.textContent = 'Copied';
+					setTimeout(() => { copyButton.textContent = 'Copy link'; }, 1500);
+				}, () => {
+					// No clipboard access (a locked-down webview): leave the link selected to copy by hand.
+					if (typeof linkInput.select === 'function') { linkInput.select(); }
+					copyButton.textContent = 'Press Ctrl+C';
+				});
+			});
+			linkRow.appendChild(linkInput);
+			linkRow.appendChild(copyButton);
+			card.appendChild(linkRow);
+
 			if (pairing.hint) {
 				card.appendChild(el('div', 'hint remote-pairing-hint', pairing.hint));
 			}
 
-			const expiry = el('div', 'remote-pairing-expiry');
-			card.appendChild(expiry);
-
+			const totalMs = Math.max(1, pairing.expiresAt - now());
 			function tick() {
 				const remainingMs = pairing.expiresAt - now();
 				if (remainingMs <= 0) {
-					expiry.textContent = 'Expired — request a new code.';
+					expiry.textContent = 'Expired — request a new pairing key.';
+					timerFill.style.transform = 'scaleX(0)';
 					clearCountdown();
 					return;
 				}
 				expiry.textContent = `Expires in ${Math.ceil(remainingMs / 1000)}s`;
+				timerFill.style.transform = `scaleX(${Math.min(1, remainingMs / totalMs)})`;
 			}
 			tick();
 			countdownTimer = setInterval(tick, 1000);
@@ -270,8 +353,14 @@
 			 * @param {RemoteStatusPayload} payload
 			 */
 			update(payload) {
+				const wasConnected = status.connected;
 				status = { enabled: !!payload.enabled, connected: !!payload.connected, idleDisabled: !!payload.idleDisabled };
 				renderStatus();
+				renderGate();
+				if (!wasConnected && status.connected && !payload.devices) {
+					// Just connected: now there is a list to ask for.
+					deps.post({ type: 'listDevices' });
+				}
 				// Cleared on every update that doesn't carry one — a stale denial ("not
 				// connected yet") must not keep showing once a request actually succeeds.
 				errorLine.textContent = payload.error || '';
@@ -287,5 +376,5 @@
 	}
 
 	// @ts-ignore — the webview's own namespace, consumed by main.js and the pairing-card tests.
-	globalThis.OpenVSPairing = { create };
+	globalThis.StormPairing = { create };
 }());

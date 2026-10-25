@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -60,7 +60,7 @@ function estimateMessageTokens(m: ChatMessage): number {
 	// A base64 image is bulky on the wire; count it so a chat full of screenshots
 	// doesn't sail past the budget undetected.
 	for (const img of m.images ?? []) {
-		total += estimateTokens(img.data);
+		total += img.estimatedTokens ?? estimateTokens(img.data);
 	}
 	return total;
 }

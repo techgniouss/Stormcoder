@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -43,12 +43,12 @@ let cached: ResolvedShell | undefined;
  * fallback — still far more capable than cmd.exe — and cmd.exe is only reached when neither
  * exists.
  *
- * An explicit `openvsChat.agent.shell` always wins and is never probed.
+ * An explicit `stormcoder.agent.shell` always wins and is never probed.
  */
 export function resolveAgentShell(configured: string): ResolvedShell {
 	const explicit = configured.trim();
 	if (explicit) {
-		return { path: explicit, description: `${explicit} (set by openvsChat.agent.shell)` };
+		return { path: explicit, description: `${explicit} (set by stormcoder.agent.shell)` };
 	}
 	if (process.platform !== 'win32') {
 		return { path: undefined, description: '/bin/sh (POSIX)' };

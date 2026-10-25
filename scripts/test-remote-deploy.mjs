@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-// Standalone unit test for src/remote/deploy.ts — the "OpenVS Thor: Remote: Deploy Your Own
+// Standalone unit test for src/remote/deploy.ts — the "Stormcoder: Remote: Deploy Your Own
 // Relay" command's logic. Run:
 //   npx tsc -p extensions/openvs-chat/tsconfig.json
 //   node extensions/openvs-chat/scripts/test-remote-deploy.mjs
@@ -181,7 +181,7 @@ const DEPLOYED = { code: 0, output: 'Deployed openvs-relay triggers\n  https://o
 }
 
 // 9. Deploy exits zero but no workers.dev URL is found in its output → treated as a failure,
-// since there is nothing to save into openvsChat.remote.relayUrl.
+// since there is nothing to save into stormcoder.remote.relayUrl.
 {
 	const runProcess = fakeRunner([
 		NO_PEPPER_LISTED,
@@ -304,7 +304,7 @@ console.log('test-remote-deploy: fake-runner assertions passed');
 // only a real spawn can. Uses a temp script (not an inline `node -e`) for the same reason
 // test-run-command.mjs does: shell quoting differs between Git Bash, PowerShell and cmd.exe.
 
-const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'openvs-deploy-'));
+const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'stormcoder-deploy-'));
 const sleepScript = path.join(workspace, 'sleep.js');
 fs.writeFileSync(sleepScript, "setTimeout(() => {}, 60_000); console.log('started');");
 

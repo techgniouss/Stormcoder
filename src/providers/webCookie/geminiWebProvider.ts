@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -24,7 +24,7 @@ import { ChatProvider, ChatRequest, ModelEntry, ProviderInfo, StreamChatResult, 
  * asked for it explicitly, fully aware of this — see
  * `docs/superpowers/plans/2026-09-03-provider-oauth-and-cookie-integrations.md`'s Phase 4.
  *
- * **Off by default** (`openvsChat.webGemini.enabled`, checked before every call) — a second,
+ * **Off by default** (`stormcoder.webGemini.enabled`, checked before every call) — a second,
  * harder gate than merely "has a key" (see also `NOT_AUTO_INFERRED` in `auto/router.ts`),
  * mirroring the source project's `PRODUCTION_ENABLED` master switch: one flag that pulls this
  * out of dispatch *entirely*, not just marks it unavailable.
@@ -71,7 +71,7 @@ export class GeminiWebProvider implements ChatProvider {
 	};
 
 	private static enabled(): boolean {
-		return vscode.workspace.getConfiguration('openvsChat').get<boolean>('webGemini.enabled') ?? false;
+		return vscode.workspace.getConfiguration('stormcoder').get<boolean>('webGemini.enabled') ?? false;
 	}
 
 	private static requireEnabledAndSupported(): void {
@@ -85,7 +85,7 @@ export class GeminiWebProvider implements ChatProvider {
 		if (!GeminiWebProvider.enabled()) {
 			throw new Error(
 				'Gemini (Chrome session) is disabled by default. Read the risk in the "Gemini (Chrome session, ' +
-				'unofficial)" provider\'s description, then enable "openvsChat.webGemini.enabled" in Settings ' +
+				'unofficial)" provider\'s description, then enable "stormcoder.webGemini.enabled" in Settings ' +
 				'if you still want to use it — replaying your Google session this way is outside Google\'s terms.',
 			);
 		}

@@ -1,11 +1,11 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Unit test for media/markdown.js — the renderer every transcript message passes through. Run:
 //   node extensions/openvs-chat/scripts/test-markdown.mjs
 //
-// The module is a plain <script> that assigns `globalThis.OpenVSMarkdown`, so it is loaded
+// The module is a plain <script> that assigns `globalThis.StormMarkdown`, so it is loaded
 // by evaluating the file rather than importing it. Everything below is string → string:
 // no DOM, which is the whole reason the renderer was split out of main.js.
 import assert from 'node:assert/strict';
@@ -18,7 +18,7 @@ const sandbox = { globalThis: undefined };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 vm.runInContext(source, sandbox);
-const { render, escapeHtml } = sandbox.OpenVSMarkdown;
+const { render, escapeHtml } = sandbox.StormMarkdown;
 
 // 1. The constructs a model emits every single message. Each of these used to reach the
 // transcript as literal punctuation — the table as `|---|---|` rubble, the emphasis as

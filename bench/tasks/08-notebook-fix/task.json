@@ -1,0 +1,10 @@
+{
+  "id": "08-notebook-fix",
+  "title": "Fix a bug inside a Jupyter notebook cell",
+  "category": "notebook",
+  "mode": "agent",
+  "prompts": [
+    "In analysis.ipynb the mean calculation in the second code cell is wrong (it should be the plain average). Fix it."
+  ],
+  "timeoutSec": 180
+}

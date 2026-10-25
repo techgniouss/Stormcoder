@@ -292,8 +292,10 @@ export class Controller {
 		const folder = this.state.folder;
 		if (folder && this.state.trusted.includes(folder)) {
 			allowed.push(
+				{ base: folder, rel: path.join('.stormcoder', 'mcp.json') },
 				{ base: folder, rel: path.join('.openvs', 'mcp.json') },
 				{ base: folder, rel: path.join('.vscode', 'mcp.json') },
+				{ base: folder, rel: path.join('.stormcoder', 'skills'), prefix: true },
 				{ base: folder, rel: path.join('.openvs', 'skills'), prefix: true },
 			);
 		}

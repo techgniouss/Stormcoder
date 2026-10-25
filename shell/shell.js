@@ -140,7 +140,7 @@
 		}
 		showFrame('settings');
 		// Idempotent on the host: reveals the panel if it exists, builds it otherwise.
-		api.command('openvsChat.openSettings');
+		api.command('stormcoder.openSettings');
 	}
 
 	api.onNavigate(({ view }) => navigate(view));
@@ -380,7 +380,7 @@
 		const mod = MOD();
 		const recent = appState.recent.filter(f => f !== appState.folder).slice(0, 4);
 		const items = [
-			{ label: 'New chat', icon: IC.plus, shortcut: [mod, 'N'], onSelect: () => api.command('openvsChat.newChat') },
+			{ label: 'New chat', icon: IC.plus, shortcut: [mod, 'N'], onSelect: () => api.command('stormcoder.newChat') },
 			{ label: 'Open project folder…', icon: IC.folder, shortcut: [mod, 'O'], onSelect: () => api.command('app.openFolder') },
 			...(recent.length ? [{ type: 'header', label: 'Recent projects' }, ...recent.map(f => ({ label: baseName(f), detail: f, icon: IC.folder, onSelect: () => api.command('app.openFolder', f) }))] : []),
 			{ type: 'sep' },

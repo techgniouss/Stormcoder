@@ -1,0 +1,21 @@
+{
+	"appId": "dev.stormcoder.remote",
+	"appName": "Stormcoder Remote",
+	"webDir": "www",
+	"server": {
+		"androidScheme": "https",
+		"cleartext": false
+	},
+	"android": {
+		"allowMixedContent": false
+	},
+	"plugins": {
+		"CapacitorHttp": {
+			"enabled": true
+		},
+		"SystemBars": {
+			"insetsHandling": "css",
+			"style": "DEFAULT"
+		}
+	}
+}

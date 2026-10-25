@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -8,7 +8,7 @@ import * as vscode from 'vscode';
 const MAX_RULES_CHARS = 12_000;
 
 /**
- * Assembles the always-on "rules" that steer the assistant: the `openvsChat.rules` setting
+ * Assembles the always-on "rules" that steer the assistant: the `stormcoder.rules` setting
  * plus any auto-discovered rule files in the workspace (e.g. `AGENTS.md`,
  * `.github/copilot-instructions.md`, `.cursorrules`). Read fresh on each request so edits
  * take effect immediately. These are soft guidance (prompt-level); hard limits live in
@@ -17,7 +17,7 @@ const MAX_RULES_CHARS = 12_000;
 export class RulesProvider {
 	/** Returns the combined rules block, or '' if none are configured. */
 	async getRules(): Promise<string> {
-		const cfg = vscode.workspace.getConfiguration('openvsChat');
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
 		const parts: string[] = [];
 
 		const inline = cfg.get<string>('rules')?.trim();
@@ -64,7 +64,7 @@ export class RulesProvider {
 	private warnOutside(name: string): void {
 		if (!this.warnedNames.has(name)) {
 			this.warnedNames.add(name);
-			void vscode.window.showWarningMessage(`openvsChat.ruleFiles: "${name}" was ignored; rule files must be inside the workspace folder (no absolute paths or "..").`);
+			void vscode.window.showWarningMessage(`stormcoder.ruleFiles: "${name}" was ignored; rule files must be inside the workspace folder (no absolute paths or "..").`);
 		}
 	}
 
@@ -103,7 +103,7 @@ export function isInsideFolder(name: unknown): boolean {
 /**
  * Rules cap for the compact system prompt, sent when a model's per-request budget cannot
  * carry the full prompt. Earlier sources win, as with {@link MAX_RULES_CHARS}, so the
- * `openvsChat.ruleFiles` order still decides what survives.
+ * `stormcoder.ruleFiles` order still decides what survives.
  */
 export const COMPACT_RULES_CHARS = 2_000;
 

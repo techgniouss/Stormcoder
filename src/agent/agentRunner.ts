@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -9,10 +9,12 @@ import { stripThinking, stripThinkingTags } from '../persona/thinking';
 import { TodoItem, UPDATE_TODOS_TOOL, parseTodoUpdate } from '../persona/todos';
 import { isKeyFailure } from '../providers/resilience';
 import { extractTextToolCalls } from '../providers/toolCalls';
-import { AgentStep, CONTINUE_PROMPT, ChatProvider, ChatMessage, ToolCall, ToolSpec, endsInRepeatLoop, isAbortError, isTransientProviderError } from '../providers/types';
+import { AgentStep, CONTINUE_PROMPT, ChatImage, ChatProvider, ChatMessage, ToolCall, ToolSpec, endsInRepeatLoop, isAbortError, isTransientProviderError, modelSupportsVision } from '../providers/types';
 import { budgetsForCeiling } from './contextWindow';
 import { CACHED_COMPACT_TRIGGER, COMPACT_TRIGGER, SUMMARY_MAX_TOKENS, canCompact, compactMessages, compactionThreshold, shouldCompact } from './compaction';
 import { capToolOutput, compactToolSpecs, elidedToolCallIds, estimateMessagesTokens, estimateTokens, estimateToolsTokens, isContextLengthError, needsCompactPrompt, parseTokenLimit, pruneToolOutput, trimMessages, withSystemPrompt } from './context';
+import { runHooks } from './hooks';
+import { NestedRules } from './nestedRules';
 import { Guardrails, autoApproves, loadGuardrails, resolveWorkspacePath } from './guardrails';
 import { AGENT_TOOLS, ASK_USER_TOOL, AskOption, LIST_AGENT_SESSIONS_TOOL, MAX_ASK_OPTIONS, READ_ONLY_TOOL_NAMES, SEND_AGENT_MESSAGE_TOOL, SPAWN_SUBAGENT_TOOL, ToolApprover, ToolLimits, VerifyCommand, asBoolean, asString, commandTextOf, detectVerificationCommands, executeTool, isVerificationCommand } from './tools';
 
@@ -24,6 +26,18 @@ const MCP_PREFIX = 'mcp__';
  */
 /** Tool result for a call the model's output limit cut off; the call is not executed. */
 const TRUNCATED_CALL_RESULT = 'Output limit hit: your reply was cut off in the middle of this tool call, so it was NOT run. Retry with a smaller call (for example, write a large file in several smaller edits).';
+
+/** What running one tool call produced, as the loop consumes it. */
+interface ToolOutcome {
+	readonly call: ToolCall;
+	readonly result: string;
+	readonly isError: boolean;
+	/** Pictures to show the model after the step's tool results. */
+	readonly images?: ChatImage[];
+}
+
+/** Most pictures one run may look at: each stays in the conversation for the rest of it. */
+const MAX_VIEWED_IMAGES = 6;
 
 export type StopReason = 'done' | 'limit' | 'truncated' | 'filtered' | 'refused' | 'stalled' | 'error';
 
@@ -499,6 +513,10 @@ export class AgentRunner {
 	 * `npm test` held a stopped run until the command timeout killed it.
 	 */
 	private runSignal?: AbortSignal;
+	/** The model this run talks to, for deciding whether it can be shown pictures. */
+	private runModel?: string;
+	/** Pictures attached to the conversation by tool calls so far. */
+	private imagesViewed = 0;
 	/** Largest prompt this run sent, in estimated tokens — the number that explains a slow run. */
 	private peakPromptTokens = 0;
 	/** Estimated tokens in the most recently sent prompt, for the per-step timing trace. */
@@ -548,6 +566,8 @@ export class AgentRunner {
 	 * thing that was blocking it may be exactly what that call just fixed.
 	 */
 	private readonly failedCalls = new Map<string, number>();
+	/** Per-directory rule files, delivered once per run with the first result from their directory. */
+	private readonly nestedRules = new NestedRules();
 	/** Memoized workspace probe for verification commands; undefined until first needed. */
 	private verifyCommands?: Promise<VerifyCommand[]>;
 	/** Memoized estimate of what the tool schemas add to every request. */
@@ -673,6 +693,7 @@ export class AgentRunner {
 		}
 		this.startedAt = this.now();
 		this.runSignal = params.signal;
+		this.runModel = params.model;
 		try {
 			return await this.loop(seed, params, callbacks);
 		} finally {
@@ -703,7 +724,7 @@ export class AgentRunner {
 				// just noise, it is wrong: forcing earlier compaction on 5k prompts buys a
 				// summarizer request to save nothing.
 				? 'Each step re-sends the whole conversation, so the total grows with the square of a long run — '
-				+ 'lower "openvsChat.agent.maxContextTokens" to force earlier compaction.'
+				+ 'lower "stormcoder.agent.maxContextTokens" to force earlier compaction.'
 				: '')).trim();
 	}
 
@@ -748,7 +769,7 @@ export class AgentRunner {
 				return {
 					reason: 'limit',
 					detail: `The run hit its ${Math.round(this.maxRunMs / 60_000)}-minute ceiling after ${step} steps with the task unfinished. `
-						+ 'Send "continue" to keep going, or raise "openvsChat.agent.maxRunMinutes".',
+						+ 'Send "continue" to keep going, or raise "stormcoder.agent.maxRunMinutes".',
 				};
 			}
 			// Extending silently would leave a run that looks stuck at 100 steps indistinguishable
@@ -920,7 +941,7 @@ export class AgentRunner {
 				if (truncationRounds >= MAX_TRUNCATION_ROUNDS) {
 					return {
 						reason: 'truncated',
-						detail: `The model kept hitting its output limit after ${MAX_TRUNCATION_ROUNDS} continuations — it is writing one very long answer instead of working in steps. Raise "openvsChat.maxTokens", ask for a smaller piece of work, or switch to a model that uses tools.`,
+						detail: `The model kept hitting its output limit after ${MAX_TRUNCATION_ROUNDS} continuations — it is writing one very long answer instead of working in steps. Raise "stormcoder.maxTokens", ask for a smaller piece of work, or switch to a model that uses tools.`,
 					};
 				}
 				truncationRounds++;
@@ -1035,13 +1056,19 @@ export class AgentRunner {
 					toolCallId: call.id,
 				});
 			}
+			// A tool cannot return a picture, so what read_file found goes in as the user turn
+			// that follows its results — the position every provider accepts it in.
+			const pictures = outcomes.flatMap(o => o.images ?? []);
+			if (pictures.length) {
+				messages.push({ role: 'user', content: 'The image(s) you just asked to view:', images: pictures });
+			}
 		}
 
 		return {
 			reason: 'limit',
 			detail: extends_
-				? `Reached the hard ceiling of ${stepCeiling} steps — Full Auto already extended the ${this.maxSteps}-step limit ${AUTO_EXTEND_FACTOR}× on its own. Send "continue" to keep going, or raise "openvsChat.agent.maxSteps".`
-				: `Reached the ${this.maxSteps}-step limit. Send "continue" to keep going, or raise "openvsChat.agent.maxSteps".`,
+				? `Reached the hard ceiling of ${stepCeiling} steps — Full Auto already extended the ${this.maxSteps}-step limit ${AUTO_EXTEND_FACTOR}× on its own. Send "continue" to keep going, or raise "stormcoder.agent.maxSteps".`
+				: `Reached the ${this.maxSteps}-step limit. Send "continue" to keep going, or raise "stormcoder.agent.maxSteps".`,
 		};
 	}
 
@@ -1150,12 +1177,16 @@ export class AgentRunner {
 		if (isError) {
 			return;
 		}
-		if (call.name === 'write_file' || call.name === 'edit_file') {
+		if (call.name === 'write_file' || call.name === 'edit_file' || call.name === 'edit_notebook') {
 			this.unverifiedWrites = true;
 			// Commands that ran *before* this write prove nothing about it.
 			this.ranCommands = [];
 		} else if (call.name === 'run_command') {
 			const command = commandTextOf(call.args);
+			// A command left running in the background has not finished, so it checked nothing.
+			if (asBoolean(call.args.background)) {
+				return;
+			}
 			this.ranCommands.push(command);
 			if (isVerificationCommand(command)) {
 				this.unverifiedWrites = false;
@@ -1610,12 +1641,32 @@ export class AgentRunner {
 	 * `read_file` and `fetch_url` are left alone: they already page to the same limit and end
 	 * with a note naming the exact range shown, which a cut through the middle would falsify.
 	 */
-	private fitOutput(call: ToolCall, outcome: { result: string; isError: boolean }): { result: string; isError: boolean } {
+	private fitOutput(call: ToolCall, outcome: { result: string; isError: boolean; images?: ChatImage[] }): { result: string; isError: boolean; images?: ChatImage[] } {
+		const checked = this.withViewableImages(outcome);
 		if (SELF_PAGING_TOOLS.includes(call.name)) {
-			return outcome;
+			return checked;
 		}
 		const max = this.toolLimits().maxReadChars ?? 0;
-		return { result: capToolOutput(outcome.result, max), isError: outcome.isError };
+		return { ...checked, result: capToolOutput(checked.result, max) };
+	}
+
+	/**
+	 * Keeps a call's pictures only when the model can look at them and the run has room for
+	 * them; otherwise the result says why, so the model does not wait for an image that never
+	 * comes.
+	 */
+	private withViewableImages<T extends { result: string; isError: boolean; images?: ChatImage[] }>(outcome: T): T {
+		if (!outcome.images?.length) {
+			return outcome;
+		}
+		if (this.runModel !== undefined && !modelSupportsVision(this.provider.info, this.runModel)) {
+			return { ...outcome, images: undefined, result: `${outcome.result.replace(/ is attached in the next message\.$/, '')} could not be shown: ${this.runModel} cannot view images. Describe what you need from it differently, or ask the user.` };
+		}
+		if (this.imagesViewed + outcome.images.length > MAX_VIEWED_IMAGES) {
+			return { ...outcome, images: undefined, result: `This run has already looked at ${this.imagesViewed} images (limit ${MAX_VIEWED_IMAGES}), so this one was not attached.` };
+		}
+		this.imagesViewed += outcome.images.length;
+		return outcome;
 	}
 
 	/**
@@ -1731,8 +1782,8 @@ export class AgentRunner {
 		calls: ToolCall[],
 		params: AgentParams,
 		callbacks: AgentCallbacks,
-	): Promise<Array<{ call: ToolCall; result: string; isError: boolean }>> {
-		const outcomes: Array<{ call: ToolCall; result: string; isError: boolean }> = [];
+	): Promise<ToolOutcome[]> {
+		const outcomes: ToolOutcome[] = [];
 		const spawnCalls: ToolCall[] = [];
 		/**
 		 * Runs the sub-agent calls collected so far. Read-only delegates go first (in
@@ -1886,6 +1937,41 @@ export class AgentRunner {
 		return undefined;
 	}
 
+	/** Runs the PreToolUse hooks for `call`; a string means a hook vetoed it, and is the result to report. */
+	private async preHook(call: ToolCall, callbacks: AgentCallbacks): Promise<string | undefined> {
+		const hooks = this.guardrails.hooks;
+		if (!hooks?.length) {
+			return undefined;
+		}
+		const out = await runHooks(hooks, 'PreToolUse', { tool: call.name, args: call.args }, resolveWorkspacePath('.')?.uri.fsPath ?? process.cwd(), this.runSignal);
+		out.warnings.forEach(w => callbacks.onNote(w));
+		return out.feedback === undefined ? undefined : `Blocked by a PreToolUse hook — do not retry unchanged. ${out.feedback}`;
+	}
+
+	/** Runs the PostToolUse hooks; whatever feedback they give is appended to the tool result. */
+	private async postHook(call: ToolCall, result: string, isError: boolean, callbacks: AgentCallbacks): Promise<string> {
+		const hooks = this.guardrails.hooks;
+		if (!hooks?.length) {
+			return '';
+		}
+		const out = await runHooks(hooks, 'PostToolUse', { tool: call.name, args: call.args, result: result.slice(0, 4_000), isError }, resolveWorkspacePath('.')?.uri.fsPath ?? process.cwd(), this.runSignal);
+		out.warnings.forEach(w => callbacks.onNote(w));
+		return out.feedback === undefined ? '' : `\n\n[PostToolUse hook]\n${out.feedback}`;
+	}
+
+	/**
+	 * Rules from a directory's own AGENTS.md / CLAUDE.md, for the first file in that directory
+	 * a file tool succeeds on. Only the file tools carry a path worth scoping rules to.
+	 */
+	private async rulesFor(call: ToolCall): Promise<string> {
+		const name = call.name.toLowerCase();
+		const path = call.args.path ?? call.args.file_path;
+		if (typeof path !== 'string' || !['read_file', 'edit_file', 'write_file', 'list_dir'].includes(name)) {
+			return '';
+		}
+		return this.nestedRules.forPath(path);
+	}
+
 	/** Applies the run-wide bookkeeping a finished tool call implies. */
 	private recordToolOutcome(call: ToolCall, key: string, isRead: boolean, isError: boolean): void {
 		if (isError) {
@@ -1931,7 +2017,7 @@ export class AgentRunner {
 	}
 
 	/** Runs one ordinary tool call (anything the loop doesn't handle itself), guards included. */
-	private async runOneTool(call: ToolCall, callbacks: AgentCallbacks): Promise<{ call: ToolCall; result: string; isError: boolean }> {
+	private async runOneTool(call: ToolCall, callbacks: AgentCallbacks): Promise<ToolOutcome> {
 		const key = repeatKey(call);
 		const isRead = READ_ONLY_TOOL_NAMES.includes(call.name);
 		const refusal = this.notOffered(call) ?? this.toolRefusal(key, isRead);
@@ -1940,13 +2026,21 @@ export class AgentRunner {
 			callbacks.onToolEnd(call, refusal, true);
 			return { call, result: refusal, isError: true };
 		}
+		const vetoed = await this.preHook(call, callbacks);
+		if (vetoed !== undefined) {
+			callbacks.onToolEnd(call, vetoed, true);
+			return { call, result: vetoed, isError: true };
+		}
 		const outcome = call.name.startsWith(MCP_PREFIX)
 			? await this.callMcp(call)
 			: await executeTool(call, this.approver, this.guardrails, this.toolLimits(), this.runSignal);
-		const { result, isError } = this.fitOutput(call, outcome);
+		const fitted = this.fitOutput(call, outcome);
+		const result = (fitted.isError ? fitted.result : fitted.result + await this.rulesFor(call))
+			+ await this.postHook(call, fitted.result, fitted.isError, callbacks);
+		const { isError } = fitted;
 		this.recordToolOutcome(call, key, isRead, isError);
 		callbacks.onToolEnd(call, result, isError);
-		return { call, result, isError };
+		return { call, result, isError, images: fitted.images };
 	}
 
 	/**
@@ -1962,7 +2056,7 @@ export class AgentRunner {
 	 * Callbacks stay in call order rather than completion order, so the transcript reads
 	 * the same whether or not batching was on.
 	 */
-	private async runReadBatch(batch: ToolCall[], callbacks: AgentCallbacks): Promise<Array<{ call: ToolCall; result: string; isError: boolean }>> {
+	private async runReadBatch(batch: ToolCall[], callbacks: AgentCallbacks): Promise<ToolOutcome[]> {
 		const planned = batch.map(call => {
 			const key = repeatKey(call);
 			return { call, key, refusal: this.notOffered(call) ?? this.toolRefusal(key, true) };
@@ -1970,27 +2064,35 @@ export class AgentRunner {
 		for (const p of planned) {
 			callbacks.onToolStart(p.call);
 		}
-		const shared = new Map<string, Promise<{ result: string; isError: boolean }>>();
+		const shared = new Map<string, Promise<{ result: string; isError: boolean; images?: ChatImage[] }>>();
 		const results = await Promise.all(planned.map(p => {
 			if (p.refusal !== undefined) {
-				return Promise.resolve({ result: p.refusal, isError: true });
+				return Promise.resolve<{ result: string; isError: boolean; images?: ChatImage[] }>({ result: p.refusal, isError: true });
 			}
 			let pending = shared.get(p.key);
 			if (!pending) {
-				pending = executeTool(p.call, this.approver, this.guardrails, this.toolLimits(), this.runSignal).then(r => this.fitOutput(p.call, r));
+				pending = (async () => {
+					const vetoed = await this.preHook(p.call, callbacks);
+					if (vetoed !== undefined) {
+						return { result: vetoed, isError: true };
+					}
+					const r = this.fitOutput(p.call, await executeTool(p.call, this.approver, this.guardrails, this.toolLimits(), this.runSignal));
+					return { result: r.result + await this.postHook(p.call, r.result, r.isError, callbacks), isError: r.isError, images: r.images };
+				})();
 				shared.set(p.key, pending);
 			}
 			return pending;
 		}));
-		const outcomes: Array<{ call: ToolCall; result: string; isError: boolean }> = [];
+		const outcomes: ToolOutcome[] = [];
 		for (let i = 0; i < planned.length; i++) {
 			const { call, key, refusal } = planned[i];
-			const { result, isError } = results[i];
+			const { isError, images } = results[i];
+			const result = isError || refusal !== undefined ? results[i].result : results[i].result + await this.rulesFor(call);
 			if (refusal === undefined) {
 				this.recordToolOutcome(call, key, true, isError);
 			}
 			callbacks.onToolEnd(call, result, isError);
-			outcomes.push({ call, result, isError });
+			outcomes.push({ call, result, isError, images });
 		}
 		return outcomes;
 	}

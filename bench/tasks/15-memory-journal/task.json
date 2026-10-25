@@ -1,0 +1,11 @@
+{
+  "id": "15-memory-journal",
+  "title": "Continue unfinished work recorded in the run journal",
+  "category": "memory",
+  "mode": "agent",
+  "prompts": [
+    "Please continue the work from the last session."
+  ],
+  "referenceAnswer": "Finished the retry support in fetchJson.",
+  "timeoutSec": 300
+}

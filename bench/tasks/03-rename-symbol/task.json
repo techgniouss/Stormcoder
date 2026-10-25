@@ -1,0 +1,10 @@
+{
+  "id": "03-rename-symbol",
+  "title": "Rename a function across files and tests",
+  "category": "refactor",
+  "mode": "agent",
+  "prompts": [
+    "Rename the function `getUserName` to `getDisplayName` everywhere it is defined or used, including the tests. Make sure `npm test` still passes."
+  ],
+  "timeoutSec": 240
+}

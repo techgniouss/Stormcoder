@@ -1,4 +1,4 @@
-// OpenVS Relay — Cloudflare Worker + Durable Object + PWA
+// Stormcoder Relay — Cloudflare Worker + Durable Object + PWA
 //
 // Web Push: a VAPID ES256 JWT builder and a payload-less push sender. "Payload-less" means the
 // push carries no encrypted body at all — the service worker wakes on the push event, then

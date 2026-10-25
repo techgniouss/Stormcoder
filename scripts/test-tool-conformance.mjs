@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Conformance matrix for the agent tool layer. Run:
@@ -250,6 +250,34 @@ await equivalent('edit_file replaceAll', { name: 'edit_file', args: { path: 'src
 	}
 }
 
+// 8c. web_search and command_output — vocabulary, and the rejections that need no network or process.
+{
+	reset();
+	covered.add('web_search');
+	covered.add('command_output');
+	covered.add('edit_notebook');
+	// remember: the vocabulary check and the secret refusal need no approval or file.
+	covered.add('remember');
+	covered.add('recall');
+	assert.strictEqual((await run('recall', { query: 'nothing here' })).isError, false);
+	const badType = await run('remember', { type: 'novel', text: 'x' });
+	assert.strictEqual(badType.isError, true);
+	assert.match(badType.result, /Unknown memory type/);
+	assert.match((await run('remember', { type: 'gotcha', text: 'password = hunter2hunter2' })).result, /credential/);
+	// Another product's name and argument spellings reach the same check as the canonical call.
+	for (const call of [['edit_notebook', { path: 'src/a.ts', cell: 0, source: 'x' }], ['NotebookEdit', { notebook_path: 'src/a.ts', cell_number: 0, new_source: 'x' }]]) {
+		assert.match((await run(call[0], call[1])).result, /not a \.ipynb/);
+	}
+	const empty = await run('web_search', { query: '  ' });
+	assert.match(empty.result, /non-empty "query"/);
+	// A synonym for the tool and for its argument reaches the same check.
+	const viaAlias = await run('search_web', { q: '' });
+	assert.match(viaAlias.result, /non-empty "query"/);
+	const unknown = await run('command_output', { id: 'bg999' });
+	assert.strictEqual(unknown.isError, true);
+	assert.match(unknown.result, /No background command "bg999"/);
+}
+
 // 9. A call whose intent genuinely cannot be recovered still fails — but the message must
 //    name what arrived, or the model has nothing to correct and repeats itself.
 {
@@ -262,7 +290,7 @@ await equivalent('edit_file replaceAll', { name: 'edit_file', args: { path: 'src
 	assert.deepStrictEqual(cases.map(c => c.isError), [true, true, true]);
 	assert.match(cases[0].result, /"content" belongs to write_file/);
 	assert.match(cases[1].result, /supplied no arguments besides the path/);
-	assert.match(cases[2].result, /read_file, list_dir, glob_files, search_files, write_file, edit_file, fetch_url, run_command/);
+	assert.match(cases[2].result, /read_file, list_dir, glob_files, search_files, write_file, edit_file, edit_notebook, fetch_url, web_search, run_command, command_output, recall, remember/);
 }
 
 // 10. Completeness: a tool added later without a case here fails this suite rather than

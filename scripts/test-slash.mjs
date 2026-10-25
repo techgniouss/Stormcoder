@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Standalone unit test for the host-side slash-command dispatch in src/session/slash.ts. Run:
@@ -26,6 +26,8 @@ function makeEffects(skillsSnapshot) {
 		mcpReconnect: () => calls.push({ fn: 'mcpReconnect' }),
 		openMcpSettings: () => calls.push({ fn: 'openMcpSettings' }),
 		reply: text => calls.push({ fn: 'reply', text }),
+		compact: () => calls.push({ fn: 'compact' }),
+		memory: args => calls.push({ fn: 'memory', args }),
 		undoRun: () => calls.push({ fn: 'undoRun' }),
 		listSkills: () => skillsSnapshot ?? { skills: [], active: [] },
 	};
@@ -243,6 +245,36 @@ for (const remote of [false, true]) {
 	const { effects, calls } = makeEffects();
 	assert.deepStrictEqual(runSlash('/undo', effects, remote), { handled: true });
 	assert.deepStrictEqual(calls, [{ fn: 'undoRun' }], `remote=${remote}`);
+}
+
+// /init and /review switch to Agent and send a canned task (also from a remote client, which could
+// have typed the same text); /compact is a plain effect.
+for (const remote of [false, true]) {
+	const { effects, calls } = makeEffects();
+	const init = runSlash('/init', effects, remote);
+	assert.deepStrictEqual(calls, [{ fn: 'setMode', mode: 'agent' }], `remote=${remote}`);
+	assert.match(init.sendRest, /AGENTS\.md/);
+	const rev = makeEffects();
+	const review = runSlash('/review auth only', rev.effects, remote);
+	assert.match(review.sendRest, /git diff/);
+	assert.match(review.sendRest, /Focus: auth only/);
+	assert.match(review.sendRest, /Do not edit/);
+	const c = makeEffects();
+	assert.deepStrictEqual(runSlash('/compact', c.effects, remote), { handled: true });
+	assert.deepStrictEqual(c.calls, [{ fn: 'compact' }]);
+}
+
+// /memory: handed to the host with its arguments; refused from a remote client, like the Memory panel.
+{
+	const local = makeEffects();
+	assert.deepStrictEqual(runSlash('/memory add user I prefer tabs', local.effects), { handled: true });
+	assert.deepStrictEqual(local.calls, [{ fn: 'memory', args: 'add user I prefer tabs' }]);
+	const bare = makeEffects();
+	runSlash('/memory', bare.effects);
+	assert.deepStrictEqual(bare.calls, [{ fn: 'memory', args: '' }]);
+	const remoteRun = makeEffects();
+	assert.deepStrictEqual(runSlash('/memory off', remoteRun.effects, true), { handled: true, denied: true });
+	assert.deepStrictEqual(remoteRun.calls, [], 'a remote client cannot read or change memory');
 }
 
 console.log('test-slash: all assertions passed');

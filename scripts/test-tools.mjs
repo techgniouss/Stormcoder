@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Standalone unit test for the agent tool layer in src/agent/tools.ts and the path
@@ -291,9 +291,9 @@ function reset(initial = {}, options = {}) {
 	}
 	// An unset or unrecognized policy falls back to the shipped default.
 	settings = {};
-	assert.strictEqual(loadGuardrails().approval, 'yolo');
+	assert.strictEqual(loadGuardrails().approval, 'auto-edits');
 	settings = { 'guardrails.approval': 'nonsense' };
-	assert.strictEqual(loadGuardrails().approval, 'yolo');
+	assert.strictEqual(loadGuardrails().approval, 'auto-edits');
 }
 
 // 15. Reads are line-numbered, so the model can cite `path:line` and aim its next read
@@ -618,7 +618,7 @@ function reset(initial = {}, options = {}) {
 	const osMod = await import('node:os');
 	const fsMod = await import('node:fs');
 	const pathMod = await import('node:path');
-	const base = fsMod.mkdtempSync(pathMod.join(osMod.tmpdir(), 'openvs-link-'));
+	const base = fsMod.mkdtempSync(pathMod.join(osMod.tmpdir(), 'stormcoder-link-'));
 	const ws = pathMod.join(base, 'ws');
 	const outside = pathMod.join(base, 'outside');
 	fsMod.mkdirSync(ws);
@@ -679,12 +679,12 @@ function reset(initial = {}, options = {}) {
 	const latin1 = new Uint8Array([0x63, 0x61, 0x66, 0xe9, 0x0a]); // "caf\xe9\n"
 	const origRead = vscodeStub.workspace.fs.readFile;
 	const origWrite = vscodeStub.workspace.fs.writeFile;
-	const raw = new Map([['/repo/img.png', bin], ['/repo/latin.txt', latin1]]);
+	const raw = new Map([['/repo/blob.dat', bin], ['/repo/latin.txt', latin1]]);
 	let wrote = false;
 	vscodeStub.workspace.fs.readFile = async u => raw.get(u.fsPath) ?? origRead(u);
 	vscodeStub.workspace.fs.writeFile = async (u, b) => { wrote = true; return origWrite(u, b); };
 	try {
-		const read = await run('read_file', { path: 'img.png' });
+		const read = await run('read_file', { path: 'blob.dat' });
 		assert.strictEqual(read.isError, true);
 		assert.match(read.result, /binary/);
 		const edit = await run('edit_file', { path: 'latin.txt', oldText: 'caf', newText: 'tea' });

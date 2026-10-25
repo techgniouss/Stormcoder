@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -11,6 +11,7 @@ import {
 } from './config';
 import { DeviceInfo, fetchDevices, shouldDisconnectForIdle, shouldRevokeForTokenAge } from './devices';
 import { getRelayMode, LocalHosting } from './local/localHosting';
+import { groupSecret, HostE2E } from './e2e';
 import { buildPairingUrl, PairingResult, requestPairing, revokeDevice } from './pairing';
 import { isRemoteAllowed } from './policy';
 import { Envelope, isControlFrame } from './protocol';
@@ -34,19 +35,19 @@ const SWEEP_INTERVAL_MS = 60 * 60 * 1000;
  * `remoteSink.ts`, `pairing.ts` and `snapshot.ts` together into one running (or not-running)
  * connection to a relay. Constructed in `extension.ts` beside `McpManager`, and — per the
  * plan's own framing of the choice — **owns the reference to {@link ChatViewProvider}, not the
- * other way around**: remote control is optional (off unless `openvsChat.remote.enabled` is
+ * other way around**: remote control is optional (off unless `stormcoder.remote.enabled` is
  * set), the chat panel is not, and `ChatViewProvider` is already
  * this extension's largest file. `ChatViewProvider` exposes a small public seam
  * (`attachRemoteSink`/`detachRemoteSink`/`dispatchRemoteMessage`/`postToSink`/
  * `getSessionStore`) instead of growing a dependency on the transport layer itself.
  *
- * Two ways to reach a relay (`openvsChat.remote.relayMode`): *hosted* dials the Cloudflare
+ * Two ways to reach a relay (`stormcoder.remote.relayMode`): *hosted* dials the Cloudflare
  * Worker at `relayUrl`; *local* runs the relay inside this extension (`local/relayServer.ts`),
  * dials it on loopback, and publishes it through Cloudflare Tunnel (`local/tunnel.ts`) for the
  * phone — see {@link LocalHosting}.
  *
- * Watches `openvsChat.remote.enabled`/`relayUrl` and starts or stops the connection to match —
- * so flipping the setting (including via the `openvsChat.remoteEnable` command) takes effect
+ * Watches `stormcoder.remote.enabled`/`relayUrl` and starts or stops the connection to match —
+ * so flipping the setting (including via the `stormcoder.remoteEnable` command) takes effect
  * without a reload.
  */
 export class RemoteService implements vscode.Disposable {
@@ -72,7 +73,7 @@ export class RemoteService implements vscode.Disposable {
 	 * activity has been recorded yet.
 	 */
 	private lastHostActivityAt = Date.now();
-	/** Set while running in local-hosting mode (`openvsChat.remote.relayMode`): the relay and tunnel this machine runs itself. */
+	/** Set while running in local-hosting mode (`stormcoder.remote.relayMode`): the relay and tunnel this machine runs itself. */
 	private local?: LocalHosting;
 	/**
 	 * Whether the next {@link start} may install `cloudflared` without asking — true only right
@@ -81,15 +82,23 @@ export class RemoteService implements vscode.Disposable {
 	private installConsent = false;
 	/** Guards {@link start} against overlapping calls. */
 	private starting = false;
+	/** The keys and stream counters of the paired phones; alive while a connection is. */
+	private e2e?: HostE2E;
+	/** Inbound frames are opened one at a time, so they reach the host in the order they arrived. */
+	private inbound: Promise<void> = Promise.resolve();
+	/** Claims being verified, by device id: a phone's first connection must wait for its own claim. */
+	private readonly claims = new Map<string, Promise<boolean>>();
+	/** Said once per connection: a device paired before encryption existed, or an unsealed frame, was turned away. */
+	private warnedLegacy = false;
 
 	constructor(
 		private readonly context: vscode.ExtensionContext,
 		private readonly view: ChatViewProvider,
 	) {
 		this.configListener = vscode.workspace.onDidChangeConfiguration(e => {
-			if (e.affectsConfiguration('openvsChat.remote.enabled') || e.affectsConfiguration('openvsChat.remote.relayUrl')) {
+			if (e.affectsConfiguration('stormcoder.remote.enabled') || e.affectsConfiguration('stormcoder.remote.relayUrl')) {
 				void this.sync();
-			} else if (['relayMode', 'tunnelHostname', 'localPort', 'cloudflaredPath'].some(key => e.affectsConfiguration(`openvsChat.remote.${key}`))) {
+			} else if (['relayMode', 'tunnelHostname', 'localPort', 'cloudflaredPath'].some(key => e.affectsConfiguration(`stormcoder.remote.${key}`))) {
 				// How the relay is hosted changed: rebuild the connection (or start one, when the
 				// switch to local hosting is what makes it runnable at all).
 				this.restart();
@@ -122,15 +131,22 @@ export class RemoteService implements vscode.Disposable {
 	 */
 	async pair(): Promise<PairingResult> {
 		if (!this.socket || !this.relayUrl || !this.publicRoomId) {
-			throw new Error('Remote control is not connected yet. Enable it (openvsChat.remoteEnable) and wait for a connection first.');
+			throw new Error('Remote control is not connected yet. Enable it (stormcoder.remoteEnable) and wait for a connection first.');
 		}
 		const socket = this.socket;
 		const publicRoomId = this.publicRoomId;
+		const e2e = this.e2e;
+		if (!e2e) {
+			throw new Error('Remote control is not connected yet.');
+		}
 		// Local hosting: the host talks to the relay on loopback, but the phone needs the
 		// tunnel's public address — wait for the tunnel if it's still coming up.
 		const base = this.local ? await this.local.publicUrl() : this.relayUrl;
-		const { code, expiresAt } = await requestPairing(socket);
-		return { code, expiresAt, url: buildPairingUrl(base, publicRoomId, code), hint: this.pairingHint() };
+		// The secret is made here and shown only to the person at this screen (in the link's
+		// fragment, which no server receives). The relay is given just a code derived from it.
+		const pairing = await e2e.completePairing(e2e.beginPairing());
+		const { expiresAt } = await requestPairing(socket, pairing.code);
+		return { code: groupSecret(pairing.secret), expiresAt, url: buildPairingUrl(base, publicRoomId, pairing.secret), hint: this.pairingHint() };
 	}
 
 	/**
@@ -151,7 +167,7 @@ export class RemoteService implements vscode.Disposable {
 	}
 
 	/**
-	 * Called by `openvsChat.remoteEnable` right before it turns the setting on: the user asked
+	 * Called by `stormcoder.remoteEnable` right before it turns the setting on: the user asked
 	 * for remote, so local hosting may install `cloudflared` without a second prompt.
 	 */
 	enableRequested(): void {
@@ -169,13 +185,13 @@ export class RemoteService implements vscode.Disposable {
 		void this.sync();
 	}
 
-	/** Human-readable connection status — `openvsChat.remoteStatus`'s implementation. */
+	/** Human-readable connection status — `stormcoder.remoteStatus`'s implementation. */
 	status(): string {
 		if (!isRemoteEnabled()) {
 			return 'disabled';
 		}
 		if (getRelayMode() === 'hosted' && !getRelayUrl()) {
-			return 'enabled, but no relay URL is configured (set openvsChat.remote.relayUrl)';
+			return 'enabled, but no relay URL is configured (set stormcoder.remote.relayUrl)';
 		}
 		const connection = this.socket?.getStatus() ?? 'not connected';
 		return this.local ? `${connection} — ${this.local.status()}` : connection;
@@ -214,7 +230,7 @@ export class RemoteService implements vscode.Disposable {
 	private async startConnection(): Promise<void> {
 		const workspaceKey = getWorkspaceKey();
 		if (!workspaceKey) {
-			vscode.window.showWarningMessage('OpenVS remote control needs an open folder or workspace to pair a room to — open one first.');
+			vscode.window.showWarningMessage('Stormcoder remote control needs an open folder or workspace to pair a room to — open one first.');
 			return;
 		}
 		const roomSecret = await getOrCreateRoomSecret(this.context, workspaceKey);
@@ -224,10 +240,10 @@ export class RemoteService implements vscode.Disposable {
 		if (getRelayMode() === 'local') {
 			const local = new LocalHosting(this.context, () => {
 				void vscode.window.showWarningMessage(
-					'The OpenVS Remote public address changed (the Cloudflare quick tunnel restarted), so paired phones need to pair again. Set up a named tunnel ("Remote: Use My Cloudflare Tunnel") for an address that never changes.',
+					'The Stormcoder Remote public address changed (the Cloudflare quick tunnel restarted), so paired phones need to pair again. Set up a named tunnel ("Remote: Use My Cloudflare Tunnel") for an address that never changes.',
 					'Pair a Device').then(choice => {
 					if (choice) {
-						void vscode.commands.executeCommand('openvsChat.openSettings');
+						void vscode.commands.executeCommand('stormcoder.openSettings');
 					}
 				});
 			});
@@ -237,7 +253,7 @@ export class RemoteService implements vscode.Disposable {
 				await local.start(publicRoomId, hostToken, askFirst);
 			} catch (err) {
 				local.dispose();
-				void vscode.window.showErrorMessage(`OpenVS Remote couldn't start its local relay: ${err instanceof Error ? err.message : String(err)}`);
+				void vscode.window.showErrorMessage(`Stormcoder Remote couldn't start its local relay: ${err instanceof Error ? err.message : String(err)}`);
 				return;
 			}
 			if (this.socket || !this.canRun()) {
@@ -257,7 +273,9 @@ export class RemoteService implements vscode.Disposable {
 			return; // turned off while the room secret was being read
 		}
 		const socket = new RemoteSocket({ relayUrl, publicRoomId, hostToken });
-		const sink = new RemoteSink(REMOTE_SINK_ID, socket);
+		const e2e = new HostE2E(this.context.secrets, this.context.workspaceState);
+		const sink = new RemoteSink(REMOTE_SINK_ID, socket, e2e);
+		this.e2e = e2e;
 		this.socket = socket;
 		this.sink = sink;
 		this.relayUrl = relayUrl;
@@ -274,7 +292,11 @@ export class RemoteService implements vscode.Disposable {
 		this.view.setPairingHandler(() => this.pair());
 		this.view.setDevicesHandler({
 			list: () => fetchDevices(relayUrl, publicRoomId, hostToken),
-			revoke: deviceId => revokeDevice(socket, deviceId),
+			revoke: async deviceId => {
+				const confirmed = await revokeDevice(socket, deviceId);
+				await e2e.remove(deviceId);
+				return confirmed;
+			},
 		});
 		this.view.setRemoteStatus(true, false);
 		socket.connect();
@@ -301,6 +323,9 @@ export class RemoteService implements vscode.Disposable {
 		}
 		this.sink = undefined;
 		this.socket = undefined;
+		this.e2e = undefined;
+		this.claims.clear();
+		this.warnedLegacy = false;
 		this.relayUrl = undefined;
 		this.publicRoomId = undefined;
 		this.hostToken = undefined;
@@ -317,7 +342,7 @@ export class RemoteService implements vscode.Disposable {
 
 	/**
 	 * Phase 7c's `idleDisableHours` enforcement: tears down the live connection without
-	 * flipping `openvsChat.remote.enabled` — that setting is the user's own toggle, and per the
+	 * flipping `stormcoder.remote.enabled` — that setting is the user's own toggle, and per the
 	 * plan a later resume should not require them to re-discover a setting they never touched
 	 * (see `onLocalActivity`, which is what actually resumes it). Reports `enabled: true`
 	 * (unlike {@link stop}, which reports `false`) with `idleDisabled: true` so the status
@@ -331,7 +356,7 @@ export class RemoteService implements vscode.Disposable {
 	 */
 	private disconnectForIdle(): void {
 		const hours = getIdleDisableHours();
-		console.log(`OpenVS remote: auto-disconnecting — no local host activity for over ${hours}h.`);
+		console.log(`Stormcoder remote: auto-disconnecting — no local host activity for over ${hours}h.`);
 		this.teardownConnection();
 		this.view.setRemoteStatus(true, false, true);
 	}
@@ -353,15 +378,16 @@ export class RemoteService implements vscode.Disposable {
 		this.view.setRemoteStatus(true, status === 'connected');
 		if (status === 'connected') {
 			this.sendCatchUp();
+			void this.reconcileDevices();
 		} else if (status === 'unavailable') {
 			if (!this.reportedUnavailable) {
 				this.reportedUnavailable = true;
 				vscode.window.showErrorMessage(
-					'OpenVS remote control isn\'t available in this VS Code build: no WebSocket implementation was found in the extension host.');
+					'Stormcoder remote control isn\'t available in this VS Code build: no WebSocket implementation was found in the extension host.');
 			}
 		} else if (status === 'displaced') {
 			vscode.window.showWarningMessage(
-				'OpenVS remote control was disconnected: another VS Code window took over this workspace\'s room.');
+				'Stormcoder remote control was disconnected: another VS Code window took over this workspace\'s room.');
 		}
 		// 'connecting' / 'disconnected': nothing to do beyond what the status getter already reports.
 	}
@@ -391,19 +417,40 @@ export class RemoteService implements vscode.Disposable {
 			this.handleControlFrame(envelope);
 			return;
 		}
-		if (envelope.t !== 'm' || !this.sink) {
+		if (envelope.t !== 'm' || !this.sink || !this.e2e) {
 			return;
 		}
 		const payload = envelope.p;
-		if (typeof payload !== 'object' || payload === null || typeof (payload as Record<string, unknown>).type !== 'string') {
+		this.inbound = this.inbound.then(() => this.handleSealed(payload)).catch(() => { /* one bad frame never stops the next */ });
+	}
+
+	/**
+	 * Opens one `t: 'm'` payload and, if it is a fresh frame from a device the desktop holds keys
+	 * for, dispatches the message it carried. Anything else is dropped without a reply: a frame
+	 * that is not sealed (the key-agreement reply is the only unsealed frame, and it goes the other
+	 * way), is for an unknown device, fails authentication or repeats an old one gets nothing back,
+	 * so the relay learns nothing from probing.
+	 */
+	private async handleSealed(payload: unknown): Promise<void> {
+		const e2e = this.e2e;
+		const sink = this.sink;
+		if (!e2e || !sink) {
 			return;
 		}
-		const message = payload as Record<string, unknown> & { type: string };
-		if (!isRemoteAllowed(message.type)) {
-			this.view.postToSink(this.sink.id, { type: 'error', message: `"${message.type}" is not permitted from a remote client.` });
+		const opened = await e2e.openFrom(payload);
+		if (!opened) {
 			return;
 		}
-		this.view.dispatchRemoteMessage(message, this.sink.id);
+		const message = opened.message;
+		if (typeof message !== 'object' || message === null || typeof (message as Record<string, unknown>).type !== 'string') {
+			return;
+		}
+		const typed = message as Record<string, unknown> & { type: string };
+		if (!isRemoteAllowed(typed.type)) {
+			this.view.postToSink(sink.id, { type: 'error', message: `"${typed.type}" is not permitted from a remote client.` });
+			return;
+		}
+		this.view.dispatchRemoteMessage(typed, sink.id);
 	}
 
 	/**
@@ -414,7 +461,19 @@ export class RemoteService implements vscode.Disposable {
 	 * background) is deliberately silent, per the frame's own doc on spam avoidance.
 	 */
 	private handleControlFrame(envelope: Envelope): void {
-		if (!isControlFrame(envelope.p) || envelope.p.c !== 'deviceConnected' || !envelope.p.firstConnect) {
+		if (!isControlFrame(envelope.p)) {
+			return;
+		}
+		if (envelope.p.c === 'deviceClaimed') {
+			const { deviceId, name, pub, mac } = envelope.p;
+			void this.claimDevice(deviceId, name, pub, mac);
+			return;
+		}
+		if (envelope.p.c !== 'deviceConnected') {
+			return;
+		}
+		void this.deviceConnected(envelope.p.deviceId);
+		if (!envelope.p.firstConnect) {
 			return;
 		}
 		const { deviceId, name } = envelope.p;
@@ -422,12 +481,126 @@ export class RemoteService implements vscode.Disposable {
 			if (choice === 'Revoke' && this.socket) {
 				// Someone revoking a device they did not expect to see needs to know it worked.
 				revokeDevice(this.socket, deviceId).then(
+					async confirmed => {
+						await this.e2e?.remove(deviceId);
+						return confirmed;
+					}).then(
 					confirmed => confirmed
 						? vscode.window.showInformationMessage(`${name} was revoked.`)
 						: vscode.window.showWarningMessage(`The relay did not confirm revoking ${name}. Check the device list in Stormcoder settings.`),
 					err => vscode.window.showErrorMessage(err instanceof Error ? err.message : String(err)));
 			}
 		});
+	}
+
+	/**
+	 * A phone has claimed a pairing: checks its proof against the pairings on screen and, if it
+	 * matches, derives its keys and sends the key-agreement reply. A device that cannot prove it
+	 * saw the pairing secret (someone who got the code from the relay, or a relay trying its own
+	 * key) is revoked on the spot.
+	 */
+	private claimDevice(deviceId: string, name: string, pub: string, mac: string): Promise<boolean> {
+		const e2e = this.e2e;
+		if (!e2e) {
+			return Promise.resolve(false);
+		}
+		// One verdict per device. A second look at the same claim (the relay repeating it, or the
+		// list read after reconnecting) must not run again: the pairing secret is spent by the first,
+		// so the second would find no match and revoke a phone that had just paired properly.
+		const earlier = this.claims.get(deviceId);
+		if (earlier) {
+			return earlier;
+		}
+		const claim = (async () => {
+			const accepted = await e2e.acceptDevice(deviceId, name, pub, mac);
+			if (accepted) {
+				this.sendHandshakes(deviceId);
+			} else {
+				void this.rejectDevice(deviceId, `"${name}" tried to pair without the key shown on this screen, so it was removed.`);
+			}
+			return accepted;
+		})().catch(() => false);
+		this.claims.set(deviceId, claim);
+		return claim;
+	}
+
+	/** Revokes a device that cannot be trusted, forgets any keys, and says why. */
+	private async rejectDevice(deviceId: string, why: string): Promise<void> {
+		await this.e2e?.remove(deviceId);
+		if (this.socket) {
+			revokeDevice(this.socket, deviceId).catch(() => undefined);
+		}
+		void vscode.window.showWarningMessage(why);
+	}
+
+	/**
+	 * A phone connected. One that pairs but has no keys (it was paired before encryption, or never
+	 * finished) is revoked; one with keys gets a new outgoing stream and, until it proves it holds
+	 * the keys by sending its first sealed frame, the key-agreement reply (repeated a few times:
+	 * the first can arrive before the phone has attached).
+	 */
+	private async deviceConnected(deviceId: string): Promise<void> {
+		const e2e = this.e2e;
+		if (!e2e) {
+			return;
+		}
+		await this.claims.get(deviceId);
+		if (!e2e.has(deviceId)) {
+			if (!this.warnedLegacy) {
+				this.warnedLegacy = true;
+				void vscode.window.showWarningMessage('A phone that was paired before remote control was encrypted tried to connect. It was removed: pair it again from Settings > Remote control.');
+			}
+			await this.rejectDeviceQuietly(deviceId);
+			return;
+		}
+		await e2e.newStream(deviceId);
+		this.sendHandshakes(deviceId);
+	}
+
+	private async rejectDeviceQuietly(deviceId: string): Promise<void> {
+		await this.e2e?.remove(deviceId);
+		if (this.socket) {
+			revokeDevice(this.socket, deviceId).catch(() => undefined);
+		}
+	}
+
+	/** Sends the key-agreement reply to a device now and a few times over the next seconds, until it has answered with a sealed frame. */
+	private sendHandshakes(deviceId: string): void {
+		for (const delay of [0, 1500, 4000, 9000]) {
+			setTimeout(() => {
+				const handshake = this.e2e?.handshakeFor(deviceId);
+				if (handshake && this.sink) {
+					this.sink.sendHandshake(handshake);
+				}
+			}, delay).unref?.();
+		}
+	}
+
+	/**
+	 * After connecting: any device the relay lists that the desktop holds no keys for either
+	 * claimed a pairing while the desktop was away (verified now, if its pairing is still on
+	 * screen) or was paired before encryption. The first may be completed; everything else is revoked.
+	 */
+	private async reconcileDevices(): Promise<void> {
+		const e2e = this.e2e;
+		if (!e2e || !this.relayUrl || !this.publicRoomId || !this.hostToken) {
+			return;
+		}
+		let devices: DeviceInfo[];
+		try {
+			devices = await fetchDevices(this.relayUrl, this.publicRoomId, this.hostToken);
+		} catch {
+			return;
+		}
+		for (const device of devices) {
+			if (device.revokedAt !== null || e2e.has(device.id) || this.claims.has(device.id)) {
+				continue;
+			}
+			if (device.pub && device.mac && await this.claimDevice(device.id, device.name, device.pub, device.mac)) {
+				continue;
+			}
+			await this.rejectDeviceQuietly(device.id);
+		}
 	}
 
 	/**
@@ -443,7 +616,7 @@ export class RemoteService implements vscode.Disposable {
 		this.sweepIdle();
 	}
 
-	/** Revokes every device whose token has aged past `openvsChat.remote.deviceTokenDays`. Errors fetching the list are logged and otherwise swallowed — a background hygiene pass failing once must not surface as a user-facing error on an unrelated action. */
+	/** Revokes every device whose token has aged past `stormcoder.remote.deviceTokenDays`. Errors fetching the list are logged and otherwise swallowed — a background hygiene pass failing once must not surface as a user-facing error on an unrelated action. */
 	private async sweepDeviceAge(): Promise<void> {
 		if (!this.socket || !this.relayUrl || !this.publicRoomId || !this.hostToken) {
 			return;
@@ -453,7 +626,7 @@ export class RemoteService implements vscode.Disposable {
 		try {
 			devices = await fetchDevices(this.relayUrl, this.publicRoomId, this.hostToken);
 		} catch (err) {
-			console.warn('OpenVS remote: device sweep could not fetch the device list.', err);
+			console.warn('Stormcoder remote: device sweep could not fetch the device list.', err);
 			return;
 		}
 		const deviceTokenDays = getDeviceTokenDays();
@@ -463,14 +636,14 @@ export class RemoteService implements vscode.Disposable {
 				continue;
 			}
 			if (shouldRevokeForTokenAge(device.createdAt, deviceTokenDays, now)) {
-				console.log(`OpenVS remote: revoking device "${device.name}" (${device.id}) — its token is older than ${deviceTokenDays}d.`);
+				console.log(`Stormcoder remote: revoking device "${device.name}" (${device.id}) — its token is older than ${deviceTokenDays}d.`);
 				// The next sweep retries whatever this one could not revoke.
-				revokeDevice(socket, device.id).catch(err => console.warn(`OpenVS remote: could not revoke "${device.name}".`, err));
+				revokeDevice(socket, device.id).then(() => this.e2e?.remove(device.id), err => console.warn(`Stormcoder remote: could not revoke "${device.name}".`, err));
 			}
 		}
 	}
 
-	/** Disconnects (see {@link disconnectForIdle}) once no local host activity has been seen for over `openvsChat.remote.idleDisableHours`. */
+	/** Disconnects (see {@link disconnectForIdle}) once no local host activity has been seen for over `stormcoder.remote.idleDisableHours`. */
 	private sweepIdle(): void {
 		if (!this.socket) {
 			return;

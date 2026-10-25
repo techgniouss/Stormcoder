@@ -8,8 +8,10 @@ function findInstalled() {
 	for (const base of [process.env.PLAYWRIGHT_BROWSERS_PATH, '/opt/pw-browsers'].filter(Boolean)) {
 		if (!fs.existsSync(base)) { continue; }
 		for (const dir of fs.readdirSync(base).filter(d => d.startsWith('chromium-'))) {
-			const exe = path.join(base, dir, 'chrome-linux', 'chrome');
-			if (fs.existsSync(exe)) { return exe; }
+			for (const sub of ['chrome-linux', 'chrome-linux64']) {
+				const exe = path.join(base, dir, sub, 'chrome');
+				if (fs.existsSync(exe)) { return exe; }
+			}
 		}
 	}
 	return undefined;

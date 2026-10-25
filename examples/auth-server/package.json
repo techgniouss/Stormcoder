@@ -2,7 +2,7 @@
   "name": "openvs-chat-auth-server-example",
   "version": "1.0.0",
   "private": true,
-  "description": "Reference web sign-in server for the OpenVS AI Chat extension.",
+  "description": "Reference web sign-in server for the Stormcoder AI Chat extension.",
   "type": "module",
   "license": "MIT",
   "scripts": {

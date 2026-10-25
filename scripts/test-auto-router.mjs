@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Standalone unit test for Auto's model routing in src/auto/router.ts. Run:
@@ -15,7 +15,7 @@
 import assert from 'node:assert/strict';
 import Module from 'node:module';
 
-/** Settings the stubbed `getConfiguration('openvsChat')` reports. */
+/** Settings the stubbed `getConfiguration('stormcoder')` reports. */
 let settings = {};
 
 const vscodeStub = {

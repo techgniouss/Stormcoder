@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // @ts-check
@@ -11,20 +11,20 @@
 	 * in chatViewProvider). The same UI serves both surfaces; this flag hides the chat
 	 * chrome and pins the settings panel open so it fills the editor column.
 	 */
-	const SETTINGS_ONLY = !!(/** @type {any} */ (window).__OPENVS_SETTINGS_ONLY__);
+	const SETTINGS_ONLY = !!(/** @type {any} */ (window).__STORM_SETTINGS_ONLY__);
 
 	/**
 	 * URI of the brand mark shown on a fresh chat, handed over by the host because a
 	 * relative path here would resolve against the webview document, not `media/`.
 	 * Always set by `getHtml`; `test-webview` fails if that ever stops being true.
 	 */
-	const HERO_URI = /** @type {string} */ (window.__OPENVS_HERO_URI__ || '');
+	const HERO_URI = /** @type {string} */ (window.__STORM_HERO_URI__ || '');
 
 	/** Sentinel provider id for the role-routed Auto pipeline (mirrors chatViewProvider). */
 	const AUTO_PROVIDER = '__auto__';
 	const ROLE_LABELS = { plan: 'Planning', code: 'Implementation', review: 'Review' };
 
-	/** Agent approval levels (mirrors `openvsChat.guardrails.approval`), most permissive first. */
+	/** Agent approval levels (mirrors `stormcoder.guardrails.approval`), most permissive first. */
 	const APPROVAL_OPTIONS = [
 		{ value: 'yolo', label: 'Full Auto', desc: 'Never asks — the agent edits files and runs commands on its own. Hard guardrails (protected paths, denied commands, workspace confinement) still apply.' },
 		{ value: 'auto-edits', label: 'Default', desc: 'Auto-approves file edits inside the workspace; asks before running commands.' },
@@ -69,10 +69,10 @@
 	let slashCommands = [];
 	/** @type {{ roles: any[], reviewEnabled: boolean, decompose?: boolean }} */
 	let autoConfig = { roles: [], reviewEnabled: true };
-	/** Current agent approval level (synced from `openvsChat.guardrails.approval`). */
+	/** Current agent approval level (synced from `stormcoder.guardrails.approval`). */
 	let approval = 'auto-edits';
-	/** Mirrors `openvsChat.systemPrompt` / `maxTokens` / `rules` / `agent.max*`, synced on every 'config'. */
-	let generalConfig = { systemPrompt: '', maxTokens: 8192, rules: '', maxSteps: 100, maxRunMinutes: 30 };
+	/** Mirrors `stormcoder.systemPrompt` / `maxTokens` / `rules` / `agent.max*`, synced on every 'config'. */
+	let generalConfig = { systemPrompt: '', maxTokens: 8192, rules: '', maxSteps: 100, maxRunMinutes: 30, memoryEnabled: true, memoryRecentRuns: 5 };
 	/** @type {{ label: string, content: string } | null} */
 	let currentContext = null;
 	/** The DOM bubble of the active session's in-flight assistant turn (model of record is `session.pending`). */
@@ -166,6 +166,22 @@
 		saveMaxSteps: $('saveMaxSteps'),
 		maxRunMinutesInput: /** @type {HTMLInputElement} */ ($('maxRunMinutesInput')),
 		saveMaxRunMinutes: $('saveMaxRunMinutes'),
+		enableMemory: /** @type {HTMLInputElement} */ ($('enableMemory')),
+		memoryRecentRunsInput: /** @type {HTMLInputElement} */ ($('memoryRecentRunsInput')),
+		saveMemoryRecentRuns: $('saveMemoryRecentRuns'),
+		memoryAutoPropose: /** @type {HTMLInputElement} */ ($('memoryAutoPropose')),
+		memoryStatus: $('memoryStatus'),
+		memoryNotice: $('memoryNotice'),
+		memorySuggestions: $('memorySuggestions'),
+		memoryProject: $('memoryProject'),
+		memoryUser: $('memoryUser'),
+		memoryProjectTitle: $('memoryProjectTitle'),
+		memoryClearProject: $('memoryClearProject'),
+		memoryClearUser: $('memoryClearUser'),
+		memoryNewScope: $('memoryNewScope'),
+		memoryNewType: $('memoryNewType'),
+		memoryNewText: /** @type {HTMLInputElement} */ ($('memoryNewText')),
+		memoryAddBtn: $('memoryAddBtn'),
 		enableDecompose: /** @type {HTMLInputElement} */ ($('enableDecompose')),
 		enableReview: /** @type {HTMLInputElement} */ ($('enableReview')),
 		messages: $('messages'),
@@ -254,7 +270,7 @@
 
 	// The renderer itself lives in media/markdown.js — pure string → HTML, so it can be
 	// driven directly by scripts/test-markdown.mjs, which nothing inside this IIFE can be.
-	const { render: renderMarkdown, escapeHtml } = OpenVSMarkdown;
+	const { render: renderMarkdown, escapeHtml } = StormMarkdown;
 
 	/**
 	 * Renders markdown into a message body, preserving which reasoning blocks the user had
@@ -749,7 +765,7 @@
 	// tested against a DOM stand-in: this file is one big IIFE that needs a live workbench
 	// to load, and these cards are the one place where a silent rendering failure strands
 	// an agent run rather than merely looking wrong.
-	const prompts = OpenVSPrompts.create({
+	const prompts = StormPrompts.create({
 		// Cards append straight into the transcript, which would leave them below the
 		// working strip — the run is still going, so the strip has to stay at the foot.
 		container: { appendChild: node => { els.messages.appendChild(node); keepWorkingLast(); } },
@@ -768,7 +784,7 @@
 	 * the same testability reasons as `prompts` above. Lives in the Settings panel
 	 * (`#remotePanel`), not the transcript.
 	 */
-	const pairing = OpenVSPairing.create({ container: els.remotePanel, post: m => vscode.postMessage(m) });
+	const pairing = StormPairing.create({ container: els.remotePanel, post: m => vscode.postMessage(m) });
 
 	/** Re-attaches every unanswered card for the active tab after a transcript rebuild. */
 	function renderOpenPrompts() {
@@ -1158,17 +1174,6 @@
 	/** Sentinel value of the "Custom model id…" entry in an Auto-Routing model picker. */
 	const CUSTOM_MODEL = '__custom__';
 
-	/** Model ids to offer for a provider: the live-fetched catalog wins once it exists,
-	 * falling back to the small hardcoded `suggestedModels` list before anything has been
-	 * fetched. Shared by the main model select and the Auto-Routing role datalists so both
-	 * show the same (real) catalog instead of the latter being stuck on 1-2 suggestions. */
-	function providerModelIds(providerId) {
-		const live = fetchedModels[providerId];
-		if (live && live.length) { return live.map(e => e.id); }
-		const p = providers.find(x => x.id === providerId);
-		return (p && p.suggestedModels) || [];
-	}
-
 	/** Accepts entries or bare id strings (older host builds) and normalizes to entries. */
 	function normalizeModelEntries(models) {
 		return (models || [])
@@ -1267,6 +1272,11 @@
 		}
 		if (els.maxRunMinutesInput && document.activeElement !== els.maxRunMinutesInput) {
 			els.maxRunMinutesInput.value = String(generalConfig.maxRunMinutes);
+		}
+		if (els.enableMemory) { els.enableMemory.checked = !!generalConfig.memoryEnabled; }
+		if (els.memoryRecentRunsInput && document.activeElement !== els.memoryRecentRunsInput) {
+			els.memoryRecentRunsInput.value = String(generalConfig.memoryRecentRuns);
+			els.memoryRecentRunsInput.disabled = !generalConfig.memoryEnabled;
 		}
 		els.providerList.innerHTML = '';
 		for (const p of providers) {
@@ -1406,6 +1416,206 @@
 		renderApprovalList();
 		renderSkillList();
 		vscode.postMessage({ type: 'listMcp' });
+		memoryPost({ type: 'memoryList' });
+	}
+
+	// ---- Memory panel ----------------------------------------------------------
+	/** @type {{ enabled: boolean, autoPropose: boolean, hasProject: boolean, trusted: boolean, tokens: number, types: string[], project?: any, user?: any } | null} */
+	let memoryState = null;
+	let memoryNewScope = 'project';
+	let memoryNewType = 'note';
+	/** The line being edited, by its exact text, so a re-render does not drop the edit box. */
+	let memoryEditing = '';
+	/** Clear buttons that were pressed once and now ask to be pressed again. */
+	const memoryArmed = new Set();
+
+	/** Posts a Memory panel request. */
+	function memoryPost(message) {
+		vscode.postMessage(message);
+	}
+
+	/**
+	 * One button of a small button group (used instead of a native select, which the app's
+	 * styling cannot reach). `pressed` marks the current choice.
+	 * @param {HTMLElement} group @param {string[][]} options [value, label] pairs
+	 * @param {string} current @param {(value: string) => void} onPick
+	 */
+	function buttonGroup(group, options, current, onPick) {
+		group.textContent = '';
+		for (const [value, label] of options) {
+			const b = document.createElement('button');
+			b.className = 'mini-button';
+			b.textContent = label;
+			b.setAttribute('aria-pressed', String(value === current));
+			b.addEventListener('click', () => onPick(value));
+			group.appendChild(b);
+		}
+	}
+
+	/**
+	 * One saved line: its kind, text and date, with pin, edit and delete. A line from the
+	 * pre-rename folder is shown but cannot be changed here.
+	 * @param {any} e @param {string} scope
+	 */
+	function memoryRow(e, scope) {
+		const row = document.createElement('div');
+		row.className = 'skill-row mem-row' + (e.pinned ? ' pinned' : '') + (e.legacy ? ' legacy' : '');
+		const info = document.createElement('div');
+		info.className = 'skill-info';
+		if (memoryEditing === e.raw && !e.legacy) {
+			const input = document.createElement('input');
+			input.type = 'text';
+			input.className = 'settings-textarea mem-edit';
+			input.maxLength = 300;
+			input.value = e.text;
+			const save = document.createElement('button');
+			save.className = 'mini-button';
+			save.textContent = 'Save';
+			save.addEventListener('click', () => {
+				memoryEditing = '';
+				memoryPost({ type: 'memoryEdit', memoryScope: scope, memoryRaw: e.raw, memoryText: input.value });
+			});
+			const cancel = document.createElement('button');
+			cancel.className = 'mini-button';
+			cancel.textContent = 'Cancel';
+			cancel.addEventListener('click', () => { memoryEditing = ''; renderMemory(); });
+			input.addEventListener('keydown', ev => { if (ev.key === 'Enter') { save.click(); } else if (ev.key === 'Escape') { cancel.click(); } });
+			info.append(input);
+			const actions = document.createElement('div');
+			actions.className = 'mem-actions';
+			actions.append(save, cancel);
+			row.append(info, actions);
+			setTimeout(() => input.focus(), 0);
+			return row;
+		}
+		if (e.type) {
+			const tag = document.createElement('span');
+			tag.className = 'mem-tag';
+			tag.textContent = e.type + (e.pinned ? ' · pinned' : '');
+			info.appendChild(tag);
+		} else if (e.legacy) {
+			const tag = document.createElement('span');
+			tag.className = 'mem-tag';
+			tag.textContent = 'from .openvs';
+			info.appendChild(tag);
+		}
+		const text = document.createElement('span');
+		text.className = 'mem-text';
+		text.textContent = e.text;
+		info.appendChild(text);
+		if (e.date) {
+			const d = document.createElement('div');
+			d.className = 'skill-desc';
+			d.textContent = e.date;
+			info.appendChild(d);
+		}
+		row.appendChild(info);
+		if (!e.legacy) {
+			const actions = document.createElement('div');
+			actions.className = 'mem-actions';
+			const mk = (label, handler) => {
+				const b = document.createElement('button');
+				b.className = 'mini-button';
+				b.textContent = label;
+				b.addEventListener('click', handler);
+				actions.appendChild(b);
+			};
+			if (e.type) {
+				mk(e.pinned ? 'Unpin' : 'Pin', () => memoryPost({ type: 'memoryEdit', memoryScope: scope, memoryRaw: e.raw, memoryPinned: !e.pinned }));
+			}
+			mk('Edit', () => { memoryEditing = e.raw; renderMemory(); });
+			mk('Delete', () => memoryPost({ type: 'memoryDelete', memoryScope: scope, memoryRaw: e.raw }));
+			row.appendChild(actions);
+		}
+		return row;
+	}
+
+	/** Renders the whole Memory panel from the last state the host sent. */
+	function renderMemory() {
+		if (!els.memoryStatus || !memoryState) { return; }
+		const st = memoryState;
+		els.enableMemory.checked = !!st.enabled;
+		els.memoryAutoPropose.checked = !!st.autoPropose;
+		els.memoryAutoPropose.disabled = !st.enabled;
+		els.memoryRecentRunsInput.disabled = !st.enabled;
+		els.memoryStatus.textContent = !st.enabled
+			? 'Memory is off: new chats start without it, and the agent cannot save or search notes.'
+			: `New chats start with about ${st.tokens} tokens of memory.`
+				+ (st.hasProject && !st.trusted ? ' This folder is not trusted, so its project memory is not read.' : '')
+				+ (!st.hasProject ? ' No folder is open, so only your own notes apply.' : '');
+		els.memorySuggestions.textContent = '';
+		const waiting = (st.project && st.project.proposals) || [];
+		if (waiting.length) {
+			const h = document.createElement('div');
+			h.className = 'settings-header';
+			h.innerHTML = '<h2>Suggested notes</h2>';
+			els.memorySuggestions.appendChild(h);
+			for (const p of waiting) {
+				const row = document.createElement('div');
+				row.className = 'skill-row mem-row';
+				const info = document.createElement('div');
+				info.className = 'skill-info';
+				const tag = document.createElement('span');
+				tag.className = 'mem-tag';
+				tag.textContent = p.type;
+				const text = document.createElement('span');
+				text.className = 'mem-text';
+				text.textContent = p.text;
+				const why = document.createElement('div');
+				why.className = 'skill-desc';
+				why.textContent = p.goal ? `After: ${p.goal}` : p.date;
+				info.append(tag, text, why);
+				const actions = document.createElement('div');
+				actions.className = 'mem-actions';
+				for (const [label, accept] of [['Accept', true], ['Dismiss', false]]) {
+					const b = document.createElement('button');
+					b.className = 'mini-button';
+					b.textContent = String(label);
+					b.addEventListener('click', () => memoryPost({ type: 'memoryProposal', memoryScope: 'project', suggestionId: p.id, suggestionAccept: accept }));
+					actions.appendChild(b);
+				}
+				row.append(info, actions);
+				els.memorySuggestions.appendChild(row);
+			}
+		}
+		/** @type {Array<[HTMLElement, any, string, string]>} */
+		const lists = [[els.memoryProject, st.project, 'project', 'Nothing saved for this project yet.'], [els.memoryUser, st.user, 'user', 'No personal notes yet.']];
+		for (const [host, view, scope, empty] of lists) {
+			host.textContent = '';
+			const entries = (view && view.entries) || [];
+			if (!entries.length) {
+				const p = document.createElement('div');
+				p.className = 'mem-empty';
+				p.textContent = scope === 'project' && !st.trusted ? 'Not available until the folder is trusted.' : empty;
+				host.appendChild(p);
+			}
+			for (const e of entries) { host.appendChild(memoryRow(e, scope)); }
+		}
+		if (memoryHasJournal(st)) {
+			els.memoryProjectTitle.textContent = `This project (${st.project.journalRuns} run${st.project.journalRuns === 1 ? '' : 's'} journaled)`;
+		} else {
+			els.memoryProjectTitle.textContent = 'This project';
+		}
+		/** @type {Array<[HTMLElement, string]>} */
+		const clears = [[els.memoryClearProject, 'project'], [els.memoryClearUser, 'user']];
+		for (const [btn, scope] of clears) {
+			btn.textContent = memoryArmed.has(scope) ? 'Click again to clear' : 'Clear';
+			btn.classList.toggle('hidden', scope === 'user' ? !st.user : !st.project);
+		}
+		buttonGroup(els.memoryNewScope, [['project', 'This project'], ['user', 'Every project']], memoryNewScope, v => { memoryNewScope = v; renderMemory(); });
+		buttonGroup(els.memoryNewType, (st.types || []).map(t => [t, t]), memoryNewType, v => { memoryNewType = v; renderMemory(); });
+	}
+
+	/** @param {{ project?: any }} st */
+	function memoryHasJournal(st) {
+		return !!(st.project && typeof st.project.journalRuns === 'number');
+	}
+
+	/** Updates the one-line outcome under the memory status. @param {string | undefined} message @param {boolean | undefined} isError */
+	function memoryFeedback(message, isError) {
+		if (!els.memoryNotice) { return; }
+		els.memoryNotice.textContent = message || '';
+		els.memoryNotice.classList.toggle('mem-error', !!isError);
 	}
 
 	/** Renders the skills section in the settings panel. */
@@ -1549,7 +1759,9 @@
 				modelSel.disabled = false;
 				const p = providers.find(x => x.id === providerId);
 				const live = fetchedModels[providerId] || [];
-				const ids = providerModelIds(providerId);
+				// Only what the provider reports: hardcoded suggestions can name models the account
+				// does not have, and a pinned role never substitutes them.
+				const ids = live.map(e => e.id);
 				const add = (id, label) => {
 					const o = document.createElement('option');
 					o.value = id;
@@ -1569,11 +1781,17 @@
 					add(id, id + (modelSupportsTools(p, id) ? '  · tools' : '') + (entry && entry.free ? '  · free' : ''));
 				}
 				add(CUSTOM_MODEL, 'Custom model id…');
+				// A provider switch has no model yet; take the first one the catalog reports as
+				// soon as it arrives, so the row is never left pinned to nothing.
+				if (!pinnedModel && ids.length) {
+					pinnedModel = ids[0];
+					save();
+				}
 				modelSel.value = pinnedModel || '';
 				if (modelSel.value !== pinnedModel) { modelSel.selectedIndex = -1; }
 				modelSel.title = modelErrors[providerId]
-					? `Couldn't load models: ${modelErrors[providerId]} — showing suggested models`
-					: (live.length ? `${live.length} models from ${p ? p.label : providerId}` : 'Suggested models — the live catalog has not loaded yet');
+					? `Couldn't load models: ${modelErrors[providerId]}`
+					: (live.length ? `${live.length} models from ${p ? p.label : providerId}` : 'Loading the live catalog…');
 			};
 			const ensureLiveModels = (providerId) => {
 				if (!providerId || fetchedModels[providerId]) { return; }
@@ -1593,7 +1811,7 @@
 				// `anthropic:meta/llama-3.3-70b-instruct` 404s on the first request of every
 				// Auto run and, being pinned, is never substituted. Keep it only if the new
 				// provider offers it too, else take that provider's first model.
-				const offered = providerModelIds(provSel.value);
+				const offered = (fetchedModels[provSel.value] || []).map(e => e.id);
 				if (!provSel.value || !offered.includes(pinnedModel)) {
 					pinnedModel = provSel.value ? (offered[0] || '') : '';
 				}
@@ -2522,6 +2740,50 @@
 		generalConfig.maxRunMinutes = n;
 		vscode.postMessage({ type: 'setMaxRunMinutes', maxRunMinutes: n });
 	});
+	// Opening the Memory tab reloads it: the agent may have saved a fact, or a run queued a
+	// suggestion, since the list was last drawn.
+	document.addEventListener('click', ev => {
+		const target = /** @type {HTMLElement | null} */ (ev.target instanceof HTMLElement ? ev.target.closest('.area-nav button') : null);
+		if (target && target.dataset.area === 'memory') { memoryPost({ type: 'memoryList' }); }
+	});
+	els.memoryAutoPropose?.addEventListener('change', () => {
+		memoryPost({ type: 'setMemoryAutoPropose', memoryAutoPropose: els.memoryAutoPropose.checked });
+	});
+	els.memoryAddBtn?.addEventListener('click', () => {
+		const text = els.memoryNewText.value.trim();
+		if (!text) { memoryFeedback('Write the note first.', true); return; }
+		memoryPost({ type: 'memoryAdd', memoryScope: memoryNewScope, memoryType: memoryNewType, memoryText: text });
+	});
+	els.memoryNewText?.addEventListener('keydown', ev => { if (ev.key === 'Enter') { els.memoryAddBtn.click(); } });
+	/** @type {Array<[HTMLElement, string]>} */
+	const clearButtons = [[els.memoryClearProject, 'project'], [els.memoryClearUser, 'user']];
+	for (const [btn, scope] of clearButtons) {
+		btn?.addEventListener('click', () => {
+			// Two presses: clearing cannot be undone, and the second one is the confirmation.
+			if (!memoryArmed.has(scope)) {
+				memoryArmed.add(scope);
+				renderMemory();
+				setTimeout(() => { if (memoryArmed.delete(scope)) { renderMemory(); } }, 4000);
+				return;
+			}
+			memoryArmed.delete(scope);
+			memoryPost({ type: 'memoryClear', memoryScope: scope });
+		});
+	}
+	els.enableMemory?.addEventListener('change', () => {
+		generalConfig.memoryEnabled = els.enableMemory.checked;
+		els.memoryRecentRunsInput.disabled = !generalConfig.memoryEnabled;
+		vscode.postMessage({ type: 'setMemoryEnabled', memoryEnabled: els.enableMemory.checked });
+	});
+	els.saveMemoryRecentRuns?.addEventListener('click', () => {
+		const n = parseInt(els.memoryRecentRunsInput.value, 10);
+		if (!Number.isFinite(n) || n < 0 || n > 20) {
+			showNotice('Recent runs must be a number from 0 to 20.', true);
+			return;
+		}
+		generalConfig.memoryRecentRuns = n;
+		vscode.postMessage({ type: 'setMemoryRecentRuns', memoryRecentRuns: n });
+	});
 	els.modelSelect.addEventListener('change', () => {
 		updateModeAvailability();
 		vscode.postMessage({ type: 'setModel', provider: selectedProvider, model: els.modelSelect.value });
@@ -2788,6 +3050,8 @@
 				if (typeof msg.rules === 'string') { generalConfig.rules = msg.rules; }
 				if (typeof msg.maxSteps === 'number') { generalConfig.maxSteps = msg.maxSteps; }
 				if (typeof msg.maxRunMinutes === 'number') { generalConfig.maxRunMinutes = msg.maxRunMinutes; }
+				if (typeof msg.memoryEnabled === 'boolean') { generalConfig.memoryEnabled = msg.memoryEnabled; }
+				if (typeof msg.memoryRecentRuns === 'number') { generalConfig.memoryRecentRuns = msg.memoryRecentRuns; }
 				// Auto stays local-only (the host never persists it as `defaultProvider`), so it's
 				// never touched here. Otherwise, always follow the host's `selectedProvider`: it's
 				// the one shared setting every connected client (this tab, a detached Settings
@@ -2821,6 +3085,13 @@
 				break;
 			case 'openSettings':
 				els.settingsPanel.classList.remove('hidden'); renderSettings();
+				break;
+			case 'memoryState':
+				memoryState = msg.state;
+				// What was added or changed is shown; a rejected edit leaves the box as typed.
+				if (msg.message) { memoryFeedback(msg.message, !!msg.error); }
+				if (/^Remembered/.test(msg.message || '')) { els.memoryNewText.value = ''; }
+				renderMemory();
 				break;
 			case 'models':
 				fetchedModels[msg.provider] = normalizeModelEntries(msg.models);

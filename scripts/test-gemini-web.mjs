@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Standalone unit test for the pure parsing pieces of
@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import Module from 'node:module';
 
-// geminiWebProvider.ts reads a vscode setting (openvsChat.webGemini.enabled) at call time,
+// geminiWebProvider.ts reads a vscode setting (stormcoder.webGemini.enabled) at call time,
 // which the pure functions under test here never reach — stubbed only so the module loads.
 const originalLoad = Module._load;
 Module._load = function (request, parent, isMain) {

@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -20,7 +20,7 @@ interface Pending {
  * Implements a generic web sign-in flow: open a configured auth URL in the browser,
  * let the user authenticate, and receive a token back via the editor's URI handler
  * (`<scheme>://openvs.openvs-chat/auth-callback`). The token is stored as the
- * provider's API key. This works with any backend you point `openvsChat.<id>.authUrl`
+ * provider's API key. This works with any backend you point `stormcoder.<id>.authUrl`
  * at (your own proxy/OAuth service), so users can "log in" instead of pasting a key.
  */
 export class WebAuthManager implements vscode.UriHandler {
@@ -56,7 +56,7 @@ export class WebAuthManager implements vscode.UriHandler {
 			if (supportsNativeSignIn(providerId)) {
 				return this.nativeSignIn(providerId);
 			}
-			throw new Error('No web sign-in URL is configured for this provider. Set "openvsChat.' + providerId + '.authUrl" or add an API key instead.');
+			throw new Error('No web sign-in URL is configured for this provider. Set "stormcoder.' + providerId + '.authUrl" or add an API key instead.');
 		}
 
 		// The only thing standing between a crafted `vscode://…/auth-callback` link (any web page

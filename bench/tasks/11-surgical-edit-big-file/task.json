@@ -1,0 +1,11 @@
+{
+  "id": "11-surgical-edit-big-file",
+  "title": "One-line change in a 900-function file",
+  "category": "precision",
+  "mode": "agent",
+  "prompts": [
+    "In src/big.js, function `f0450` should return 'beta' instead of 'alpha'. Change nothing else."
+  ],
+  "timeoutSec": 240,
+  "setup": "setup.mjs"
+}

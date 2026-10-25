@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // The local relay (src/remote/local/relayServer.ts + websocket.ts) run for real: a live HTTP
@@ -16,9 +16,15 @@ import path from 'node:path';
 
 const { LocalRelay, memoryStore, fileStore } = await import(new URL('../out/remote/local/relayServer.js', import.meta.url));
 
-const pwaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openvs-pwa-'));
-fs.writeFileSync(path.join(pwaDir, 'index.html'), '<!doctype html><title>OpenVS Remote</title>');
+const pwaDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stormcoder-pwa-'));
+fs.writeFileSync(path.join(pwaDir, 'index.html'), '<!doctype html><title>Stormcoder Remote</title>');
 fs.writeFileSync(path.join(pwaDir, 'app.js'), 'console.log(1);');
+
+/** What a phone sends with its claim: the shape of its end-to-end key and proof (the relay checks shape only). */
+const KEYS = { pub: 'P'.repeat(87), mac: 'M'.repeat(43) };
+/** A fresh valid pairing code each time, as the desktop derives one from its pairing secret. */
+let codeCounter = 0;
+const nextCode = () => `ABCD${String(1000 + codeCounter++)}`;
 
 const ROOM = 'ROOM1';
 const HOST_TOKEN = 'host-token';
@@ -55,12 +61,12 @@ function open(url, init) {
 }
 const control = (ws, p, seq = 1) => ws.send(JSON.stringify({ v: 1, t: 'c', seq, p }));
 const isC = verb => env => env.t === 'c' && env.p?.c === verb;
-const claim = code => fetch(`${base}/pair/claim?room=${ROOM}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, name: 'Test phone' }) });
+const claim = code => fetch(`${base}/pair/claim?room=${ROOM}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, name: 'Test phone', ...KEYS }) });
 
 // The phone app is served, with /p/<room> routed to its index like the cloud relay's SPA assets.
 assert.equal((await fetch(`${base}/app.js`)).status, 200);
-assert.match(await (await fetch(`${base}/p/${ROOM}`)).text(), /OpenVS Remote/);
-assert.match(await (await fetch(`${base}/../../etc/passwd`)).text(), /OpenVS Remote/, 'a path outside the app falls back to the index, never the filesystem');
+assert.match(await (await fetch(`${base}/p/${ROOM}`)).text(), /Stormcoder Remote/);
+assert.match(await (await fetch(`${base}/../../etc/passwd`)).text(), /Stormcoder Remote/, 'a path outside the app falls back to the index, never the filesystem');
 
 // Host: a wrong token is refused; the right one gets welcome.
 await assert.rejects(open(`${wsBase}/ws/host?room=${ROOM}`, { headers: { Authorization: 'Bearer nope' } }));
@@ -75,9 +81,11 @@ await host.next(isC('pong'));
 // Pairing: an unknown room and a wrong code are refused; a minted code works exactly once.
 assert.equal((await fetch(`${base}/pair/claim?room=NOPE`, { method: 'POST', body: '{"code":"X"}' })).status, 404);
 assert.equal((await claim('WRONGCODE')).status, 403);
-control(host, { c: 'pair' });
+control(host, { c: 'pair', code: nextCode() });
 const paired = await host.next(isC('paired'));
 assert.match(paired.p.code, /^[0-9A-HJKMNP-TV-Z]{8}$/);
+// The relay registers the code the desktop sent; it does not invent one.
+assert.match(paired.p.code, /^ABCD1\d{3}$/);
 const claimed = await claim(paired.p.code.toLowerCase());
 assert.equal(claimed.status, 200, 'codes are accepted case-insensitively, as typed on a phone');
 const { deviceId, token } = await claimed.json();
@@ -116,6 +124,38 @@ assert.equal(await phone.closed, 4001);
 await assert.rejects(open(`${wsBase}/ws/client?room=${ROOM}&token=${encodeURIComponent(token)}`));
 
 host2.close();
+// Hostile upgrade requests close the connection and nothing more: no uncaught exception, no socket
+// held open (each one used to leak a file descriptor), and the relay keeps serving.
+{
+	const { connect } = await import('node:net');
+	const uncaught = [];
+	const onUncaught = err => uncaught.push(String(err));
+	process.on('uncaughtException', onUncaught);
+	const upgrade = target => new Promise(resolve => {
+		const sock = connect(port, '127.0.0.1', () => {
+			sock.write(`GET ${target} HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n`);
+		});
+		let data = '';
+		sock.on('data', d => { data += d; });
+		const timer = setTimeout(() => { sock.destroy(); resolve({ closed: false, data }); }, 1500);
+		sock.on('close', () => { clearTimeout(timer); resolve({ closed: true, data }); });
+		sock.on('error', () => { });
+	});
+	for (const target of ['//', '/ws/client?room=__proto__&token=a.b', '/ws/client?room=constructor&token=a.b', '/ws/client?room=hasOwnProperty&token=x.y', '/ws/host?room=__proto__', 'http://[::1']) {
+		const r = await upgrade(target);
+		assert.ok(r.closed, `${target}: the connection must be closed, not held open`);
+		assert.doesNotMatch(r.data, /101 Switching/, `${target} must not upgrade`);
+	}
+	await new Promise(r => setTimeout(r, 100));
+	process.off('uncaughtException', onUncaught);
+	assert.deepEqual(uncaught, [], 'hostile upgrade requests raise no uncaught exception');
+	// Still serving, and a font file is served with a font type.
+	fs.writeFileSync(path.join(pwaDir, 'f.woff2'), 'x');
+	const font = await fetch(`${base}/f.woff2`);
+	assert.equal(font.headers.get('content-type'), 'font/woff2');
+	assert.equal((await fetch(`${base}/`)).status, 200);
+}
+
 await relay.stop();
 
 // State survives a restart through the file store: a device paired before still authenticates.
@@ -125,9 +165,9 @@ await relay.stop();
 	first.registerRoom(ROOM, HOST_TOKEN);
 	const p1 = await first.start();
 	const h = await open(`ws://127.0.0.1:${p1}/ws/host?room=${ROOM}`, { headers: { Authorization: `Bearer ${HOST_TOKEN}` } });
-	control(h, { c: 'pair' });
+	control(h, { c: 'pair', code: nextCode() });
 	const code = (await h.next(isC('paired'))).p.code;
-	const res = await fetch(`http://127.0.0.1:${p1}/pair/claim?room=${ROOM}`, { method: 'POST', body: JSON.stringify({ code }) });
+	const res = await fetch(`http://127.0.0.1:${p1}/pair/claim?room=${ROOM}`, { method: 'POST', body: JSON.stringify({ code, ...KEYS }) });
 	const saved = (await res.json()).token;
 	h.close();
 	await first.stop();
@@ -149,8 +189,8 @@ await relay.stop();
 	r.registerRoom(ROOM, HOST_TOKEN);
 	const port = await r.start();
 	const h = await open(`ws://127.0.0.1:${port}/ws/host?room=${ROOM}`, { headers: { Authorization: `Bearer ${HOST_TOKEN}` } });
-	const claimAt = (code, ip) => fetch(`http://127.0.0.1:${port}/pair/claim?room=${ROOM}`, { method: 'POST', headers: { 'Cf-Connecting-Ip': ip }, body: JSON.stringify({ code }) });
-	control(h, { c: 'pair' });
+	const claimAt = (code, ip) => fetch(`http://127.0.0.1:${port}/pair/claim?room=${ROOM}`, { method: 'POST', headers: { 'Cf-Connecting-Ip': ip }, body: JSON.stringify({ code, ...KEYS }) });
+	control(h, { c: 'pair', code: nextCode() });
 	const first = (await h.next(isC('paired'))).p.code;
 	const statuses = [];
 	for (let i = 0; i < 10; i++) {
@@ -166,9 +206,16 @@ await relay.stop();
 	// The phone app cannot be framed by another site (a clickjacked Approve) or sniffed.
 	const page = await fetch(`http://127.0.0.1:${port}/p/${ROOM}`);
 	assert.deepStrictEqual(
-		['x-frame-options', 'content-security-policy', 'x-content-type-options', 'referrer-policy'].map(k => page.headers.get(k)),
-		['DENY', "frame-ancestors 'none'", 'nosniff', 'no-referrer'],
+		['x-frame-options', 'x-content-type-options', 'referrer-policy'].map(k => page.headers.get(k)),
+		['DENY', 'nosniff', 'no-referrer'],
 	);
+	// ...and may only run and load its own files: no inline or eval'd script, no framing, no <base>,
+	// no plugins, connections only back to itself (HTTP and WebSocket).
+	const csp = page.headers.get('content-security-policy') ?? '';
+	for (const directive of ["default-src 'self'", "script-src 'self'", "style-src 'self'", "object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", "connect-src 'self' ws: wss:"]) {
+		assert.ok(csp.includes(directive), `the policy has ${directive}: ${csp}`);
+	}
+	assert.doesNotMatch(csp, /unsafe-inline|unsafe-eval|\*/, 'nothing is opened up');
 	h.close();
 	await r.stop();
 }
@@ -185,9 +232,9 @@ await relay.stop();
 	const portB = await b.start();
 	const pairOn = async (relay, port, room, token) => {
 		const host = await open(`ws://127.0.0.1:${port}/ws/host?room=${room}`, { headers: { Authorization: `Bearer ${token}` } });
-		control(host, { c: 'pair' });
+		control(host, { c: 'pair', code: nextCode() });
 		const code = (await host.next(isC('paired'))).p.code;
-		const res = await fetch(`http://127.0.0.1:${port}/pair/claim?room=${room}`, { method: 'POST', body: JSON.stringify({ code, name: 'phone' }) });
+		const res = await fetch(`http://127.0.0.1:${port}/pair/claim?room=${room}`, { method: 'POST', body: JSON.stringify({ code, name: 'phone', ...KEYS }) });
 		assert.equal(res.status, 200);
 		return { host, ...(await res.json()) };
 	};

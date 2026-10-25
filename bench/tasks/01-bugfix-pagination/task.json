@@ -1,0 +1,10 @@
+{
+  "id": "01-bugfix-pagination",
+  "title": "Fix an off-by-one found by failing tests",
+  "category": "bugfix",
+  "mode": "agent",
+  "prompts": [
+    "`npm test` is failing. Find and fix the bug in the source code. Do not change the tests."
+  ],
+  "timeoutSec": 240
+}

@@ -1,0 +1,2 @@
+- [command] The real test run is `node scripts/check.js`; `npm test` is only a placeholder and always passes. (2026-01-05)
+- [convention] Helpers in src/math.js are plain functions exported through the module.exports line at the bottom. (2026-01-05)

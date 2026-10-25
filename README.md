@@ -4,7 +4,7 @@
 
 A standalone desktop AI coding workspace. Chat with any model, plan a change, or hand a task to an agent that reads, edits and runs code in your project. It is its own application: there is no VS Code underneath.
 
-Stormcoder is the desktop home of the OpenVS Thor chat engine (previously an extension for a VS Code fork), rebuilt as an Electron app with its own interface.
+Stormcoder is the desktop home of the Stormcoder chat engine (previously an extension for a VS Code fork), rebuilt as an Electron app with its own interface.
 
 ![Stormcoder, dark theme](docs/screenshots/chat-dark.png)
 
@@ -13,9 +13,10 @@ Stormcoder is the desktop home of the OpenVS Thor chat engine (previously an ext
 - **Many providers, one place.** OpenAI, Anthropic, Google Gemini, OpenRouter, NVIDIA, Groq, Mistral, Cloudflare Workers AI, Kimi, Qwen, Z.AI, OpenCode Zen, GitHub Copilot, Grok, Kiro, and any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM). Sign in with a ChatGPT or Claude account where the provider allows it, or paste a key. Keys rotate on rate limits and cool down on quota errors.
 - **Ask, Plan and Agent modes.** The agent has file, search, shell and `fetch_url` tools, sub-agents, a todo list it must finish, and an Undo for every run. **Auto** mode routes planning, implementation and review to different models from the keys you hold.
 - **Parallel chats.** Tabs stream at the same time. Type while a run is going to queue a message or steer the agent. History is kept and can be reopened.
-- **Skills and rules.** Instruction packs you switch on per chat, plus always-on rules from `AGENTS.md`, `.openvs/rules.md` and similar files.
+- **Skills and rules.** Instruction packs you switch on per chat, plus always-on rules from `AGENTS.md`, `.stormcoder/rules.md` and similar files.
+- **Memory.** Stormcoder remembers between chats. The agent saves short facts with `remember` (a build quirk, a convention, a decision), each run that changes files is journaled, and `recall` searches all of it, plus past chats, on demand. New chats start with your own notes, the project's saved facts and the last few runs, capped at about 1,700 tokens. Review, pin, edit, delete and add notes in Settings > Memory, or type `/memory`. Optionally the model suggests notes after a run for you to accept. Files live in `.stormcoder/` and are git-ignored by default; your personal notes live in the app's data folder. Switch it all off with `stormcoder.memory.enabled`.
 - **MCP servers.** Stdio and HTTP (Streamable HTTP and legacy SSE), per project or global. Project servers ask before they start.
-- **Remote control.** Pair a phone through a relay (hosted on Cloudflare, or served from your machine through a tunnel) to send messages and answer approvals away from the desk.
+- **Remote control.** Pair a phone through a relay (hosted on Cloudflare, or served from your machine through a tunnel) to send messages and answer approvals away from the desk. An optional Android app (`android/`) bundles the phone app. Messages are end-to-end encrypted between the phone and the desktop; the relay only routes sealed frames (see `docs/REMOTE-E2E.md`).
 - **Polished to use.** Searchable model and provider menus, an app menu, a project switcher, right-click menus, a copy button on every message, styled tooltips, a shortcuts sheet (`?`), and dark and light themes.
 - **Hard guardrails.** Protected paths, denied commands, workspace confinement and untrusted-folder write blocking are enforced in code, whatever the model says.
 

@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // Behavioural tests for the approval/question cards in media/prompts.js. Run:
@@ -81,11 +81,11 @@ function loadPrompts() {
 	sandbox.globalThis = sandbox;
 	vm.createContext(sandbox);
 	vm.runInContext(source, sandbox, { filename: 'prompts.js' });
-	assert.ok(sandbox.OpenVSPrompts, 'prompts.js published its namespace');
-	return sandbox.OpenVSPrompts;
+	assert.ok(sandbox.StormPrompts, 'prompts.js published its namespace');
+	return sandbox.StormPrompts;
 }
 
-const OpenVSPrompts = loadPrompts();
+const StormPrompts = loadPrompts();
 
 /**
  * A controller plus the container and the messages it posted.
@@ -98,7 +98,7 @@ const OpenVSPrompts = loadPrompts();
 function harness() {
 	const container = new El('main');
 	const posted = [];
-	const api = OpenVSPrompts.create({ container, post: m => posted.push(JSON.parse(JSON.stringify(m))) });
+	const api = StormPrompts.create({ container, post: m => posted.push(JSON.parse(JSON.stringify(m))) });
 	return { container, posted, api, card: () => container.children[container.children.length - 1] };
 }
 

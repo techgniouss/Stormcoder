@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -104,7 +104,7 @@ function sendableView(entries: readonly ComparableEntry[]): ComparableEntry[] {
  * {@link normalizeForComparison} on both sides first, so a whitespace-only difference the
  * webview's own `tidyResponse` introduces is not reported as a divergence. Pure and
  * side-effect-free: `chatViewProvider.ts` decides what to do with the result (log it, gated on
- * `openvsChat.remote.traceSessions`, or nothing at all).
+ * `stormcoder.remote.traceSessions`, or nothing at all).
  */
 export function compareTranscripts(
 	expected: readonly ComparableEntry[],

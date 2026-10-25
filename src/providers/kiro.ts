@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) OpenVS. All rights reserved.
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -63,7 +63,7 @@ export function extractCodeWhispererText(body: unknown): string {
 }
 
 /** The credential this provider stores (as a JSON string via `registry.setApiKey`),
- * populated by `openvsChat.kiroImportCredential` from `~/.aws/sso/cache/kiro-auth-token.json`
+ * populated by `stormcoder.kiroImportCredential` from `~/.aws/sso/cache/kiro-auth-token.json`
  * — the file Kiro's own IDE/CLI already wrote after a normal sign-in there. This provider
  * never implements a sign-in flow of its own, only an import. */
 interface KiroCredential {
@@ -94,7 +94,7 @@ const DEFAULT_PROFILE_ARN = 'arn:aws:codewhisperer:us-east-1:699475941385:profil
 /**
  * Provider for AWS Kiro (Amazon Q Developer / CodeWhisperer) using the token file Kiro's own
  * IDE/CLI already wrote after a normal sign-in there — this provider does not implement any
- * sign-in flow, it only imports (`openvsChat.kiroImportCredential`).
+ * sign-in flow, it only imports (`stormcoder.kiroImportCredential`).
  *
  * ⚠️ Calls CodeWhisperer's internal `generateAssistantResponse` endpoint directly rather than
  * a documented public API — the same category of integration as Copilot/Grok above, with the
