@@ -545,6 +545,16 @@
 			vscode.postMessage({ type: 'undoRun', sessionId: s.id, runId: undo.runId });
 		});
 		bar.append(label, button);
+		// Inside the desktop shell the chat is a frame; the shell owns the Changes view.
+		if (window.parent !== window) {
+			const review = document.createElement('button');
+			review.textContent = 'Review changes';
+			review.title = 'See what changed, then stage, commit and push';
+			review.addEventListener('click', () => {
+				window.parent.postMessage({ mj: 'openChanges', files: undo.files }, location.origin);
+			});
+			bar.append(review);
+		}
 		els.messages.appendChild(bar);
 	}
 

@@ -1,0 +1,74 @@
+/* The Changes view. Colours, borders and durations all come from tokens.css. */
+#view-changes { display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--surface); }
+#view-changes.hidden { display: flex !important; }
+.ch-tabs { display: flex; align-items: center; gap: 2px; padding: 8px 14px 0; border-bottom: 1px solid var(--rule); flex: none; }
+.ch-tab { display: flex; align-items: center; gap: 6px; padding: 7px 10px 9px; color: var(--muted); border-bottom: 2px solid transparent; font-size: 13px; transition: color var(--t-hover) ease; }
+.ch-tab:hover { color: var(--text); }
+.ch-tab.on { color: var(--text); border-bottom-color: var(--accent); }
+.ch-pill { min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--pill-neutral-bg); color: var(--pill-neutral-ink); font-size: 11px; line-height: 18px; text-align: center; }
+.ch-spacer { flex: 1; }
+.ch-branch { font-family: var(--mono); /* taste-skill-ignore: a branch name */ font-size: 12px; color: var(--text); padding-bottom: 7px; }
+.ch-sync { font-size: 12px; color: var(--muted); padding: 0 0 7px 10px; }
+.ch-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); }
+.ch-list { overflow: auto; padding: 6px 0; border-right: 1px solid var(--rule); min-height: 0; }
+.ch-group { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px 4px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+.ch-link { background: none; border: 0; color: var(--accent); font-size: 11px; letter-spacing: 0; text-transform: none; padding: 0; cursor: pointer; }
+.ch-link:hover { text-decoration: underline; }
+.ch-row { display: flex; align-items: center; gap: 8px; padding: 5px 14px; font-size: 12.5px; color: var(--text-2); cursor: pointer; }
+.ch-row:hover { background: var(--hover); }
+.ch-row.on { background: var(--accent-soft); color: var(--text); }
+.ch-row:focus-visible, .ch-code:focus-visible, .ch-tab:focus-visible, .ch-msg:focus-visible { outline: 2px solid var(--accent-line); outline-offset: -2px; }
+.ch-dir { color: var(--muted); cursor: default; }
+.ch-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-check { width: 13px; height: 13px; accent-color: var(--accent); flex: none; }
+.ch-st { width: 14px; text-align: center; font: 600 11px var(--mono); /* taste-skill-ignore: status letter */ flex: none; }
+.ch-st-M, .ch-st-R { color: var(--pill-warning-ink); }
+.ch-st-A { color: var(--pill-positive-ink); }
+.ch-st-D, .ch-st-C { color: var(--pill-negative-ink); }
+.ch-tag { font-size: 10px; color: var(--accent); border: 1px solid var(--accent-line); border-radius: 4px; padding: 0 4px; flex: none; }
+.ch-count { font: 11px var(--mono); /* taste-skill-ignore: line counts */ flex: none; }
+.ch-add { color: var(--pill-positive-ink); }
+.ch-del { color: var(--pill-negative-ink); }
+.ch-commit { display: flex; gap: 8px; padding: 3px 14px; font-size: 12.5px; color: var(--text-2); }
+.ch-commit code { font: 11.5px var(--mono); /* taste-skill-ignore: a commit hash */ color: var(--accent); }
+.ch-commit span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-empty { display: grid; gap: 4px; padding: 18px 14px; color: var(--muted); font-size: 13px; }
+.ch-empty strong { color: var(--text-2); font-weight: 600; }
+.ch-note { padding: 8px 14px; color: var(--muted); font-size: 12px; }
+.ch-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.ch-pane-head { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--rule); min-height: 41px; }
+.ch-path { font: 12px var(--mono); /* taste-skill-ignore: a file path */ color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-seg { display: flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; flex: none; }
+.ch-seg button { padding: 3px 10px; font-size: 12px; color: var(--muted); }
+.ch-seg button.on { background: var(--active-bg); color: var(--text); }
+.ch-code { flex: 1; overflow: auto; min-height: 0; padding: 6px 0; font: 12px/1.65 var(--mono); /* taste-skill-ignore: code */ }
+.ch-ln { display: grid; grid-template-columns: 44px 44px 16px max-content; min-width: 100%; white-space: pre; color: var(--text-2); }
+.ch-ln i { font-style: normal; color: var(--faint); text-align: right; padding-right: 8px; user-select: none; }
+.ch-ln b { font-weight: 600; text-align: center; user-select: none; }
+.ch-a { background: var(--pill-positive-bg); }
+.ch-a b { color: var(--pill-positive-ink); }
+.ch-d { background: var(--pill-negative-bg); }
+.ch-d b { color: var(--pill-negative-ink); }
+.ch-hunk { padding: 4px 14px; background: var(--rule); color: var(--faint); font-size: 11.5px; white-space: pre; }
+.ch-git { flex: none; display: grid; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--panel); }
+.ch-git.hidden { display: none; }
+.ch-msg { width: 100%; resize: vertical; min-height: 54px; max-height: 160px; padding: 7px 10px; border-radius: 8px; background: var(--surface); color: var(--text); border: 1px solid var(--border); font: inherit; font-size: 13px; }
+.ch-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ch-info { font-size: 12px; color: var(--muted); }
+.ch-git .btn { height: 28px; padding: 0 12px; font-size: 12px; }
+.ch-danger { color: var(--negative); border-color: var(--negative); background: transparent; }
+.ch-note-box { display: grid; gap: 2px; padding: 7px 10px; border-radius: 8px; font-size: 12px; white-space: pre-wrap; }
+.ch-note-box span { color: var(--text-2); }
+.ch-ok { background: var(--pill-positive-bg); color: var(--pill-positive-ink); }
+.ch-err { background: var(--pill-negative-bg); color: var(--pill-negative-ink); }
+.ch-warn { background: var(--pill-warning-bg); color: var(--pill-warning-ink); }
+.ch-inf { background: var(--accent-soft); color: var(--text-2); }
+.ch-confirm { display: grid; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--raised); border: 1px solid var(--border-strong); font-size: 12.5px; }
+.ch-kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; color: var(--text-2); }
+.ch-kv i { font-style: normal; color: var(--muted); }
+.rail-btn .rail-badge { position: absolute; top: 3px; right: 3px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 8px; background: var(--accent); color: var(--accent-ink); font-size: 10px; font-weight: 700; line-height: 15px; text-align: center; }
+.rail-badge.hidden { display: none; }
+@media (max-width: 760px) {
+	.ch-body { grid-template-columns: 1fr; grid-template-rows: minmax(120px, 40%) minmax(0, 1fr); }
+	.ch-list { border-right: 0; border-bottom: 1px solid var(--rule); }
+}

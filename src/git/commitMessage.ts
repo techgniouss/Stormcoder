@@ -159,3 +159,60 @@ export async function generateCommitMessage(
 		}
 	}
 }
+
+/** The draft in flight for the Changes view, so a second request or a Cancel can stop it. */
+let draftAbort: AbortController | undefined;
+
+/** Stops the draft the Changes view is waiting for, if any. */
+export function cancelDraftCommitMessage(): void {
+	draftAbort?.abort();
+}
+
+/**
+ * Writes a commit message for what is staged in `cwd` and returns it, for the Changes view to
+ * put in its message box. Unlike {@link generateCommitMessage} it asks nothing and shows no
+ * notices: every problem is thrown as an `Error` whose text is fit to display.
+ */
+export async function draftCommitMessage(registry: ProviderRegistry, cwd: string): Promise<string> {
+	const diff = await git(['diff', '--cached', '--no-color', '--no-ext-diff', '--no-textconv'], cwd);
+	if (!diff.trim()) {
+		throw new Error('Stage some changes first.');
+	}
+	const providerId = registry.getDefaultProviderId();
+	const provider = registry.getProvider(providerId);
+	if (!provider) {
+		throw new Error('No AI provider is configured.');
+	}
+	if (provider.info.requiresApiKey && !(await registry.hasCredentials(providerId))) {
+		throw new Error(`No API key configured for ${provider.info.label}.`);
+	}
+	draftAbort?.abort();
+	const controller = new AbortController();
+	draftAbort = controller;
+	try {
+		const model = registry.getModel(providerId);
+		const result = await withProviderResilience(registry, providerId, model, apiKey => streamChatWithContinuation(provider, {
+			messages: [{ role: 'user', content: buildCommitMessagePrompt(diff) }],
+			model,
+			apiKey,
+			baseUrl: registry.getBaseUrl(providerId),
+			maxTokens: MAX_REPLY_TOKENS,
+			signal: controller.signal,
+			onToken: () => { /* the view shows its own spinner */ },
+		}));
+		const message = stripWrappingFence(result.text.trim());
+		if (!message) {
+			throw new Error(`${provider.info.label} returned an empty commit message.`);
+		}
+		return message;
+	} catch (err) {
+		if (isAbortError(err)) {
+			throw new Error('Cancelled.');
+		}
+		throw err;
+	} finally {
+		if (draftAbort === controller) {
+			draftAbort = undefined;
+		}
+	}
+}

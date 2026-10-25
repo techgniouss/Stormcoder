@@ -37,7 +37,7 @@
 			return;
 		}
 		// Palette and navigation shortcuts work wherever focus is.
-		if ((e.ctrlKey || e.metaKey) && /^[1-4,k]$/i.test(e.key)) {
+		if ((e.ctrlKey || e.metaKey) && /^[1-5,k]$/i.test(e.key)) {
 			parent.postMessage({ mj: 'key', key: e.key.toLowerCase() }, location.origin);
 			e.preventDefault();
 		}

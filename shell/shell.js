@@ -56,11 +56,19 @@
 			api.sendToView(d.view, d.message);
 		} else if (d.mj === 'key') {
 			shortcut(d.key);
+		} else if (d.mj === 'openChanges' && e.source === frames.chat.contentWindow) {
+			navigate('changes', Array.isArray(d.files) ? d.files.map(String) : undefined);
 		}
 	});
 
+	let wasBusy = false;
+	/** The folder the Changes view last read, so a switch clears it. */
+	let lastFolder = null;
 	/** True while any chat tab has a run in flight; drives the run line and the rail dot. */
 	function setBusy(busy) {
+		// A run that just ended may have changed files: refresh the Changes badge and view.
+		if (wasBusy && !busy) { StormChanges.refresh(); }
+		wasBusy = busy;
 		$('runLine').classList.toggle('on', busy);
 		document.querySelector('.rail-btn[data-view="chat"]').classList.toggle('busy', busy);
 	}
@@ -68,6 +76,9 @@
 	api.onViewMessage(({ view, message }) => {
 		if (message && message.type === 'sessions' && Array.isArray(message.sessions)) {
 			setBusy(message.sessions.some(x => x && x.streaming));
+		}
+		if (message && message.type === 'checkpoint' && Array.isArray(message.files)) {
+			StormChanges.noteAgentFiles(message.files);
 		}
 		if (frames[view]) { postToFrame(view, message); }
 	});
@@ -90,11 +101,13 @@
 
 	function showFrame(view) {
 		for (const [name, el] of Object.entries(frames)) { el.classList.toggle('hidden', name !== view); }
+		$('view-changes').classList.add('hidden');
+		StormChanges.hide();
 		const el = frames[view];
 		try { el.contentWindow.focus(); } catch (e) { /* cross-origin focus is best effort */ }
 	}
 
-	const TITLES = { chat: 'Chat', history: 'History', skills: 'Skills', mcp: 'MCP servers', settings: 'Settings' };
+	const TITLES = { chat: 'Chat', history: 'History', changes: 'Changes', skills: 'Skills', mcp: 'MCP servers', settings: 'Settings' };
 
 	/** Slides the single accent indicator to the active rail button. */
 	function placeIndicator() {
@@ -125,8 +138,15 @@
 		placeIndicator();
 	}
 
-	function navigate(viewKey) {
+	/** @param {string} viewKey @param {string[]} [files] Paths for the Changes view to select first. */
+	function navigate(viewKey, files) {
 		mark(viewKey);
+		if (viewKey === 'changes') {
+			for (const el of Object.values(frames)) { el.classList.add('hidden'); }
+			$('view-changes').classList.remove('hidden');
+			StormChanges.show(files);
+			return;
+		}
 		if (viewKey === 'chat' || viewKey === 'history') {
 			showFrame('chat');
 			navFrame('chat', { to: viewKey });
@@ -159,13 +179,14 @@
 		else if (key === '2') { navigate('history'); }
 		else if (key === '3') { navigate('skills'); }
 		else if (key === '4') { navigate('mcp'); }
+		else if (key === '5') { navigate('changes'); }
 		else if (key === '?') { openShortcuts(); }
 	}
 	window.addEventListener('keydown', e => {
 		const t = e.target;
 		const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
 		if (e.key === '?' && !typing && !e.ctrlKey && !e.metaKey) { e.preventDefault(); shortcut('?'); return; }
-		if ((e.ctrlKey || e.metaKey) && /^[1-4,k]$/i.test(e.key)) {
+		if ((e.ctrlKey || e.metaKey) && /^[1-5,k]$/i.test(e.key)) {
 			e.preventDefault();
 			shortcut(e.key.toLowerCase());
 		}
@@ -425,7 +446,7 @@
 	function shortcutGroups() {
 		const m = MOD();
 		return [
-			['Go to', [['Chat', [m, '1']], ['History', [m, '2']], ['Skills', [m, '3']], ['MCP servers', [m, '4']], ['Settings', [m, ',']], ['Command palette', [m, 'K']]]],
+			['Go to', [['Chat', [m, '1']], ['History', [m, '2']], ['Skills', [m, '3']], ['MCP servers', [m, '4']], ['Changes', [m, '5']], ['Settings', [m, ',']], ['Command palette', [m, 'K']]]],
 			['Chat', [['Send', ['Enter']], ['New line', ['Shift', 'Enter']], ['Slash commands', ['/']], ['New chat', [m, 'N']], ['Open project', [m, 'O']]]],
 			['Menus', [['Move', ['↑', '↓']], ['Choose', ['Enter']], ['Close', ['Esc']], ['Search a list', ['type']]]],
 		];
@@ -696,6 +717,12 @@
 		$('projectName').textContent = state.folder ? baseName(state.folder) : 'No folder open';
 		$('projectBtn').title = state.folder || 'Open a project folder so the agent can work on it';
 		$('trustPill').classList.toggle('hidden', !state.folder || state.trusted);
+		StormChanges.setTrusted(!!state.trusted);
+		if (state.folder !== lastFolder) {
+			lastFolder = state.folder;
+			StormChanges.forget();
+			if (state.folder) { StormChanges.refresh(); }
+		}
 		const note = $('storageNote');
 		note.classList.toggle('hidden', state.secureStorage !== false);
 		note.textContent = 'Keys use file encryption (no OS keychain found)';
@@ -705,6 +732,9 @@
 	// Tooltips for the rail sit beside it.
 	for (const el of document.querySelectorAll('#rail .rail-btn, #rail .rail-mark')) { el.dataset.tipSide = 'right'; }
 	StormMenu.tooltips();
+
+	// Edits made outside the app show up when the window comes back.
+	window.addEventListener('focus', () => { if (appState.folder) { StormChanges.refresh(); } });
 
 	mark('chat');
 	api.ready();

@@ -9,7 +9,7 @@ import * as vscode from 'vscode';
 import { WebAuthManager } from './auth';
 import { RoleRouter } from './auto/router';
 import { ChatViewProvider, InlineKind } from './chatViewProvider';
-import { generateCommitMessage } from './git/commitMessage';
+import { cancelDraftCommitMessage, draftCommitMessage, generateCommitMessage } from './git/commitMessage';
 import { McpManager, isMissingFile, promptingConsent, rememberProjectConsent } from './mcp/manager';
 import { loadEnvFile } from './oauth';
 import { ProviderRegistry } from './providers/registry';
@@ -96,6 +96,9 @@ export function activate(context: vscode.ExtensionContext): void {
 			const cts = new vscode.CancellationTokenSource();
 			return generateCommitMessage(registry, cts.token).finally(() => cts.dispose());
 		}),
+		// Used by the Changes view; not in the manifest because they are not user commands.
+		vscode.commands.registerCommand('stormcoder.git.draftMessage', (cwd: string) => draftCommitMessage(registry, cwd)),
+		vscode.commands.registerCommand('stormcoder.git.cancelDraft', () => cancelDraftCommitMessage()),
 	);
 
 	// Covers every path that can reach the misconfigured state, not just this activation's

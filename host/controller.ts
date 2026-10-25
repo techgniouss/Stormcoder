@@ -5,6 +5,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import * as repo from '../src/git/repo';
 import { configureHost, HostEnvironment, readJsonFile, UiEvent, ViewId, writeJsonFile } from './env';
 import { cancelProgress, createContext, deliverToView, deliverUri, ExtensionContext, registeredCommands, reloadSettings, resetHost, runCommand, settingDefaults } from './vscode';
 import COMMAND_LIST from './command-list.json';
@@ -310,6 +311,46 @@ export class Controller {
 		});
 	}
 
+	/**
+	 * The Changes view's git calls. Reading needs an open folder; anything that changes the
+	 * repository needs a trusted one. Failures come back as `{ ok: false, kind, error }` so the
+	 * view can show git's own words and choose what to offer next.
+	 */
+	private async gitCall(op: string, args: unknown[]): Promise<{ ok: true; value: unknown } | { ok: false; error: string; kind: string }> {
+		const folder = this.state.folder;
+		const trusted = !!folder && this.state.trusted.includes(folder);
+		const list = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
+		try {
+			if (!folder) {
+				throw new repo.GitError('Open a project folder first.', 'failed');
+			}
+			const writes = new Set(['stage', 'unstage', 'commit', 'push', 'pull', 'undoCommit', 'abortMerge', 'draft']);
+			if (writes.has(op) && !trusted) {
+				throw new repo.GitError('Trust this folder to change its git state.', 'failed');
+			}
+			let value: unknown;
+			switch (op) {
+				case 'status': value = await repo.status(folder); break;
+				case 'diff': value = await repo.diff(folder, String(args[0]), args[1] === 'staged' ? 'staged' : args[1] === 'untracked' ? 'untracked' : 'unstaged'); break;
+				case 'file': value = await repo.fileText(folder, String(args[0])); break;
+				case 'files': value = await repo.listFiles(folder); break;
+				case 'stage': await repo.stage(folder, list(args[0])); break;
+				case 'unstage': await repo.unstage(folder, list(args[0])); break;
+				case 'commit': value = await repo.commit(folder, String(args[0] ?? '')); break;
+				case 'push': value = await repo.push(folder, args[0] === true); break;
+				case 'pull': await repo.pull(folder); break;
+				case 'undoCommit': await repo.undoCommit(folder); break;
+				case 'abortMerge': await repo.abortMerge(folder); break;
+				case 'draft': value = await runCommand('stormcoder.git.draftMessage', folder); break;
+				case 'cancelDraft': await runCommand('stormcoder.git.cancelDraft'); break;
+				default: throw new repo.GitError(`Unknown git call: ${op}`, 'failed');
+			}
+			return { ok: true, value };
+		} catch (err) {
+			return { ok: false, error: err instanceof Error ? err.message : String(err), kind: err instanceof repo.GitError ? err.kind : 'failed' };
+		}
+	}
+
 	/** Dispatches one named call from the shell page. Unknown names are rejected. */
 	async handleCall(name: string, args: unknown[]): Promise<unknown> {
 		switch (name) {
@@ -329,6 +370,7 @@ export class Controller {
 				if (id === 'app.state') { return this.publicState(); }
 				if (id === 'app.cancelProgress') { cancelProgress(Number(rest[0])); return undefined; }
 				if (id === 'app.settingsDefaults') { return settingDefaults(); }
+				if (id.startsWith('git.')) { return this.gitCall(id.slice(4), rest); }
 				if (id.startsWith('app.')) { return this.opts.appCommand?.(id, rest); }
 				return runCommand(id, ...rest);
 			}

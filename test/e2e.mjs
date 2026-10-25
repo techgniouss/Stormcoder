@@ -3,6 +3,7 @@
 // loop, and that the transcript survives a reload.
 import { launchChromium } from './browser.mjs';
 import { startHost, startMock } from './harness.mjs';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -145,6 +146,35 @@ try {
 	await chat.getByText('Remembered [note]', { exact: false }).first().waitFor({ timeout: 15000 });
 	assert.match(fs.readFileSync(path.join(host.data, 'storage', 'memory', 'memory.md'), 'utf8'), /Prefer early returns over nested ifs\./);
 
+
+	// The Changes view: what the run changed, then stage, commit and a refused push.
+	const gitIn = (...args) => execFileSync('git', args, { cwd: project, encoding: 'utf8' });
+	gitIn('init', '-q', '-b', 'main');
+	gitIn('config', 'user.name', 'E2E');
+	gitIn('config', 'user.email', 'e2e@example.com');
+	await page.click('[data-view=changes]');
+	const changes = page.locator('#view-changes');
+	const helloRow = changes.locator('.ch-row', { hasText: 'hello.txt' });
+	await helloRow.waitFor({ timeout: 15000 });
+	assert.equal(await helloRow.locator('.ch-tag').textContent(), 'agent', 'a file the agent wrote is tagged');
+	await helloRow.click();
+	await changes.locator('.ch-a', { hasText: 'hello from stormcoder' }).waitFor({ timeout: 10000 });
+	assert.ok((await page.locator('#changesBadge').textContent()).length > 0, 'the rail badge counts changed files');
+	await changes.getByRole('button', { name: 'Stage all' }).click();
+	await changes.locator('.ch-group', { hasText: 'Staged' }).waitFor({ timeout: 10000 });
+	assert.ok(await changes.getByRole('button', { name: /^Commit \d+$/ }).isDisabled(), 'commit waits for a message');
+	await changes.locator('.ch-msg').fill('Add hello file');
+	await changes.getByRole('button', { name: /^Commit \d+$/ }).click();
+	await changes.getByText('Committed', { exact: false }).first().waitFor({ timeout: 15000 });
+	assert.equal(gitIn('log', '-1', '--format=%s').trim(), 'Add hello file');
+	await changes.getByRole('button', { name: 'Publish branch' }).click();
+	await changes.getByText('Force', { exact: true }).waitFor({ timeout: 5000 });
+	await changes.getByRole('button', { name: 'Confirm publish' }).click();
+	await changes.getByText('no remote', { exact: false }).first().waitFor({ timeout: 15000 });
+	await changes.getByRole('tab', { name: 'Files' }).click();
+	await changes.locator('.ch-row', { hasText: 'hello.txt' }).click();
+	await changes.locator('.ch-ln', { hasText: 'hello from stormcoder' }).waitFor({ timeout: 10000 });
+	await page.click('[data-view=chat]');
 
 	// 4. The palette opens and filters.
 	await page.keyboard.press('Control+k');

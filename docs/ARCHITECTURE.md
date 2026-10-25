@@ -22,6 +22,12 @@ Engine requests for UI (`showInformationMessage`, `showQuickPick`, `showInputBox
 
 Opening a folder asks once whether to trust it. A trusted folder lets the agent write files and run commands and lets project MCP servers start; a read-only one does not. Changing folder restarts the engine against the new folder (state such as chats is per project; settings and secrets are global). User data lives in Electron's `userData` directory: `settings.json`, `secrets.json`, `state/`, `logs/`.
 
+## Changes view and git
+
+The rail's Changes view (`shell/changes.js`, `shell/changes.css`) is part of the shell page, not a frame. It lists what changed in the open folder (staged, not staged, conflicts), shows a diff or the whole file, drafts a commit message, and stages, commits and pushes. It reaches git through `git.*` app commands that `Controller.gitCall` answers with `{ ok, value }` or `{ ok: false, kind, error }`; the git work itself is `src/git/repo.ts`, which shells out to the `git` command line and imports nothing from `vscode`.
+
+Rules enforced in `repo.ts` and the controller, not in the UI: reading needs an open folder, anything that changes the repository needs a trusted one; paths are relative to the repository and may not contain `..` or `.git`; there is no force push, no `--no-verify`, no branch or remote deletion and no discarding of working-tree changes; push is a plain `git push`, or `--set-upstream` for a branch with no upstream; pull is `--ff-only`; "Undo commit" is a soft reset of an unpushed commit. The UI asks once before every push. A run's files get an `agent` tag from the chat's `checkpoint` message, and the chat's undo bar has a "Review changes" button that posts `openChanges` to the shell. Commit messages come from `stormcoder.git.draftMessage`, an internal command in `src/git/commitMessage.ts`.
+
 ## Memory
 
 `src/memory/projectMemory.ts` holds everything. A `MemoryStore` is a folder with `memory.md` (typed, dated one-line facts, `*` after the type marks a pin; written by the `remember` tool, the panel, `/memory add`, or by hand). A project's store (`<project>/.stormcoder`) also keeps `journal.jsonl` (one line per run that changed files: goal, files, whether a verification command passed afterwards, taken from `WorkLog`) and `proposals.json` (suggestions waiting for a yes or no). The user's own store lives under the app's data folder and is shared by every project. A legacy `.openvs/memory.md` is read, never written. Read-modify-writes are queued per folder so parallel chats cannot overwrite each other.

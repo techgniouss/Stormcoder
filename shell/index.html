@@ -9,6 +9,7 @@
 	<link rel="stylesheet" href="stormcoder-asset://app/shell/tokens.css" />
 	<link rel="stylesheet" href="stormcoder-asset://app/shell/menu.css" />
 	<link rel="stylesheet" href="stormcoder-asset://app/shell/shell.css" />
+	<link rel="stylesheet" href="stormcoder-asset://app/shell/changes.css" />
 </head>
 <body>
 	<div id="shell">
@@ -26,6 +27,10 @@
 				</button>
 			</div>
 			<div class="rail-group">
+				<button class="rail-btn" data-view="changes" aria-label="Changes" title="Changes  (Ctrl+5)">
+					<svg viewBox="0 0 16 16"><circle cx="4.5" cy="3.5" r="1.6"/><circle cx="4.5" cy="12.5" r="1.6"/><circle cx="11.5" cy="6.5" r="1.6"/><path d="M4.5 5.1v5.8M11.5 8.1c0 2.4-3 2-6.3 3.2"/></svg>
+					<span class="rail-badge hidden" id="changesBadge"></span>
+				</button>
 				<button class="rail-btn" data-view="skills" aria-label="Skills" title="Skills  (Ctrl+3)">
 					<svg viewBox="0 0 16 16"><path d="M3.5 2.5h7l2 2v9h-9z"/><path d="M5.5 7h5M5.5 9.5h5"/></svg>
 				</button>
@@ -67,6 +72,7 @@
 			<div id="views">
 				<iframe id="view-chat" class="view" aria-label="Chat" data-view="chat"></iframe>
 				<iframe id="view-settings" class="view hidden" aria-label="Settings" data-view="settings"></iframe>
+				<section id="view-changes" class="view hidden" aria-label="Changes"></section>
 			</div>
 		</div>
 	</div>
@@ -113,6 +119,7 @@
 
 	<script src="stormcoder-asset://app/shell/web-api.js"></script>
 	<script src="stormcoder-asset://app/shell/menu-kit.js"></script>
+	<script src="stormcoder-asset://app/shell/changes.js"></script>
 	<script src="stormcoder-asset://app/shell/shell.js"></script>
 </body>
 </html>
