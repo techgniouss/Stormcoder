@@ -61,6 +61,21 @@ export interface RepoCommit {
 	readonly subject: string;
 }
 
+/** One saved stash. */
+export interface StashEntry {
+	/** `stash@{n}`; positions shift when one is dropped, so always re-read before acting. */
+	readonly ref: string;
+	readonly message: string;
+	/** When it was saved, as git words it ("2 hours ago"). */
+	readonly when: string;
+}
+
+/** The files of a stash, each with its own rows. */
+export interface StashDiff {
+	readonly files: Array<{ path: string; rows: DiffRow[]; binary: boolean }>;
+	readonly truncated: boolean;
+}
+
 /** The whole picture the Changes view draws. */
 export interface RepoStatus {
 	readonly isRepo: boolean;
@@ -78,8 +93,9 @@ export interface RepoStatus {
 	readonly unpushed: RepoCommit[];
 	/** The newest commit is local only, so it can be taken back with a soft reset. */
 	readonly canUndoCommit: boolean;
-	/** Entries on the stash list. */
+	/** Entries on the stash list, newest first. */
 	readonly stashes: number;
+	readonly stashList: StashEntry[];
 	/** The opened folder's path inside the repository ('' when it is the root), for matching paths the chat reports. */
 	readonly prefix: string;
 }
@@ -197,7 +213,7 @@ function parseNumstat(out: string, into: Map<string, { a: number | null; d: numb
 
 /** Reads the repository state. Never throws for "not a repository" or "git missing"; those are results. */
 export async function status(cwd: string): Promise<RepoStatus> {
-	const empty: RepoStatus = { isRepo: false, ahead: 0, behind: 0, merging: false, files: [], unpushed: [], canUndoCommit: false, stashes: 0, prefix: '' };
+	const empty: RepoStatus = { isRepo: false, ahead: 0, behind: 0, merging: false, files: [], unpushed: [], canUndoCommit: false, stashes: 0, stashList: [], prefix: '' };
 	let root: string | undefined;
 	try {
 		root = await repoRoot(cwd);
@@ -207,12 +223,12 @@ export async function status(cwd: string): Promise<RepoStatus> {
 	if (!root) {
 		return empty;
 	}
-	const [st, unstagedNum, stagedNum, merge, stashList] = await Promise.all([
+	const [st, unstagedNum, stagedNum, merge, stashRaw] = await Promise.all([
 		ok(['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all'], root),
 		run(['diff', '--numstat', '-z', '--no-ext-diff', '--no-textconv'], root),
 		run(['diff', '--cached', '--numstat', '-z', '--no-ext-diff', '--no-textconv'], root),
 		run(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], root),
-		run(['stash', 'list'], root),
+		run(['stash', 'list', '--format=%gd%x00%gs%x00%cr'], root),
 	]);
 	const counts = new Map<string, { a: number | null; d: number | null }>();
 	parseNumstat(unstagedNum.stdout, counts);
@@ -277,7 +293,11 @@ export async function status(cwd: string): Promise<RepoStatus> {
 	} catch {
 		prefix = '';
 	}
-	return { isRepo: true, root, branch, detached, upstream, ahead, behind, merging: merge.code === 0, files, unpushed, canUndoCommit, stashes: stashList.stdout.split('\n').filter(Boolean).length, prefix: prefix.startsWith('..') ? '' : prefix };
+	const stashList: StashEntry[] = stashRaw.stdout.split('\n').filter(Boolean).map(line => {
+		const [ref, subject, when] = line.split('\0');
+		return { ref, message: (subject ?? '').replace(/^(On [^:]*|WIP on [^:]*): /, ''), when: when ?? '' };
+	});
+	return { isRepo: true, root, branch, detached, upstream, ahead, behind, merging: merge.code === 0, files, unpushed, canUndoCommit, stashes: stashList.length, stashList, prefix: prefix.startsWith('..') ? '' : prefix };
 }
 
 async function listUnpushed(root: string, upstream: string | undefined): Promise<RepoCommit[]> {
@@ -424,22 +444,83 @@ export async function discard(cwd: string, paths: string[]): Promise<void> {
 	}
 }
 
-/** Puts every change, untracked files included, on the stash and leaves a clean tree. */
+/** Stormcoder's own folders: project memory and the journal live there, so a stash must never carry them off. */
+const STASH_EXCLUDE = [':(exclude).stormcoder', ':(exclude).openvs'];
+
+/**
+ * Puts every change, untracked files included, on the stash and leaves a clean tree. The
+ * stash is named with the branch and the time so the list says which is which; Stormcoder's
+ * own `.stormcoder/` folder is left where it is.
+ */
 export async function stash(cwd: string): Promise<void> {
 	const root = await requireRoot(cwd);
-	const out = await ok(['stash', 'push', '--include-untracked', '-m', 'Stormcoder stash'], root);
+	const st = await status(root);
+	const now = new Date();
+	const pad = (n: number) => String(n).padStart(2, '0');
+	const label = `${st.branch ?? 'detached'}, ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+	const out = await ok(['stash', 'push', '--include-untracked', '-m', label, '--', '.', ...STASH_EXCLUDE], root);
 	if (/No local changes to save/i.test(out)) {
 		throw new GitError('Nothing to stash.', 'nothing');
 	}
 }
 
-/** Re-applies the newest stash and drops it; git keeps it if the apply conflicts. */
-export async function stashPop(cwd: string): Promise<void> {
-	const root = await requireRoot(cwd);
-	const r = await run(['stash', 'pop'], root);
-	if (r.code !== 0) {
-		throw new GitError(`${r.stderr}${r.stdout}`.trim() || 'git stash pop failed', 'failed');
+/** Only a real stash reference gets near git. */
+function safeStashRef(ref: unknown): string {
+	if (typeof ref !== 'string' || !/^stash@\{\d{1,4}\}$/.test(ref)) {
+		throw new GitError('That is not a stash.', 'path');
 	}
+	return ref;
+}
+
+/** Splits a multi-file diff and parses each file's hunks. */
+export function parseMultiDiff(text: string): StashDiff {
+	let truncated = false;
+	if (text.length > TEXT_CAP) {
+		text = text.slice(0, TEXT_CAP);
+		truncated = true;
+	}
+	const files: StashDiff['files'] = [];
+	for (const chunk of text.split(/^(?=diff --git )/m)) {
+		const m = /^diff --git a\/(.+?) b\/(.+)$/m.exec(chunk);
+		if (!m) {
+			continue;
+		}
+		const parsed = parseUnifiedDiff(chunk);
+		files.push({ path: m[2], rows: parsed.rows, binary: parsed.binary });
+	}
+	return { files, truncated };
+}
+
+/** What a stash holds, file by file (untracked files included where git can show them). */
+export async function stashShow(cwd: string, ref: string): Promise<StashDiff> {
+	const root = await requireRoot(cwd);
+	const name = safeStashRef(ref);
+	const args = ['--no-color', '--no-ext-diff', '--no-textconv'];
+	let r = await run(['stash', 'show', '-p', '--include-untracked', ...args, name], root);
+	if (r.code !== 0) {
+		// Older git has no --include-untracked for show: the tracked part is still worth seeing.
+		r = await run(['stash', 'show', '-p', ...args, name], root);
+	}
+	if (r.code !== 0) {
+		throw new GitError(`${r.stderr}${r.stdout}`.trim() || 'git stash show failed', 'failed');
+	}
+	return parseMultiDiff(r.stdout);
+}
+
+/** Restores a stash. `pop` drops it afterwards; `apply` keeps it. git keeps it either way if the restore conflicts. */
+export async function stashRestore(cwd: string, ref: string, drop: boolean): Promise<void> {
+	const root = await requireRoot(cwd);
+	const r = await run(['stash', drop ? 'pop' : 'apply', safeStashRef(ref)], root);
+	if (r.code !== 0) {
+		const output = `${r.stderr}${r.stdout}`.trim();
+		throw new GitError(`${output || 'git stash failed'}\n\nThe stash was kept. Resolve the conflicts, then drop it when you are done.`, 'conflict');
+	}
+}
+
+/** Deletes a stash for good. The UI asks first. */
+export async function stashDrop(cwd: string, ref: string): Promise<void> {
+	const root = await requireRoot(cwd);
+	await ok(['stash', 'drop', safeStashRef(ref)], root);
 }
 
 /** The page that opens a pull request (or merge request) for the current branch on its host. */

@@ -24,6 +24,10 @@
 	/** @type {{ title: string, rows: string[][], label: string, danger?: boolean, run: () => void } | null} A question the git bar is asking before it does something it cannot take back. */
 	let confirm = null;
 	let docked = false;
+	/** The stash open in the right-hand pane, as its ref. */
+	let stashSel = '';
+	/** A chat run is in flight; stashing then would pull files out from under the agent. */
+	let running = false;
 	/** Paths the agent changed in this session, as the chat reported them. */
 	const agentFiles = new Set();
 	/** @type {{ files: string[], truncated: boolean } | null} */
@@ -105,6 +109,7 @@
 			badge.classList.toggle('hidden', count === 0);
 		}
 		if (st && st.isRepo) {
+			if (stashSel && !st.stashList.some(x => x.ref === stashSel)) { stashSel = ''; }
 			const present = sel && st.files.some(f => f.path === sel.path && areaValid(f, sel.area));
 			if (!present) { sel = firstSelection(); }
 			if (confirm && confirm.title === 'Push to origin?' && st.unpushed.length === 0) { confirm = null; }
@@ -192,7 +197,7 @@
 		}
 		if (st && st.isRepo) {
 			const sync = !st.branch ? 'detached HEAD' : !st.upstream ? 'not published' : st.ahead || st.behind ? `${st.ahead} ahead, ${st.behind} behind` : 'in sync with origin';
-			t.append(el('span', 'ch-branch', st.branch || 'detached'), el('span', 'ch-sync', sync));
+			t.append(el('span', 'ch-branch', st.branch || 'detached'), el('span', 'ch-sync', sync + (st.stashes ? `, ${st.stashes} stash${st.stashes === 1 ? '' : 'es'}` : '')));
 		}
 	}
 
@@ -230,7 +235,7 @@
 
 	/** @param {any} f @param {string} area */
 	function row(f, area) {
-		const on = sel && sel.path === f.path && sel.area === area;
+		const on = !stashSel && sel && sel.path === f.path && sel.area === area;
 		const r = el('div', 'ch-row' + (on ? ' on' : ''));
 		r.tabIndex = 0;
 		r.setAttribute('role', 'button');
@@ -255,7 +260,7 @@
 			if (f.added) { r.append(el('span', 'ch-count ch-add', '+' + f.added)); }
 			if (f.removed) { r.append(el('span', 'ch-count ch-del', '−' + f.removed)); }
 		}
-		const select = () => { sel = { path: f.path, area: area }; mode = 'diff'; render(); };
+		const select = () => { sel = { path: f.path, area: area }; stashSel = ''; mode = 'diff'; render(); };
 		r.addEventListener('click', select);
 		r.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(); } });
 		return r;
@@ -285,10 +290,44 @@
 				slot.list.append(r);
 			}
 		}
+		if (st.stashList.length) {
+			const head = el('div', 'ch-group');
+			head.append(el('span', '', `Stashes (${st.stashList.length})`));
+			slot.list.append(head);
+			for (const entry of st.stashList) { slot.list.append(stashRow(entry)); }
+		}
+	}
+
+	/** @param {any} entry */
+	function stashRow(entry) {
+		const r = el('div', 'ch-row' + (stashSel === entry.ref ? ' on' : ''));
+		r.tabIndex = 0;
+		r.setAttribute('role', 'button');
+		const name = el('span', 'ch-name', entry.message || entry.ref);
+		name.title = entry.ref;
+		r.append(name, el('span', 'ch-when', entry.when));
+		const open = () => { stashSel = entry.ref; render(); };
+		r.addEventListener('click', open);
+		r.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+		return r;
 	}
 
 	function renderHead() {
 		slot.head.textContent = '';
+		if (stashSel) {
+			const entry = st.stashList.find(x => x.ref === stashSel);
+			slot.head.append(el('code', 'ch-path', entry ? entry.message : stashSel), el('span', 'ch-spacer'));
+			if (canWrite) {
+				const off = running || !!busy;
+				const tip = running ? 'Wait for the run to finish' : '';
+				const mk = (label, cls, fn) => { const b = button(label, cls, fn, off); if (tip) { b.title = tip; } return b; };
+				slot.head.append(
+					mk('Apply', 'ch-link', () => void act('stashApply', [stashSel])),
+					mk('Pop', 'ch-link', () => void act('stashPop', [stashSel])),
+					mk('Drop', 'ch-link ch-link-danger', () => askDropStash(stashSel)));
+			}
+			return;
+		}
 		if (!sel) { return; }
 		const path = el('code', 'ch-path', sel.path);
 		const seg = el('div', 'ch-seg');
@@ -315,6 +354,22 @@
 	async function loadView() {
 		const token = ++viewToken;
 		const pane = slot.code;
+		if (stashSel) {
+			const shown = await git('stashShow', stashSel);
+			if (token !== viewToken) { return; }
+			pane.textContent = '';
+			if (!shown.ok) { pane.append(el('div', 'ch-empty', shown.error)); return; }
+			if (!shown.value.files.length) { pane.append(el('div', 'ch-empty', 'This stash holds no line changes.')); return; }
+			for (const f of shown.value.files) {
+				pane.append(el('div', 'ch-filehead', f.path));
+				if (f.binary) { pane.append(el('div', 'ch-note', 'Binary file.')); continue; }
+				for (const r of f.rows) {
+					pane.append(r.k === 'h' ? el('div', 'ch-hunk', r.t) : codeLine(r.k, r.o === undefined ? '' : String(r.o), r.n === undefined ? '' : String(r.n), r.t));
+				}
+			}
+			if (shown.value.truncated) { pane.append(el('div', 'ch-note', 'Showing the first part of a large stash.')); }
+			return;
+		}
 		if (!sel) {
 			pane.textContent = '';
 			pane.append(el('div', 'ch-empty', 'Select a file to see what changed.'));
@@ -481,8 +536,11 @@
 		const acts = el('div', 'ch-actions');
 		const info = stagedCount ? `${stagedCount} staged` : st.unpushed.length ? `${st.ahead || st.unpushed.length} ahead of ${st.upstream || 'origin'}` : '0 staged';
 		acts.append(el('span', 'ch-info', info));
-		if (!drafting && st.files.length && !st.merging) { acts.append(button('Stash', 'ch-link', () => void act('stash', []), !!busy)); }
-		if (!drafting && st.stashes) { acts.append(button(`Pop stash (${st.stashes})`, 'ch-link', () => void act('stashPop', []), !!busy)); }
+		if (!drafting && st.files.length && !st.merging) {
+			const stashBtn = button('Stash', 'ch-link', () => void act('stash', []), running || !!busy);
+			if (running) { stashBtn.title = 'Wait for the run to finish'; }
+			acts.append(stashBtn);
+		}
 		acts.append(el('span', 'ch-spacer'));
 		if (drafting) {
 			acts.append(button('Cancel', '', () => { void git('cancelDraft'); }));
@@ -538,6 +596,19 @@
 		renderGit();
 	}
 
+	/** Asks before a stash is deleted for good. @param {string} ref */
+	function askDropStash(ref) {
+		const entry = st.stashList.find(x => x.ref === ref);
+		confirm = {
+			title: 'Drop this stash?',
+			rows: [['Stash', entry ? entry.message : ref], ['Saved', entry ? entry.when : ''], ['Undo', 'not possible']],
+			label: 'Drop stash',
+			danger: true,
+			run: () => void act('stashDrop', [ref]),
+		};
+		renderGit();
+	}
+
 	async function openPR() {
 		const res = await git('prUrl');
 		if (!res.ok) { banner = { level: 'err', text: res.error }; renderGit(); return; }
@@ -574,8 +645,10 @@
 		if (!res.ok) { banner = { level: 'err', text: res.error.split('\n')[0], detail: res.error.split('\n').slice(1, 6).join('\n') }; }
 		else if (op === 'undoCommit') { banner = { level: 'ok', text: 'Commit undone; its changes are staged again.' }; }
 		else if (op === 'pull') { banner = { level: 'ok', text: 'Pulled the latest commits.' }; }
-		else if (op === 'stash') { banner = { level: 'ok', text: 'Stashed your changes. Pop the stash to bring them back.' }; }
-		else if (op === 'stashPop') { banner = { level: 'ok', text: 'Stash applied.' }; }
+		else if (op === 'stash') { banner = { level: 'ok', text: 'Stashed your changes. Find them under Stashes.' }; }
+		else if (op === 'stashApply') { banner = { level: 'ok', text: 'Stash applied. It is still on the list.' }; }
+		else if (op === 'stashPop') { banner = { level: 'ok', text: 'Stash applied and removed from the list.' }; stashSel = ''; }
+		else if (op === 'stashDrop') { banner = { level: 'ok', text: 'Stash dropped.' }; stashSel = ''; }
 		else if (op === 'discard') { banner = { level: 'ok', text: 'Changes discarded.' }; }
 		await refresh();
 		if (!viewShowing) { return; }
@@ -658,6 +731,7 @@
 			render();
 		},
 		hide() { viewShowing = false; },
+		setRunning(value) { if (running !== value) { running = value; if (viewShowing && st && st.isRepo) { renderHead(); renderGit(); } } },
 		setDocked(value) { docked = value; if (viewShowing) { renderTabs(); } },
 		setTrusted(value) { if (trusted !== value) { trusted = value; if (viewShowing) { render(); } } },
 		/** Remembers which files the agent touched so rows can say so. */

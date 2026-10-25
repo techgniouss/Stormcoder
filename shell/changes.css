@@ -81,3 +81,6 @@
 #views.split #view-chat { right: auto; width: 46%; }
 #views.split #view-changes { left: 46%; width: 54%; border-left: 1px solid var(--border); }
 #views.split .ch-body { grid-template-columns: minmax(180px, 38%) minmax(0, 1fr); }
+.ch-when { font-size: 11px; color: var(--faint); flex: none; }
+.ch-filehead { padding: 8px 14px 4px; font: 600 12px var(--mono); /* taste-skill-ignore: a file path */ color: var(--text); border-top: 1px solid var(--rule); }
+.ch-filehead:first-child { border-top: 0; }

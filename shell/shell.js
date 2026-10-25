@@ -74,6 +74,7 @@
 	function setBusy(busy) {
 		// A run that just ended may have changed files: refresh the Changes badge and view.
 		if (wasBusy && !busy) { StormChanges.refresh(); }
+		StormChanges.setRunning(busy);
 		wasBusy = busy;
 		$('runLine').classList.toggle('on', busy);
 		document.querySelector('.rail-btn[data-view="chat"]').classList.toggle('busy', busy);

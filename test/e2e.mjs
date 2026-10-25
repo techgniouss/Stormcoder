@@ -211,13 +211,34 @@ try {
 	await changes.getByText('Changes discarded', { exact: false }).waitFor({ timeout: 10000 });
 	assert.doesNotMatch(fs.readFileSync(path.join(project, 'multi.txt'), 'utf8'), /EDIT-B/);
 
-	// Stash and pop.
+	// Stash: it is named, listed, viewable, and comes back with Pop. Stormcoder's own folder stays.
 	await changes.getByRole('button', { name: 'Stash', exact: true }).click();
-	await changes.getByRole('button', { name: /Pop stash/ }).waitFor({ timeout: 10000 });
-	assert.ok(gitIn('stash', 'list').includes('Stormcoder stash'));
-	await changes.getByRole('button', { name: /Pop stash/ }).click();
-	await changes.getByText('Stash applied', { exact: false }).waitFor({ timeout: 10000 });
+	await changes.locator('.ch-group', { hasText: /^Stashes \(1\)/ }).waitFor({ timeout: 10000 });
+	assert.match(gitIn('stash', 'list'), /main, \d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
+	assert.ok(fs.existsSync(path.join(project, '.stormcoder')), 'the stash leaves .stormcoder alone');
+	await changes.locator('.ch-row', { hasText: /^main, \d{4}/ }).click();
+	await changes.locator('.ch-filehead', { hasText: 'multi.txt' }).waitFor({ timeout: 10000 });
+	await changes.getByRole('button', { name: 'Pop', exact: true }).click();
+	await changes.getByText('removed from the list', { exact: false }).waitFor({ timeout: 10000 });
 	await changes.locator('.ch-row', { hasText: 'multi.txt' }).first().waitFor({ timeout: 10000 });
+	assert.equal(gitIn('stash', 'list').trim(), '');
+	// Dropping asks first.
+	await changes.getByRole('button', { name: 'Stash', exact: true }).click();
+	await changes.locator('.ch-row', { hasText: /^main, \d{4}/ }).click();
+	await changes.getByRole('button', { name: 'Drop', exact: true }).click();
+	await changes.locator('.ch-confirm').getByRole('button', { name: 'Drop stash' }).click();
+	await changes.getByText('Stash dropped', { exact: false }).waitFor({ timeout: 10000 });
+	assert.equal(gitIn('stash', 'list').trim(), '');
+	// While a run is in flight nothing can be stashed.
+	fs.writeFileSync(path.join(project, 'busy.txt'), 'x\n');
+	await page.click('[data-view=chat]');
+	await page.click('[data-view=changes]');
+	await changes.locator('.ch-row', { hasText: 'busy.txt' }).waitFor({ timeout: 10000 });
+	await page.evaluate(() => window.StormChanges.setRunning(true));
+	assert.ok(await changes.getByRole('button', { name: 'Stash', exact: true }).isDisabled(), 'Stash waits for the run');
+	await page.evaluate(() => window.StormChanges.setRunning(false));
+	assert.ok(await changes.getByRole('button', { name: 'Stash', exact: true }).isEnabled());
+	fs.rmSync(path.join(project, 'busy.txt'));
 	gitIn('checkout', '-q', '--', '.');
 	gitIn('reset', '-q');
 	gitIn('stash', 'clear');

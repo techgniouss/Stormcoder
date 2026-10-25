@@ -236,19 +236,38 @@ await g.discard(repo, ['one.txt']);
 assert.equal(fs.readFileSync(path.join(repo, 'one.txt'), 'utf8'), 'staged version\n', 'discard goes back to the staged text');
 assert.equal((await g.status(repo)).files.find(f => f.path === 'one.txt').staged, true);
 
-// Stash and pop.
+// Stash: named, listed, viewable, applied or popped, dropped; Stormcoder's own folder stays put.
 fs.rmSync(path.join(repo, 'ignored.txt'), { force: true });
 write(repo, 'stashme.txt', 's\n');
+write(repo, 'multi.txt', 'tracked change\n');
+write(repo, '.stormcoder/memory.md', '- a fact\n');
 await g.stash(repo);
 s = await g.status(repo);
 assert.equal(s.stashes, 1);
-assert.equal(s.files.length, 0, 'the tree is clean after stashing: ' + JSON.stringify(s.files));
-await g.stashPop(repo);
-assert.equal((await g.status(repo)).stashes, 0);
+assert.match(s.stashList[0].message, /^main, \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/, 'named with branch and time');
+assert.equal(s.stashList[0].ref, 'stash@{0}');
+assert.deepEqual(s.files.map(f => f.path), ['.stormcoder/memory.md'], 'only Stormcoder\'s own folder is left behind');
+assert.ok(fs.existsSync(path.join(repo, '.stormcoder/memory.md')));
+const shown = await g.stashShow(repo, 'stash@{0}');
+assert.ok(shown.files.some(f => f.path === 'multi.txt' && f.rows.some(r => r.k === 'a' && r.t === 'tracked change')));
+assert.ok(shown.files.some(f => f.path === 'stashme.txt'), 'untracked files show too');
+await rejects(g.stashShow(repo, '--output=/tmp/x'), 'path');
+await rejects(g.stashRestore(repo, 'HEAD', true), 'path');
+await rejects(g.stashDrop(repo, 'stash@{0};ls'), 'path');
+await g.stashRestore(repo, 'stash@{0}', false);
+assert.equal((await g.status(repo)).stashes, 1, 'apply keeps the stash');
 assert.ok(fs.existsSync(path.join(repo, 'stashme.txt')));
-sh(repo, 'reset', '-q');
-sh(repo, 'checkout', '-q', '.');
-sh(repo, 'clean', '-fdq');
+sh(repo, 'checkout', '-q', '--', '.');
+sh(repo, 'clean', '-fdq', '-e', '.stormcoder');
+await g.stashRestore(repo, 'stash@{0}', true);
+assert.equal((await g.status(repo)).stashes, 0, 'pop drops it');
+sh(repo, 'checkout', '-q', '--', '.');
+sh(repo, 'clean', '-fdq', '-e', '.stormcoder');
+write(repo, 'again.txt', 'x\n');
+await g.stash(repo);
+await g.stashDrop(repo, 'stash@{0}');
+assert.equal((await g.status(repo)).stashes, 0);
+fs.rmSync(path.join(repo, '.stormcoder'), { recursive: true, force: true });
 await rejects(g.stash(repo), 'nothing');
 
 // Pull request links.
