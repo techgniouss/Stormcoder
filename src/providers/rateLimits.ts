@@ -174,6 +174,7 @@ export function rateLimitStatus(snapshot: RateLimitSnapshot | undefined, now = D
  */
 export class RateLimitTracker {
 	private readonly byModel = new Map<string, RateLimitSnapshot>();
+	private readonly byCredential = new Map<string, RateLimitTracker>();
 
 	/** Records what `response` says about `model`, if anything. */
 	note(model: string, response: Response, now = Date.now()): void {
@@ -215,11 +216,26 @@ export class RateLimitTracker {
 	 * pace a doomed one. The return type is structural to avoid importing `ApiFetchOptions`
 	 * from `types.ts`, which already imports this module.
 	 */
-	fetchOpts(model: string): { onResponse: (response: Response) => void; pace: (estimated: number) => number } {
+	fetchOpts(model: string, credential?: string): { onResponse: (response: Response) => void; pace: (estimated: number) => number } {
+		const scoped = credential === undefined ? this : this.forCredential(credential);
 		return {
-			onResponse: response => this.note(model, response),
-			pace: estimated => this.delayFor(model, estimated),
+			onResponse: response => {
+				this.note(model, response);
+				if (scoped !== this) { scoped.note(model, response); }
+			},
+			pace: estimated => scoped.delayFor(model, estimated),
 		};
+	}
+
+	/** An exhausted account's token window must never delay a healthy fallback account. */
+	private forCredential(credential: string): RateLimitTracker {
+		let tracker = this.byCredential.get(credential);
+		if (!tracker) {
+			tracker = new RateLimitTracker();
+			this.byCredential.set(credential, tracker);
+			if (this.byCredential.size > 1000) { this.byCredential.delete(this.byCredential.keys().next().value!); }
+		}
+		return tracker;
 	}
 
 	/**

@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { createHash } from 'crypto';
 import * as vscode from 'vscode';
 import { OAuthTokenStore } from '../oauth';
 import { AnthropicProvider } from './anthropic';
@@ -16,7 +17,7 @@ import { CustomProvider } from './custom';
 import { GeminiProvider } from './gemini';
 import { GrokProvider } from './grok';
 import { GroqProvider } from './groq';
-import { KeyRotator } from './keyRotation';
+import { withProviderResilience } from './resilience';
 import { KimiProvider } from './kimi';
 import { KiroProvider } from './kiro';
 import { MistralProvider } from './mistral';
@@ -104,6 +105,31 @@ export interface ResolvedProviderConfig {
 	readonly baseUrlOverride?: string;
 	/** How many backup keys are stored beyond the primary — see {@link EXTRA_KEY_PREFIX}. */
 	readonly extraApiKeyCount: number;
+	/** Safe account metadata only; tokens and keys never enter webview messages. */
+	readonly accounts: ProviderAccount[];
+}
+
+/** A credential row safe to display in Settings. */
+export interface ProviderAccount {
+	readonly id: string;
+	readonly label: string;
+	readonly kind: 'oauth' | 'key' | 'env';
+	readonly active: boolean;
+	readonly cooldownUntil: number;
+	readonly removable: boolean;
+}
+
+interface Credential {
+	id: string;
+	kind: 'oauth' | 'key' | 'env';
+	label: string;
+	key?: string;
+	slot?: string;
+}
+
+/** Stable opaque identity, so pool edits never move a cooldown onto another key. */
+function keyId(key: string): string {
+	return 'key:' + createHash('sha256').update(key).digest('hex');
 }
 
 /**
@@ -114,8 +140,11 @@ export class ProviderRegistry {
 	private readonly providers = new Map<string, ChatProvider>();
 	/** OAuth sessions from the built-in web sign-in flows (Claude / ChatGPT accounts). */
 	readonly oauth: OAuthTokenStore;
-	/** Round-robins each provider's stored keys away from ones that just 401/403/429'd. */
-	private readonly keyRotator = new KeyRotator();
+	private readonly activeCredential = new Map<string, string>();
+	private readonly credentialCooldowns = new CooldownTracker();
+	/** Maps issued wire tokens back to stable accounts, including across token refresh. */
+	private readonly issued = new Map<string, Map<string, string>>();
+	private readonly mutations = new Map<string, Promise<unknown>>();
 	/** Per (provider, model) quota parking — see {@link CooldownTracker}. Public so
 	 * `auto/router.ts` and `chatViewProvider.ts` can consult it without a registry method
 	 * per call site. */
@@ -185,65 +214,145 @@ export class ProviderRegistry {
 		return ENV_VARS[id];
 	}
 
-	/** Whether this provider's key currently comes from an environment variable (takes precedence over, and can't be removed by, the stored secret). */
+	/** Whether an environment credential is configured; it cannot be removed from Settings. */
 	hasEnvKey(id: string): boolean {
 		const envName = this.envVarName(id);
 		return !!(envName && process.env[envName]);
 	}
 
-	/**
-	 * All usable keys for `id` in rotation order: the primary stored key first, then any
-	 * backup keys from {@link getExtraApiKeys}. Empty when the provider authenticates via
-	 * an environment variable or web sign-in instead of a pasted key — those aren't part of
-	 * the rotation pool: an env var is a single fixed value, and a web sign-in session already
-	 * refreshes itself independently of key rotation.
-	 */
+	/** All stored keys, deduplicated, including a backup-only configuration. */
 	async getApiKeys(id: string): Promise<string[]> {
-		const envName = this.envVarName(id);
-		if (envName && process.env[envName]) {
-			return [];
-		}
 		const primary = await this.secrets.get(SECRET_PREFIX + id);
-		if (!primary) {
-			return [];
-		}
-		const extra = await this.getExtraApiKeys(id);
-		const all = [primary, ...extra];
-		notePooledKeys(all);
+		const all = [...new Set([primary, ...await this.getExtraApiKeys(id)].filter((k): k is string => !!k))];
 		return all;
 	}
 
-	async getApiKey(id: string): Promise<string | undefined> {
-		// Environment variables are a convenient escape hatch for power users / CI.
+	/** Builds the credential pool without refreshing or exposing any secrets to the UI. */
+	private async credentials(id: string): Promise<Credential[]> {
 		const envName = this.envVarName(id);
-		const fromEnv = envName ? process.env[envName] : undefined;
-		if (fromEnv) {
-			return fromEnv;
-		}
+		const envKey = envName ? process.env[envName] : undefined;
 		const keys = await this.getApiKeys(id);
-		if (keys.length) {
-			return keys[this.keyRotator.activeIndex(id, keys)];
+		const result: Credential[] = keys.map((key, i) => ({ id: keyId(key), kind: 'key', key, label: `API key ${i + 1}` }));
+		if (envKey) {
+			const duplicate = result.findIndex(c => c.key === envKey);
+			if (duplicate >= 0) { result.splice(duplicate, 1); }
+			result.unshift({ id: keyId(envKey), kind: 'env', key: envKey, label: envName! });
 		}
-		// Web sign-in session, refreshed transparently when close to expiry.
-		return this.oauth.getFreshAccessToken(id);
+		const accounts = await this.oauth.accounts(id);
+		for (const [i, account] of accounts.entries()) {
+			result.push({ id: 'oauth:' + account.id, kind: 'oauth', slot: account.id, key: account.record.access, label: account.record.label || `Signed-in account ${i + 1}` });
+		}
+		notePooledKeys(result.map(c => c.key ?? ''), id);
+		return result;
 	}
 
-	/**
-	 * Call after a request against `id`'s current key failed with a 401/403/429. Marks that
-	 * key errored and advances to the next stored key. Returns true when a *different* key is
-	 * now active — the caller should re-resolve via {@link getApiKey} and retry the same
-	 * request once. Returns false when there is no spare key (single-key or no-key providers),
-	 * in which case the caller should treat the failure as final. Pass `failedKey` (the key the
-	 * failed request used) so concurrent failures of the same key rotate only once.
-	 */
-	async rotateApiKey(id: string, failedKey?: string): Promise<boolean> {
-		const keys = await this.getApiKeys(id);
-		return this.keyRotator.rotate(id, keys, failedKey || undefined);
+	private available(id: string, credentials: Credential[]): Credential | undefined {
+		const ready = credentials.filter(c => !this.credentialCooldowns.isCoolingDown(id, c.id));
+		return ready.find(c => c.id === this.activeCredential.get(id)) ?? ready[0];
 	}
 
-	/** Drops `id`'s errored-key history after a successful call. See {@link KeyRotator.clear}. */
-	noteApiKeySuccess(id: string): void {
-		this.keyRotator.clear(id);
+	/** Resolves and refreshes just the selected account. A dead session cannot block backups. */
+	async getApiKey(id: string): Promise<string | undefined> {
+		let lastError: unknown;
+		const credentials = await this.credentials(id);
+		if (!credentials.length) { return undefined; }
+		for (let attempt = 0; attempt < credentials.length; attempt++) {
+			const credential = this.available(id, credentials);
+			if (!credential) { break; }
+			this.activeCredential.set(id, credential.id);
+			try {
+				const token = credential.kind === 'oauth'
+					? await this.oauth.getFreshAccessToken(id, credential.slot) : credential.key;
+				if (!token) { throw new Error('The selected account was removed.'); }
+				credential.key = token;
+				notePooledKeys(credentials.map(c => c.key ?? ''), id);
+				let issued = this.issued.get(id);
+				if (!issued) { issued = new Map(); this.issued.set(id, issued); }
+				issued.set(token, credential.id);
+				if (issued.size > 1000) { issued.delete(issued.keys().next().value!); }
+				return token;
+			} catch (err) {
+				lastError = err;
+				this.credentialCooldowns.markCooldown(id, credential.id, String(err));
+			}
+		}
+		if (lastError) { throw lastError; }
+		throw new Error('All saved accounts or keys for ' + id + ' are cooling down after a limit or authentication failure. Wait for the cooldown or add another account in Settings.');
+	}
+
+	/** Parks exactly the failed account; concurrent failures cannot skip a healthy account. */
+	async rotateApiKey(id: string, failedKey?: string, detail = 'HTTP 429'): Promise<boolean> {
+		const credentials = await this.credentials(id);
+		const failedId = failedKey ? this.issued.get(id)?.get(failedKey)
+			?? credentials.find(c => c.key === failedKey)?.id : this.activeCredential.get(id);
+		// A long-running agent may still hold an access token that expired mid-run.
+		// Refresh that account before treating an ordinary expiry as quota exhaustion.
+		const failed = credentials.find(c => c.id === failedId);
+		if (/\bhttp 401\b/i.test(detail) && failed?.kind === 'oauth') {
+			try {
+				const fresh = await this.oauth.getFreshAccessToken(id, failed.slot);
+				if (fresh && fresh !== failedKey) {
+					this.activeCredential.set(id, failed.id);
+					return true;
+				}
+			} catch { /* A dead login must not prevent the next account from taking over. */ }
+		}
+		if (failedId) { this.credentialCooldowns.markCooldown(id, failedId, detail); }
+		const next = this.available(id, credentials);
+		if (!next || next.id === failedId) { return false; }
+		this.activeCredential.set(id, next.id);
+		return true;
+	}
+
+	/** Success never erases a different account's cooldown. */
+	noteApiKeySuccess(_id: string): void { }
+
+	/** Settings receives only opaque ids, labels and state, never credential contents. */
+	async getAccounts(id: string): Promise<ProviderAccount[]> {
+		const credentials = await this.credentials(id);
+		const active = this.available(id, credentials)?.id;
+		return credentials.map(c => ({
+			id: c.id, label: c.label, kind: c.kind, active: c.id === active,
+			cooldownUntil: this.credentialCooldowns.remainingMs(id, c.id) ? Date.now() + this.credentialCooldowns.remainingMs(id, c.id) : 0, removable: c.kind !== 'env',
+		}));
+	}
+
+	/** Removes exactly one stored credential while retaining the other accounts. */
+	async removeAccount(id: string, accountId: string): Promise<void> {
+		await this.mutate(id, async () => {
+			const credential = (await this.credentials(id)).find(c => c.id === accountId);
+			if (!credential || credential.kind === 'env') { return; }
+			if (credential.kind === 'oauth') { await this.oauth.remove(id, credential.slot!); }
+			else {
+				if (await this.secrets.get(SECRET_PREFIX + id) === credential.key) { await this.secrets.delete(SECRET_PREFIX + id); }
+				await this.writeExtraApiKeys(id, (await this.getExtraApiKeys(id)).filter(k => k !== credential.key));
+			}
+			if (this.activeCredential.get(id) === accountId) { this.activeCredential.delete(id); }
+		});
+	}
+
+	/** Queues read/modify/write changes to stored keys and imported login credentials. */
+	private mutate<T>(id: string, fn: () => Promise<T>): Promise<T> {
+		const next = (this.mutations.get(id) ?? Promise.resolve()).catch(() => undefined).then(fn);
+		this.mutations.set(id, next);
+		void next.finally(() => { if (this.mutations.get(id) === next) { this.mutations.delete(id); } }).catch(() => undefined);
+		return next;
+	}
+
+	/** Adds a key or imported login without replacing any previously configured account. */
+	async addApiKey(id: string, key: string): Promise<void> {
+		const cleaned = key.trim();
+		if (!cleaned) { return; }
+		await this.mutate(id, async () => {
+			const keys = await this.getApiKeys(id);
+			if (!keys.includes(cleaned)) {
+				if (!await this.secrets.get(SECRET_PREFIX + id)) { await this.secrets.store(SECRET_PREFIX + id, cleaned); }
+				else { await this.writeExtraApiKeys(id, [...await this.getExtraApiKeys(id), cleaned]); }
+			}
+			this.cooldowns.clearProvider(id);
+			this.credentialCooldowns.clear(id, keyId(cleaned));
+			this.activeCredential.set(id, keyId(cleaned));
+		});
 	}
 
 	/** The provider's backup key pool, beyond the primary key — see {@link EXTRA_KEY_PREFIX}. */
@@ -263,7 +372,12 @@ export class ProviderRegistry {
 	/** Replaces the provider's backup key pool. An empty list clears the stored secret entirely
 	 * rather than persisting an empty array, so `hasExtraApiKeys`-style checks stay simple. */
 	async setExtraApiKeys(id: string, keys: string[]): Promise<void> {
-		const cleaned = keys.map(k => k.trim()).filter(k => k.length > 0);
+		await this.mutate(id, () => this.writeExtraApiKeys(id, keys));
+		this.cooldowns.clearProvider(id);
+	}
+
+	private async writeExtraApiKeys(id: string, keys: string[]): Promise<void> {
+		const cleaned = [...new Set(keys.map(k => k.trim()).filter(k => k.length > 0))];
 		if (cleaned.length) {
 			await this.secrets.store(EXTRA_KEY_PREFIX + id, JSON.stringify(cleaned));
 		} else {
@@ -271,22 +385,16 @@ export class ProviderRegistry {
 		}
 	}
 
-	/** Whether any credential exists (env, key, or web sign-in) without refreshing tokens. */
+	/** Credential presence is checked without triggering a refresh. */
 	async hasCredentials(id: string): Promise<boolean> {
-		return this.hasEnvKey(id)
-			|| !!(await this.secrets.get(SECRET_PREFIX + id))
-			|| !!(await this.oauth.get(id));
+		return (await this.credentials(id)).length > 0;
 	}
 
-	/** How the provider currently authenticates, for display purposes. */
+	/** How the currently selected credential authenticates. */
 	async getAuthKind(id: string): Promise<'oauth' | 'key' | 'none'> {
-		if (this.hasEnvKey(id) || await this.secrets.get(SECRET_PREFIX + id)) {
-			return 'key';
-		}
-		if (await this.oauth.get(id)) {
-			return 'oauth';
-		}
-		return 'none';
+		const credentials = await this.credentials(id);
+		const credential = this.available(id, credentials) ?? credentials[0];
+		return credential ? (credential.kind === 'oauth' ? 'oauth' : 'key') : 'none';
 	}
 
 	/**
@@ -296,27 +404,39 @@ export class ProviderRegistry {
 	 * A credential no longer stored (removed or replaced meanwhile) is left alone.
 	 */
 	async replaceStoredKey(id: string, previous: string, next: string): Promise<void> {
-		if (await this.secrets.get(SECRET_PREFIX + id) === previous) {
-			await this.secrets.store(SECRET_PREFIX + id, next);
-			return;
-		}
-		const extra = await this.getExtraApiKeys(id);
-		const index = extra.indexOf(previous);
-		if (index >= 0) {
-			extra[index] = next;
-			await this.setExtraApiKeys(id, extra);
-		}
+		await this.mutate(id, async () => {
+			if (await this.secrets.get(SECRET_PREFIX + id) === previous) {
+				await this.secrets.store(SECRET_PREFIX + id, next);
+			} else {
+				const extra = await this.getExtraApiKeys(id);
+				const index = extra.indexOf(previous);
+				if (index < 0) { return; }
+				extra[index] = next;
+				await this.writeExtraApiKeys(id, extra);
+			}
+			if (this.activeCredential.get(id) === keyId(previous)) { this.activeCredential.set(id, keyId(next)); }
+			for (const [token, account] of this.issued.get(id) ?? []) {
+				if (account === keyId(previous)) { this.issued.get(id)!.set(token, keyId(next)); }
+			}
+		});
 	}
 
+	/** Replaces the primary API key, preserving independently configured login accounts. */
 	async setApiKey(id: string, key: string): Promise<void> {
-		await this.secrets.store(SECRET_PREFIX + id, key);
-		// Pasting a key switches auth methods: drop any web sign-in session.
-		await this.oauth.clear(id);
+		await this.mutate(id, async () => {
+			await this.secrets.store(SECRET_PREFIX + id, key);
+			this.cooldowns.clearProvider(id);
+			this.credentialCooldowns.clear(id, keyId(key));
+			this.activeCredential.set(id, keyId(key));
+		});
 	}
 
-	/** Makes a just-stored web sign-in session the active credential by dropping any stored API key. */
+	/** Selects the just-added login without deleting API keys or other sessions. */
 	async adoptOAuth(id: string): Promise<void> {
-		await this.secrets.delete(SECRET_PREFIX + id);
+		const accountId = 'oauth:' + this.oauth.latestAccount(id);
+		this.cooldowns.clearProvider(id);
+		this.credentialCooldowns.clear(id, accountId);
+		this.activeCredential.set(id, accountId);
 	}
 
 	async setModel(id: string, model: string): Promise<void> {
@@ -347,17 +467,21 @@ export class ProviderRegistry {
 		if (!provider) {
 			throw new Error(`Unknown provider: ${id}`);
 		}
-		const apiKey = await this.getApiKey(id);
-		if (!apiKey && provider.info.requiresApiKey) {
-			throw new Error(`Set an API key for ${provider.info.label} first.`);
-		}
-		return provider.listModels(apiKey ?? '', this.getBaseUrl(id), signal);
+		return withProviderResilience(this, id, this.getModel(id), async apiKey => {
+			if (!apiKey && provider.info.requiresApiKey) { throw new Error(`Set an API key for ${provider.info.label} first.`); }
+			return provider.listModels(apiKey, this.getBaseUrl(id), signal);
+		});
 	}
 
 	async clearApiKey(id: string): Promise<void> {
-		await this.secrets.delete(SECRET_PREFIX + id);
-		await this.secrets.delete(EXTRA_KEY_PREFIX + id);
-		await this.oauth.clear(id);
+		await this.mutate(id, async () => {
+			await this.secrets.delete(SECRET_PREFIX + id);
+			await this.secrets.delete(EXTRA_KEY_PREFIX + id);
+			await this.oauth.clear(id);
+			this.activeCredential.delete(id);
+			this.cooldowns.clearProvider(id);
+			this.issued.delete(id);
+		});
 	}
 
 	async resolve(id: string): Promise<ResolvedProviderConfig | undefined> {
@@ -387,6 +511,7 @@ export class ProviderRegistry {
 				? undefined
 				: (vscode.workspace.getConfiguration('stormcoder').get<string>(`${id}.baseUrl`)?.trim() ?? ''),
 			extraApiKeyCount: (await this.getExtraApiKeys(id)).length,
+			accounts: await this.getAccounts(id),
 		};
 	}
 

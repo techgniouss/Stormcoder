@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { OpenAICompatibleProvider } from './openaiCompatible';
+import { notePooledCredentialAlias } from './types';
 
 /** What one mint produced. */
 export interface WireSession {
@@ -95,6 +96,8 @@ export abstract class OAuthProxyChatProvider extends OpenAICompatibleProvider {
 		const stored = this.current(storedCredential);
 		const cached = this.cache.get(stored);
 		if (cached && cached.expiresAt - Date.now() > MINT_MARGIN_MS) {
+			notePooledCredentialAlias(storedCredential, cached.token);
+			notePooledCredentialAlias(stored, cached.token);
 			return cached;
 		}
 		let pending = this.inflight.get(stored);
@@ -111,6 +114,8 @@ export abstract class OAuthProxyChatProvider extends OpenAICompatibleProvider {
 			this.inflight.set(stored, pending);
 		}
 		const minted = await untilAborted(pending, signal);
+		notePooledCredentialAlias(storedCredential, minted.token);
+		notePooledCredentialAlias(stored, minted.token);
 		this.cache.set(this.current(stored), minted);
 		return minted;
 	}

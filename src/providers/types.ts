@@ -824,45 +824,41 @@ function backoffMs(attempt: number, response?: Response): number {
 const RATE_LIMIT_RETRIES = 4;
 
 /**
- * Retry budget for a 429 when the request's key belongs to a multi-key pool: one more try
- * on the same key is cheap, but waiting out minutes of backoff while a healthy spare key
- * sits unused is not. After this, the 429 surfaces and key rotation takes over.
+ * A pooled credential's 429 goes straight to account fallback; single-key setups retain
+ * their existing backoff budget.
  */
-const POOLED_KEY_RATE_LIMIT_RETRIES = 1;
+const POOLED_KEY_RATE_LIMIT_RETRIES = 0;
 
-/** API keys known to belong to a pool of more than one key (see {@link notePooledKeys}). */
-const pooledKeys = new Set<string>();
+/** Current pools, replaced on each registry lookup so removed keys lose pool membership. */
+const pooledKeys = new Map<string, Set<string>>();
 
-/**
- * Records which keys are part of a multi-key pool, called by the registry whenever it
- * resolves a provider's keys. {@link apiFetch} then fails fast on 429 for those keys so
- * rotation happens promptly; single-key setups keep the patient retry budget.
- */
-export function notePooledKeys(keys: readonly string[]): void {
-	if (keys.length > 1) {
-		for (const key of keys) {
-			if (key) {
-				pooledKeys.add(key);
-			}
-		}
+/** Multi-account requests surface quota errors immediately to the account fallback layer. */
+export function notePooledKeys(keys: readonly string[], poolId = 'legacy'): void {
+	const unique = new Set(keys.filter(Boolean));
+	if (unique.size > 1) { pooledKeys.set(poolId, unique); }
+	else { pooledKeys.delete(poolId); }
+}
+
+/** Connects an exchanged wire token (Copilot, Grok, Kiro) to its stored credential pool. */
+export function notePooledCredentialAlias(stored: string, wireToken: string): void {
+	for (const keys of pooledKeys.values()) {
+		if (keys.has(stored)) { keys.add(wireToken); }
 	}
 }
 
-/** True when the request carries a key from a multi-key pool (in a header or the URL). */
+/** Matches complete credentials, never substrings of unrelated header values. */
 function usesPooledKey(url: string, init: RequestInit): boolean {
-	if (!pooledKeys.size) {
-		return false;
-	}
-	let haystack = url;
+	if (!pooledKeys.size) { return false; }
+	const candidates = new Set<string>();
 	try {
-		new Headers(init.headers).forEach(value => { haystack += `\n${value}`; });
-	} catch {
-		// Unreadable headers: fall back to the URL alone.
-	}
-	for (const key of pooledKeys) {
-		if (haystack.includes(key)) {
-			return true;
-		}
+		new Headers(init.headers).forEach(value => {
+			candidates.add(value);
+			candidates.add(value.replace(/^(?:Bearer|token)\s+/i, ''));
+		});
+		new URL(url).searchParams.forEach(value => candidates.add(value));
+	} catch { /* A malformed URL/header is handled by fetch, not the pool matcher. */ }
+	for (const keys of pooledKeys.values()) {
+		for (const key of candidates) { if (keys.has(key)) { return true; } }
 	}
 	return false;
 }
@@ -1074,11 +1070,16 @@ export function isTransientProviderError(message: string): boolean {
 /** Builds a friendly error message from a failed (non-OK) HTTP response. */
 export async function describeHttpError(provider: string, response: Response): Promise<string> {
 	let detail = '';
+	let resetSeconds: number | undefined;
 	try {
 		const text = await response.text();
 		try {
 			const json = JSON.parse(text);
 			detail = json?.error?.message ?? json?.message ?? json?.detail ?? text;
+			const resetAt = json?.error?.resets_at ?? json?.resets_at;
+			const resetIn = json?.error?.resets_in_seconds ?? json?.resets_in_seconds;
+			if (typeof resetAt === 'number' && Number.isFinite(resetAt)) { resetSeconds = Math.max(0, resetAt - Date.now() / 1000); }
+			else if (typeof resetIn === 'number' && Number.isFinite(resetIn)) { resetSeconds = Math.max(0, resetIn); }
 		} catch {
 			detail = text;
 		}
@@ -1097,8 +1098,11 @@ export async function describeHttpError(provider: string, response: Response): P
 	}
 	if (response.status === 429) {
 		const retryAfter = response.headers.get('retry-after');
-		const seconds = retryAfter ? Number(retryAfter) : NaN;
-		const wait = !Number.isNaN(seconds) ? `try again in ~${Math.ceil(seconds)}s` : 'try again shortly';
+		const headerSeconds = retryAfter ? Number(retryAfter) : NaN;
+		const headerDate = retryAfter && !Number.isFinite(headerSeconds) ? Date.parse(retryAfter) : NaN;
+		const seconds = Number.isFinite(headerSeconds) ? Math.max(0, headerSeconds)
+			: Number.isFinite(headerDate) ? Math.max(0, (headerDate - Date.now()) / 1000) : resetSeconds ?? NaN;
+		const wait = Number.isFinite(seconds) ? `try again in ~${Math.ceil(seconds)}s` : 'try again shortly';
 		return `${provider}: rate limited (HTTP 429) — the model's free-tier quota is spent or requests came too fast. Please ${wait}, switch to a less busy model, or add your own API key for higher limits. ${detail}`.trim();
 	}
 	return `${provider}: request failed (HTTP ${response.status}). ${detail}`;

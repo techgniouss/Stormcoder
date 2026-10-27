@@ -240,8 +240,10 @@ async function streamResponses(
 				break;
 			}
 			case 'response.failed':
-			case 'error':
-				throw new Error(`${label}: ${event?.response?.error?.message ?? event?.message ?? 'stream error'}`);
+			case 'error': {
+				const error = event?.response?.error ?? event?.error ?? event;
+				throw new Error(`${label}: ${error?.code ?? error?.type ?? ''} ${error?.message ?? 'stream error'}`);
+			}
 		}
 	}, signal, { label, sawTerminal: () => finishReason !== undefined });
 	closeReasoning();

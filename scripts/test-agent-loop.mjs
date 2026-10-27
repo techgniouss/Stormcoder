@@ -102,6 +102,33 @@ const noopCallbacks = () => {
 	};
 };
 
+// Account fallback reaches every saved credential, stops on exhaustion, and never replays
+// a partially streamed step. No tool execution is repeated during account selection.
+for (const scenario of ['fifth-key', 'exhausted', 'partial-output']) {
+	const seen = [];
+	const provider = {
+		info: { id: 'fake', label: 'Fake', supportsTools: true, toolModelPatterns: [], visionModelPatterns: [] },
+		async runAgentStep(request) {
+			seen.push(request.apiKey);
+			if (scenario === 'partial-output') { request.onToken('Already received.'); }
+			if (scenario !== 'fifth-key' || request.apiKey !== 'key-5') { throw new Error('HTTP 429 usage_limit_reached'); }
+			return { content: 'Done.', toolCalls: [] };
+		},
+	};
+	const keys = ['key-1', 'key-2', 'key-3', 'key-4', 'key-5'];
+	const runner = new AgentRunner(provider, approver, 10, {
+		onKeyFailure: async (_message, failed) => keys[keys.indexOf(failed) + 1],
+	});
+	const result = await runner.run([{ role: 'user', content: 'Say hello.' }], { ...params, apiKey: keys[0] }, noopCallbacks());
+	if (scenario === 'fifth-key') {
+		assert.equal(result.reason, 'done');
+		assert.deepEqual(seen.slice(0, 5), keys);
+	} else {
+		assert.equal(result.reason, 'error');
+		assert.deepEqual(seen, scenario === 'exhausted' ? keys : [keys[0]]);
+	}
+}
+
 // 1. Prose with no tool call is nudged once, and a second quiet step ends the run as done.
 {
 	const provider = fakeProvider([

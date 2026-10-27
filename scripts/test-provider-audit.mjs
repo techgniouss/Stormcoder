@@ -193,8 +193,12 @@ const sseResponse = chunks => new Response(new ReadableStream({
 	const delays = [];
 	const res = await types.apiFetch('https://x.test/a', { headers: { Authorization: 'Bearer pool-key-1' } }, new AbortController().signal, { onRetry: i => delays.push(i.delayMs) });
 	assert.equal(res.status, 429);
-	assert.equal(calls, 2, 'one retry only for a pooled key');
-	assert.ok(delays[0] >= 500, 'Retry-After: 0 is floored');
+	assert.equal(calls, 1, 'a pooled key surfaces the limit immediately for account fallback');
+	assert.deepEqual(delays, [], 'a pooled key never waits on rate-limit backoff');
+	calls = 0;
+	await types.apiFetch('https://x.test/a', { headers: { Authorization: 'Bearer single-key' } }, new AbortController().signal, { rateLimitRetries: 1, onRetry: i => delays.push(i.delayMs) });
+	assert.equal(calls, 2);
+	assert.ok(delays[0] >= 500, 'single-key Retry-After: 0 is floored');
 }
 
 globalThis.fetch = realFetch;

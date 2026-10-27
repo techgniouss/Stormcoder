@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { ProviderRegistry } from './registry';
+import type { ProviderRegistry } from './registry';
 
 /**
  * A 401 (bad/expired key), 403 (forbidden — often a quota/entitlement refusal dressed up as
@@ -14,7 +14,7 @@ import { ProviderRegistry } from './registry';
  * `describeHttpError`'s wording ("authentication failed (HTTP 401", "HTTP 403", "rate limited
  * (HTTP 429") in `providers/types.ts`.
  */
-const KEY_FAILURE = /\bhttp (401|403|429)\b/i;
+const KEY_FAILURE = /\bhttp (401|402|403|429)\b|\b(?:usage_limit_reached|rate_limit_exceeded|insufficient_quota|resource_exhausted)\b|credit balance is too low|exceeded your current quota/i;
 
 /** Whether `message` names one of the three statuses a different stored API key has a real
  * chance of surviving. Exported so `agent/agentRunner.ts` can apply the same rule to a
@@ -25,7 +25,7 @@ export function isKeyFailure(message: string): boolean {
 
 /**
  * Resolves `providerId`'s current API key, calls `fn` with it, and on a 401/403/429 rotates
- * to the next stored key (if one exists) and retries `fn` exactly once with the new key.
+ * to the next stored key (if one exists) and tries each available credential at most once.
  * Every outcome — success, a failure that got a fresh key, or a failure with none left —
  * also records or clears a quota cooldown for the (providerId, model) pair via
  * {@link ProviderRegistry.cooldowns}, so Auto-mode routing and repeated sends both benefit
@@ -44,27 +44,28 @@ export async function withProviderResilience<T>(
 	providerId: string,
 	model: string,
 	fn: (apiKey: string) => Promise<T>,
+	canRetry: () => boolean = () => true,
 ): Promise<T> {
-	const apiKey = (await registry.getApiKey(providerId)) ?? '';
-	try {
-		const result = await fn(apiKey);
-		registry.noteApiKeySuccess(providerId);
-		registry.cooldowns.clear(providerId, model);
-		return result;
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		if (!isKeyFailure(message)) {
-			throw err;
+	const attempted = new Set<string>();
+	// Snapshot the pool: additions during a run must not make retries unbounded.
+	const limit = typeof registry.getAccounts === 'function' ? Math.max(1, (await registry.getAccounts(providerId)).length) * 2 : 100;
+	let failure: unknown;
+	for (let attempt = 0; attempt < limit; attempt++) {
+		const apiKey = (await registry.getApiKey(providerId)) ?? '';
+		if (attempted.has(apiKey)) { throw failure; }
+		attempted.add(apiKey);
+		try {
+			const result = await fn(apiKey);
+			registry.noteApiKeySuccess(providerId);
+			registry.cooldowns.clear(providerId, model);
+			return result;
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			if (!isKeyFailure(message)) { throw err; }
+			failure = err;
+			registry.cooldowns.markCooldown(providerId, model, message);
+			if (!await registry.rotateApiKey(providerId, apiKey, message) || !canRetry() || attempt + 1 >= limit) { throw err; }
 		}
-		registry.cooldowns.markCooldown(providerId, model, message);
-		const rotated = await registry.rotateApiKey(providerId, apiKey);
-		if (!rotated) {
-			throw err;
-		}
-		const nextKey = (await registry.getApiKey(providerId)) ?? '';
-		const result = await fn(nextKey);
-		registry.noteApiKeySuccess(providerId);
-		registry.cooldowns.clear(providerId, model);
-		return result;
 	}
+	throw failure;
 }

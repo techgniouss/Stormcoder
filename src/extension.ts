@@ -229,7 +229,7 @@ async function configureProvider(
 	if (!key) {
 		return;
 	}
-	await registry.setApiKey(id, key.trim());
+	await registry.addApiKey(id, key.trim());
 	vscode.window.showInformationMessage(`Saved the API key for ${provider.info.label}.`);
 	await view.credentialsChanged(id);
 }
