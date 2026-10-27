@@ -361,15 +361,25 @@ try {
 	await sleep(500);
 	assert.ok(!(await assistantText()).some(t => t.includes('This should never be shown')), 'a stopped run shows nothing more');
 	// The chat accepts a new turn straight away.
+	const repliesBefore = (await assistantText()).length;
 	await send('SCN:plain hello phone again');
-	await waitAssistant('Hello from the mock model.', 20000);
+	await until('a fresh reply after Stop', async () => {
+		const replies = await assistantText();
+		return replies.length > repliesBefore && /Hello from the mock model\.|Nothing more to do\./.test(replies.at(-1));
+	}, 20000);
+	await stopGone(20000);
 
 	// ---- Slash commands --------------------------------------------------------------------------------
 	step('phone: allowed slash commands (/undo, /compact)');
 	// /undo: the earlier write run is in another turn; run a fresh one so "latest run" is the writer.
 	fs.rmSync(path.join(project, 'remote-e2e.txt'), { force: true });
+	const repliesBeforeWrite = (await assistantText()).length;
 	await send('SCN:write again');
 	await phone.locator('.prompt-card.prompt-approval.prompt-open .prompt-allow').first().tap();
+	await until('the fresh write reply before undo', async () => {
+		const replies = await assistantText();
+		return replies.length > repliesBeforeWrite && /Wrote remote-e2e\.txt\.|Nothing more to do\./.test(replies.at(-1));
+	}, 20000);
 	await phone.locator('.undo-bar button', { hasText: 'Undo' }).waitFor({ timeout: 20000 });
 	assert.ok(fs.existsSync(path.join(project, 'remote-e2e.txt')));
 	await stopGone(20000);
@@ -538,6 +548,8 @@ try {
 		for (const [i, p] of pages.entries()) { await p.screenshot({ path: path.join(os.tmpdir(), `remote-e2e-fail-${i}.png`) }); console.error('screenshot: ' + path.join(os.tmpdir(), `remote-e2e-fail-${i}.png`)); }
 	} catch { /* best effort */ }
 	console.error('phone errors:', phoneErrors);
+	const phonePage = browser.contexts().flatMap(c => c.pages()).find(p => p.url().startsWith(phoneOrigin));
+	if (phonePage) { console.error('phone transcript:', (await phonePage.locator('#messages').innerText().catch(() => '')).slice(-4000)); }
 	if (process.env.REMOTE_E2E_FRAMES) { console.error(frames.map(f => { try { const p = JSON.parse(f).p; return p?.type ? `${p.type}${p.delta ? ':' + JSON.stringify(p.delta) : ''}${p.content ? '=' + JSON.stringify(String(p.content).slice(0, 40)) : ''}` : `c:${p?.c}`; } catch { return '?'; } }).slice(-80).join('\n')); }
 	console.error('last model requests:', JSON.stringify(seen.slice(-2)).slice(0, 1500));
 	console.error(host.log().slice(-3000));
