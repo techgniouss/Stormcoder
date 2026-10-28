@@ -1300,15 +1300,25 @@
 					: (p.requiresApiKey ? '<span class="warn">● no key</span>' : '<span>no key needed</span>');
 			const signInLabel = p.id === 'anthropic' ? 'Add Claude account (browser)'
 				: p.id === 'openai' ? 'Add ChatGPT account'
-					: p.id === 'openrouter' ? 'Sign in with OpenRouter'
-						: 'Sign in';
+					: p.id === 'antigravity' ? 'Add Google account'
+					: p.id === 'copilot' ? (p.accounts?.length ? 'Add another GitHub account' : 'Sign in with GitHub')
+					: p.id === 'grok' ? (p.accounts?.length ? 'Add another Grok account' : 'Sign in with Grok')
+					: p.id === 'kiro' ? (p.accounts?.length ? 'Import current Kiro account' : 'Import Kiro sign-in')
+						: p.id === 'openrouter' ? 'Sign in with OpenRouter'
+							: (p.accounts?.length ? 'Add another account' : 'Sign in');
 			const signInTitle = p.id === 'anthropic'
 				? 'Log in with your Claude (claude.ai) account — works with a Claude subscription, no API key needed'
 				: p.id === 'openai'
 					? 'Log in with your ChatGPT (openai.com) account — works with a ChatGPT subscription, no API key needed'
-					: p.id === 'openrouter'
-						? 'One-click login at openrouter.ai (Google/GitHub/email) — an API key is created for you automatically'
-						: (p.authUrl ? 'Sign in with your configured web login' : 'Opens the provider’s sign-in page in a browser, then paste the key back here');
+					: p.id === 'copilot'
+						? 'Opens GitHub\u2019s device sign-in. To add a second account, switch to it on github.com first'
+					: p.id === 'kiro'
+						? 'Imports the account Kiro\u2019s own IDE or CLI is signed into. Sign in there as another account, then import again'
+					: p.id === 'antigravity'
+						? 'Log in with a Google account that has Antigravity access. Add several accounts and Stormcoder switches to the next one when one runs out of allowance'
+						: p.id === 'openrouter'
+							? 'One-click login at openrouter.ai (Google/GitHub/email) — an API key is created for you automatically'
+							: (p.authUrl ? 'Sign in with your configured web login' : 'Opens the provider’s sign-in page in a browser, then paste the key back here');
 			// Cloudflare Workers AI needs the account id too — a token alone can't
 			// authenticate, since the id goes in the request URL, not a header.
 			const hasAccountId = p.cloudflareAccountId !== undefined;
@@ -1343,7 +1353,7 @@
 					${(p.hasApiKey && !p.hasEnvKey) ? `<a class="clear-key" href="#">Remove all saved accounts</a>` : ''}
 					${p.hasEnvKey ? '<span class="muted" title="Set via environment variable; unset it (and restart) to remove.">Environment key configured</span>' : ''}
 				</div>
-				<div class="provider-accounts"></div>
+				<details class="provider-accounts"></details>
 				${hasBaseUrl ? `
 				<details class="provider-advanced">
 					<summary>Base URL</summary>
@@ -1367,32 +1377,45 @@
 						<button class="save-extra-keys">Replace backup keys</button>
 					</div>
 				</details>` : ''}`;
-			const accountList = card.querySelector('.provider-accounts');
+			const accountList = /** @type {HTMLDetailsElement | null} */ (card.querySelector('.provider-accounts'));
 			if (accountList && p.accounts?.length) {
-				const heading = document.createElement('p');
-				heading.className = 'muted';
-				heading.textContent = `${p.accounts.length} saved account${p.accounts.length === 1 ? '' : 's'} · Falls back automatically when an account reaches its limit.`;
-				accountList.appendChild(heading);
-				const refresh = document.createElement('button');
-				refresh.className = 'refresh-accounts';
-				refresh.textContent = 'Refresh status';
-				refresh.addEventListener('click', () => vscode.postMessage({ type: 'refreshAccounts' }));
-				accountList.appendChild(refresh);
+				const now = Date.now();
+				const cooling = p.accounts.filter(a => a.cooldownUntil > now).length;
+				const active = p.accounts.find(a => a.active);
+				accountList.open = openAccountPanels.has(p.id);
+				accountList.addEventListener('toggle', () => {
+					if (accountList.open) { openAccountPanels.add(p.id); } else { openAccountPanels.delete(p.id); }
+				});
+				const summary = document.createElement('summary');
+				const count = document.createElement('span');
+				count.className = 'accounts-count';
+				count.textContent = `${p.accounts.length} saved account${p.accounts.length === 1 ? '' : 's'}`;
+				const sum = document.createElement('span');
+				sum.className = 'accounts-sum';
+				sum.textContent = [active ? `${active.label} in use` : '', cooling ? `${cooling} cooling down` : ''].filter(Boolean).join(' · ');
+				summary.append(count, sum);
+				accountList.appendChild(summary);
 				for (const account of p.accounts) {
 					const row = document.createElement('div');
 					row.className = 'provider-account';
+					const coolingDown = account.cooldownUntil > now;
+					const dot = document.createElement('span');
+					dot.className = 'account-dot';
+					dot.dataset.state = coolingDown ? 'cooling' : account.active ? 'active' : 'ready';
+					dot.setAttribute('aria-hidden', 'true');
 					const name = document.createElement('span');
 					name.className = 'provider-account-name';
 					name.textContent = account.label;
 					const status = document.createElement('span');
 					status.className = 'provider-account-status';
-					status.textContent = account.cooldownUntil > Date.now()
+					status.textContent = coolingDown
 						? `Cooling down until ${new Date(account.cooldownUntil).toLocaleTimeString()}`
 						: account.active ? 'Active' : 'Ready for fallback';
-					row.append(name, status);
+					row.append(dot, name, status);
 					if (account.removable) {
 						const remove = document.createElement('button');
 						remove.textContent = 'Remove';
+						remove.className = 'account-remove';
 						remove.setAttribute('aria-label', `Remove ${account.label}`);
 						remove.addEventListener('click', () => {
 							vscode.postMessage({ type: 'removeAccount', provider: p.id, accountId: account.id });
@@ -1401,6 +1424,16 @@
 					}
 					accountList.appendChild(row);
 				}
+				const foot = document.createElement('div');
+				foot.className = 'accounts-foot';
+				const hint = document.createElement('span');
+				hint.textContent = 'Stormcoder moves to the next account when one reaches its limit, so allowances add up.';
+				const refresh = document.createElement('button');
+				refresh.className = 'refresh-accounts';
+				refresh.textContent = 'Refresh status';
+				refresh.addEventListener('click', () => vscode.postMessage({ type: 'refreshAccounts' }));
+				foot.append(hint, refresh);
+				accountList.appendChild(foot);
 			}
 			const keyInput = /** @type {HTMLInputElement} */ (card.querySelector('.key-input'));
 			if (hasAccountId) {
@@ -1475,6 +1508,8 @@
 	/** @type {{ enabled: boolean, autoPropose: boolean, hasProject: boolean, trusted: boolean, tokens: number, types: string[], project?: any, user?: any } | null} */
 	let memoryState = null;
 	let memoryNewScope = 'project';
+	/** Providers whose account list the user has expanded; kept across the card rebuilds a refresh causes. */
+	const openAccountPanels = new Set();
 	let memoryNewType = 'note';
 	/** The line being edited, by its exact text, so a re-render does not drop the edit box. */
 	let memoryEditing = '';

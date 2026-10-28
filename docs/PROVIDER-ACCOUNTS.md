@@ -17,6 +17,18 @@ loopback, checks the callback path and state, and closes on success, error, canc
 or timeout. The code input is masked. A configured custom `anthropic.authUrl` continues to
 use its own web sign-in flow.
 
+Antigravity signs in with Google. Stormcoder asks Google to show its account chooser each time, so
+a second Google account is added by picking it there. Each account is stored with its address, and
+signing into an account that is already saved updates it. The sign-in needs
+`ANTIGRAVITY_CLIENT_SECRET`, set as an environment variable or in a `.env` file in Stormcoder's user
+data folder.
+
+GitHub Copilot, Grok and Kiro sign-ins are stored as named accounts too (`@login` for GitHub, the
+address in the token for Grok and Kiro when it has one). Copilot and Grok use a device-code page, which
+signs in whichever account the browser has open on that site: switch accounts there first to add a
+second. Kiro imports the account Kiro's own IDE or CLI is signed into, so sign in there as the other
+account and import again.
+
 ChatGPT uses its existing browser callback. OpenRouter, Copilot, Grok, Kiro and custom web
 sign-in providers retain their existing authorization or import mechanisms; repeating them
 retains earlier credentials. Providers without an account sign-in flow accept multiple API
@@ -54,6 +66,7 @@ No fallback replays a visible response that has already started, or repeats exec
 Provider model permissions are still enforced: changing accounts cannot grant access to a
 model that the account does not support.
 
+Each provider's accounts are listed in a collapsible section on its card, showing which account is in use and which are cooling down.
 The account list supports individual removal. Use **Refresh status** to update the displayed
 active account and cooldown deadlines after a run. **Additional API keys > Replace backup keys**
 replaces the existing backup-key list; use **Add key** to append one key. **Remove all saved

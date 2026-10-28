@@ -46,6 +46,12 @@ try {
 		await card.locator('.provider-accounts').getByText(`${i + 1} saved account${i ? 's' : ''}`, { exact: false }).waitFor();
 		assert.equal(await card.locator('.key-input').inputValue(), '');
 	}
+	// The account list is collapsed until opened; the choice survives the card rebuilds a save causes.
+	const openAccounts = async () => {
+		const panel = card.locator('.provider-accounts');
+		if (!(await panel.evaluate(el => el.open))) { await panel.locator('summary').click(); }
+		await card.locator('.account-dot').first().waitFor();
+	};
 	const claude = settings.locator('.provider-card').filter({ has: settings.locator('.sign-in-code') });
 	await claude.getByRole('button', { name: 'Use authorization code', exact: true }).waitFor();
 	assert.match(await claude.locator('.sign-in').innerText(), /browser/);
@@ -59,6 +65,7 @@ try {
 	// Add more accounts without losing the earlier ones, then exercise the agent loop.
 	healthy = 'test-account-d';
 	await page.click('[data-view=settings]');
+	await openAccounts();
 	await card.locator('.refresh-accounts').click();
 	await card.locator('.provider-account-status').filter({ hasText: 'Cooling down' }).first().waitFor();
 	assert.equal(await card.locator('.provider-account-status').filter({ hasText: 'Cooling down' }).count(), 2);
@@ -76,6 +83,7 @@ try {
 	assert.deepEqual(attempts.slice(beforeAgent, beforeAgent + 3), ['test-account-f', 'test-account-b', 'test-account-d']);
 	// Removing one account retains every other key, including those currently cooling down.
 	await page.click('[data-view=settings]');
+	await openAccounts();
 	await card.getByRole('button', { name: 'Remove API key 1', exact: true }).click();
 	await card.locator('.provider-accounts').getByText('5 saved accounts', { exact: false }).waitFor();
 	assert.ok(!(await card.innerText()).includes('test-account-'), 'credentials never render as text');

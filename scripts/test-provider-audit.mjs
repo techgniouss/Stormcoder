@@ -96,7 +96,9 @@ const sseResponse = chunks => new Response(new ReadableStream({
 		return true;
 	};
 	let exchangedCode;
-	globalThis.fetch = async (_url, init) => {
+	globalThis.fetch = async (url, init) => {
+		// After the exchange the sign-in looks up the Google account's address; only the exchange carries the code.
+		if (String(url).includes('userinfo')) { return new Response('{}', { status: 200 }); }
 		exchangedCode = new URLSearchParams(init.body).get('code');
 		return new Response(JSON.stringify({ access_token: 'a', refresh_token: 'r', expires_in: 60 }), { status: 200 });
 	};

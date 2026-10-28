@@ -27,6 +27,6 @@
 		writeFile: (f, t) => invoke('writeFile', f, t),
 		openDialog: o => invoke('openDialog', o),
 		onViewMessage: on('view:message'), onViewReload: on('view:reload'), onRequest: on('ui:request'),
-		onEvent: on('ui:event'), onState: on('app:state'), onNavigate: on('app:navigate'), onPalette: on('app:palette'),
+		onEvent: on('ui:event'), onState: on('app:state'), onNavigate: on('app:navigate'), onPalette: on('app:palette'), onUpdate: on('app:update'),
 	};
 }());

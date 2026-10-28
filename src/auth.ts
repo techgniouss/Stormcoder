@@ -112,7 +112,7 @@ export class WebAuthManager implements vscode.UriHandler {
 		if (!token) {
 			return false;
 		}
-		await this.registry.addApiKey(providerId, token);
+		await this.registry.addApiKey(providerId, token, 'Web sign-in');
 		return true;
 	}
 
@@ -142,7 +142,7 @@ export class WebAuthManager implements vscode.UriHandler {
 			if (!key) {
 				return false;
 			}
-			await this.registry.addApiKey(providerId, key);
+			await this.registry.addApiKey(providerId, key, 'OpenRouter account');
 			return true;
 		}
 		const result = await signInOpenAI(this.registry.oauth);
@@ -152,7 +152,7 @@ export class WebAuthManager implements vscode.UriHandler {
 		if (result.mode === 'apiKey' && result.apiKey) {
 			// The account has API access: a real key was minted, which works with
 			// every OpenAI endpoint. Store it like a pasted key.
-			await this.registry.addApiKey(providerId, result.apiKey);
+			await this.registry.addApiKey(providerId, result.apiKey, 'ChatGPT account');
 		} else {
 			await this.registry.adoptOAuth(providerId);
 		}

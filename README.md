@@ -40,6 +40,8 @@ Settings are in `settings.json` (palette: *Edit settings.json*). API keys are st
 
 In Settings > Providers, **Add key** and the account sign-in buttons retain existing credentials. The account list shows the active credential and lets you remove individual accounts. API keys and subscription sign-ins can share a fallback pool for the same provider; the most recently added credential is selected first. To add another browser account, choose that account on the provider's sign-in page (sign out there first if the browser reuses the previous login). Provider subscriptions and API access still have their own model permissions. See [provider accounts and fallback](docs/PROVIDER-ACCOUNTS.md).
 
+**Updates.** Stormcoder checks the GitHub releases shortly after it starts and every few hours, and downloads a newer version in the background. A "Restart to update" button then appears in the header; it also installs the next time you quit. Check by hand from the app menu (the mark at the top of the rail), the command palette, or Help > Check for Updates. A `.deb` install cannot update itself, so it shows a link to the release page instead.
+
 ## Develop
 
 ```bash

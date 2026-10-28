@@ -35,6 +35,8 @@ const SECRET_PREFIX = 'stormcoder.apiKey.';
 /** Backup keys for a provider, stored as a JSON string array. Rotated in on a 401/403/429
  * against the primary key — see {@link ProviderRegistry.rotateApiKey}. */
 const EXTRA_KEY_PREFIX = 'stormcoder.apiKeysExtra.';
+/** Display names for credentials that came from a browser sign-in, keyed by {@link keyId}. */
+const LABEL_PREFIX = 'stormcoder.apiKeyLabels.';
 
 /**
  * Environment variables that can supply a provider's key, as a convenient escape hatch for
@@ -232,7 +234,8 @@ export class ProviderRegistry {
 		const envName = this.envVarName(id);
 		const envKey = envName ? process.env[envName] : undefined;
 		const keys = await this.getApiKeys(id);
-		const result: Credential[] = keys.map((key, i) => ({ id: keyId(key), kind: 'key', key, label: `API key ${i + 1}` }));
+		const names = await this.getKeyLabels(id);
+		const result: Credential[] = keys.map((key, i) => ({ id: keyId(key), kind: 'key', key, label: names[keyId(key)] || `API key ${i + 1}` }));
 		if (envKey) {
 			const duplicate = result.findIndex(c => c.key === envKey);
 			if (duplicate >= 0) { result.splice(duplicate, 1); }
@@ -241,6 +244,13 @@ export class ProviderRegistry {
 		const accounts = await this.oauth.accounts(id);
 		for (const [i, account] of accounts.entries()) {
 			result.push({ id: 'oauth:' + account.id, kind: 'oauth', slot: account.id, key: account.record.access, label: account.record.label || `Signed-in account ${i + 1}` });
+		}
+		// Two sign-ins can resolve to the same name (an e-mail reused across kinds): tell them apart.
+		const seen = new Map<string, number>();
+		for (const c of result) {
+			const n = (seen.get(c.label) ?? 0) + 1;
+			seen.set(c.label, n);
+			if (n > 1) { c.label = `${c.label} (${n})`; }
 		}
 		notePooledKeys(result.map(c => c.key ?? ''), id);
 		return result;
@@ -327,6 +337,7 @@ export class ProviderRegistry {
 				if (await this.secrets.get(SECRET_PREFIX + id) === credential.key) { await this.secrets.delete(SECRET_PREFIX + id); }
 				await this.writeExtraApiKeys(id, (await this.getExtraApiKeys(id)).filter(k => k !== credential.key));
 			}
+			if (credential.kind === 'key') { await this.setKeyLabel(id, accountId); }
 			if (this.activeCredential.get(id) === accountId) { this.activeCredential.delete(id); }
 		});
 	}
@@ -340,11 +351,12 @@ export class ProviderRegistry {
 	}
 
 	/** Adds a key or imported login without replacing any previously configured account. */
-	async addApiKey(id: string, key: string): Promise<void> {
+	async addApiKey(id: string, key: string, label?: string): Promise<void> {
 		const cleaned = key.trim();
 		if (!cleaned) { return; }
 		await this.mutate(id, async () => {
 			const keys = await this.getApiKeys(id);
+			if (label?.trim()) { await this.setKeyLabel(id, keyId(cleaned), label.trim().slice(0, 120)); }
 			if (!keys.includes(cleaned)) {
 				if (!await this.secrets.get(SECRET_PREFIX + id)) { await this.secrets.store(SECRET_PREFIX + id, cleaned); }
 				else { await this.writeExtraApiKeys(id, [...await this.getExtraApiKeys(id), cleaned]); }
@@ -353,6 +365,21 @@ export class ProviderRegistry {
 			this.credentialCooldowns.clear(id, keyId(cleaned));
 			this.activeCredential.set(id, keyId(cleaned));
 		});
+	}
+
+	/** Names recorded for browser-login credentials; a pasted key has none and shows as "API key N". */
+	private async getKeyLabels(id: string): Promise<Record<string, string>> {
+		try {
+			const parsed = JSON.parse(await this.secrets.get(LABEL_PREFIX + id) ?? '{}');
+			return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+		} catch { return {}; }
+	}
+
+	private async setKeyLabel(id: string, credentialId: string, label?: string): Promise<void> {
+		const labels = await this.getKeyLabels(id);
+		if (label) { labels[credentialId] = label; } else { delete labels[credentialId]; }
+		if (Object.keys(labels).length) { await this.secrets.store(LABEL_PREFIX + id, JSON.stringify(labels)); }
+		else { await this.secrets.delete(LABEL_PREFIX + id); }
 	}
 
 	/** The provider's backup key pool, beyond the primary key — see {@link EXTRA_KEY_PREFIX}. */
@@ -414,6 +441,9 @@ export class ProviderRegistry {
 				extra[index] = next;
 				await this.writeExtraApiKeys(id, extra);
 			}
+			// The refreshed token is the same account: it keeps the name given at sign-in.
+			const labels = await this.getKeyLabels(id);
+			if (labels[keyId(previous)]) { await this.setKeyLabel(id, keyId(next), labels[keyId(previous)]); await this.setKeyLabel(id, keyId(previous)); }
 			if (this.activeCredential.get(id) === keyId(previous)) { this.activeCredential.set(id, keyId(next)); }
 			for (const [token, account] of this.issued.get(id) ?? []) {
 				if (account === keyId(previous)) { this.issued.get(id)!.set(token, keyId(next)); }
@@ -477,6 +507,7 @@ export class ProviderRegistry {
 		await this.mutate(id, async () => {
 			await this.secrets.delete(SECRET_PREFIX + id);
 			await this.secrets.delete(EXTRA_KEY_PREFIX + id);
+			await this.secrets.delete(LABEL_PREFIX + id);
 			await this.oauth.clear(id);
 			this.activeCredential.delete(id);
 			this.cooldowns.clearProvider(id);

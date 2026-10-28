@@ -12,49 +12,22 @@ import { readJsonFile, writeJsonFile } from '../host/env';
 import { createSecretCodec, keychainAvailable } from './secrets';
 import { prepareViewHtml } from './viewHtml';
 import { buildMenu } from './menu';
+import { UpdateService, UpdaterBackend } from '../host/updater';
 import * as extension from '../src/extension';
 
-let updaterWired = false;
-/** What the next `update-not-available` / error should do; the listeners themselves are registered once. */
-let updateInteractive = false;
+/** Set once the app is on its way out, so the quit guard below does not hold up an update restart. */
+let closing = false;
 
-/** Looks for a newer release on GitHub; only meaningful in an installed build. */
-async function checkForUpdates(interactive: boolean): Promise<void> {
-	if (!app.isPackaged) {
-		if (interactive) {
-			void dialog.showMessageBox({ message: 'Updates are only checked in an installed build.' });
-		}
-		return;
-	}
-	updateInteractive = interactive;
-	try {
-		const { autoUpdater } = await import('electron-updater');
-		if (!updaterWired) {
-			// Registered once: every manual check used to add another set, so one result showed N dialogs.
-			updaterWired = true;
-			autoUpdater.autoDownload = true;
-			autoUpdater.on('update-not-available', () => {
-				if (updateInteractive) {
-					void dialog.showMessageBox({ message: `You are on the latest version (${app.getVersion()}).` });
-				}
-			});
-			autoUpdater.on('update-downloaded', info => {
-				void dialog.showMessageBox({ type: 'info', message: `Stormcoder ${info.version} is ready.`, detail: 'It installs when you quit, or restart now.', buttons: ['Restart Now', 'Later'], defaultId: 0 })
-					.then(r => { if (r.response === 0) { autoUpdater.quitAndInstall(); } });
-			});
-			// Without a handler an updater 'error' event is thrown as an uncaught exception.
-			autoUpdater.on('error', err => {
-				logMain('error', 'updater error', err instanceof Error ? err : String(err));
-			});
-		}
-		await autoUpdater.checkForUpdates();
-	} catch (err) {
-		console.error('update check failed', err);
-		if (updateInteractive) {
-			dialog.showErrorBox('Update check failed', err instanceof Error ? err.message : String(err));
-		}
-	}
-}
+/** Keeps the app current from its GitHub releases; see `host/updater.ts`. */
+const updates = new UpdateService({
+	backend: async () => (await import('electron-updater')).autoUpdater as unknown as UpdaterBackend,
+	version: app.getVersion(),
+	// Only an installed build can replace itself, and on Linux only an AppImage (a .deb is the package manager's).
+	canSelfUpdate: app.isPackaged && (process.platform !== 'linux' || !!process.env.APPIMAGE),
+	repo: 'techgniouss/Stormcoder',
+	beforeInstall: async () => { closing = true; await controller.shutdown(); },
+	log: (level, message) => logMain(level, message),
+});
 
 const SCHEME = 'stormcoder';
 const ASSET_SCHEME = 'stormcoder-asset';
@@ -304,9 +277,9 @@ if (!app.requestSingleInstanceLock()) {
 				return r.response === 0 ? 'trust' : r.response === 1 ? 'readonly' : 'cancel';
 			},
 			showFatal: (title, detail) => dialog.showErrorBox(title, detail),
+			updates,
 			appCommand: id => {
 				switch (id) {
-					case 'app.checkUpdates': return void checkForUpdates(true);
 					case 'app.openLogs': return void shell.openPath(path.join(userDataDir, 'logs'));
 					case 'app.openGitHub': return void shell.openExternal('https://github.com/techgniouss/Stormcoder');
 					case 'app.zoomIn': return window?.webContents.setZoomLevel(window.webContents.getZoomLevel() + 0.5);
@@ -337,7 +310,7 @@ if (!app.requestSingleInstanceLock()) {
 			getWindow: () => window,
 			recent: () => controller.recentFolders(),
 			openRecent: f => void controller.openFolder(f),
-			checkForUpdates: () => void checkForUpdates(true),
+			checkForUpdates: () => void updates.check(true),
 			openLogs: () => void shell.openPath(path.join(userDataDir, 'logs')),
 			appName: APP_NAME,
 		}));
@@ -347,7 +320,7 @@ if (!app.requestSingleInstanceLock()) {
 		for (const queued of pendingLinks.splice(0)) {
 			handleDeepLink(queued);
 		}
-		setTimeout(() => void checkForUpdates(false), 15_000);
+		updates.start();
 		const link = process.argv.find(a => a.startsWith(`${SCHEME}://`));
 		if (link) {
 			handleDeepLink(link);
@@ -364,7 +337,6 @@ if (!app.requestSingleInstanceLock()) {
 			createWindow();
 		}
 	});
-	let closing = false;
 	app.on('before-quit', e => {
 		if (closing) {
 			return;

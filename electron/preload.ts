@@ -32,4 +32,5 @@ contextBridge.exposeInMainWorld('stormcoder', {
 	onState: (cb: Listener<unknown>) => subscribe('app:state', cb),
 	onNavigate: (cb: Listener<{ view: string }>) => subscribe('app:navigate', cb),
 	onPalette: (cb: Listener<unknown>) => subscribe('app:palette', cb),
+	onUpdate: (cb: Listener<unknown>) => subscribe('app:update', cb),
 });

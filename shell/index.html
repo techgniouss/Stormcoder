@@ -17,6 +17,7 @@
 			<span class="rail-ind" aria-hidden="true"></span>
 			<button class="rail-mark" id="markBtn" aria-label="Menu" title="Menu" type="button">
 				<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" opacity=".75"><path d="M6.6 7 2.4 12l4.2 5"/><path d="m17.4 7 4.2 5-4.2 5"/></g><path d="M14 2.6 8.2 12.4h4l-1.1 8.2 5.7-9.6h-4Z" fill="currentColor"/></svg>
+				<span class="rail-dot hidden" id="updateDot" aria-hidden="true"></span>
 			</button>
 			<div class="rail-group">
 				<button class="rail-btn" data-view="chat" aria-label="Chat" title="Chat  (Ctrl+1)">
@@ -65,6 +66,7 @@
 				<span id="statusItems"></span>
 				<span id="progressLabel" class="scope-note hidden"></span>
 				<span id="storageNote" class="scope-note hidden"></span>
+				<button id="updatePill" class="update-pill hidden" type="button"></button>
 				<button id="kbdHint" class="kbd-hint" aria-label="Open command palette"><kbd id="kbdMod">Ctrl</kbd><kbd>K</kbd></button>
 			</header>
 			<div id="progressBar" class="hidden"><span></span></div>

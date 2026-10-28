@@ -19,6 +19,7 @@ import { ApprovalRequest, ApprovalResult, ToolApprover, UserQuestion, stopBackgr
 import { AutoOrchestrator, describePinnedModelError, fallbackNote, isModelError, nextCandidate } from './auto/orchestrator';
 import { AUTO_ROLES, AutoRole, RoleAssignment, RoleRouter } from './auto/router';
 import { WebAuthManager } from './auth';
+import { githubAccountLabel, tokenEmailLabel } from './accountLabels';
 import { importKiroCredential, signInWithDeviceFlow } from './deviceSignIn';
 import { McpManager } from './mcp/manager';
 import { supportsNativeSignIn } from './oauth';
@@ -2136,7 +2137,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 					// Copilot has no separate refresh token to persist — the GitHub device-flow
 					// token itself is the long-lived credential; CopilotProvider mints the
 					// short-lived wire token from it per request.
-					await this.registry.addApiKey(providerId, result.accessToken);
+					await this.registry.addApiKey(providerId, result.accessToken, await githubAccountLabel(result.accessToken));
 					this.invalidateModelCache(providerId);
 					vscode.window.showInformationMessage(`${label} connected.`);
 				}
@@ -2149,7 +2150,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				if (result) {
 					await this.registry.addApiKey(providerId, JSON.stringify({
 						accessToken: result.accessToken, refreshToken: result.refreshToken, expiresAt: result.expiresAt,
-					}));
+					}), tokenEmailLabel(result.accessToken, 'Grok account'));
 					this.invalidateModelCache(providerId);
 					vscode.window.showInformationMessage(`${label} connected.`);
 				}
@@ -2157,7 +2158,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				// Not a sign-in flow at all — imports the token Kiro's own IDE/CLI already
 				// wrote after a normal sign-in there. See importKiroCredential's doc.
 				const credential = await importKiroCredential();
-				await this.registry.addApiKey(providerId, credential);
+				await this.registry.addApiKey(providerId, credential, tokenEmailLabel(JSON.parse(credential).accessToken, 'Kiro account'));
 				this.invalidateModelCache(providerId);
 				vscode.window.showInformationMessage(`${label} credential imported.`);
 			} else if (providerId === 'web_gemini') {
@@ -2171,7 +2172,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				if (!defaultProfile) {
 					vscode.window.showErrorMessage('Gemini (Chrome session) has no default Chrome profile location on this platform (Windows only, for now).');
 				} else {
-					await this.registry.addApiKey(providerId, defaultProfile);
+					await this.registry.addApiKey(providerId, defaultProfile, 'Default Chrome profile');
 					this.invalidateModelCache(providerId);
 					vscode.window.showInformationMessage(
 						`${label} will use the default Chrome profile (${defaultProfile}). Add more Google accounts ` +

@@ -125,8 +125,9 @@ const ANTIGRAVITY_SCOPES = [
 function antigravityClientSecret(): string {
 	const secret = process.env['ANTIGRAVITY_CLIENT_SECRET'];
 	if (!secret) {
-		throw new Error('Google Antigravity sign-in needs ANTIGRAVITY_CLIENT_SECRET. Copy extensions/openvs-chat/.env.example '
-			+ 'to .env in the same folder, fill in the value, then reload the window (Developer: Reload Window).');
+		throw new Error('Google Antigravity sign-in needs ANTIGRAVITY_CLIENT_SECRET. Set it as an environment variable, or put '
+			+ 'ANTIGRAVITY_CLIENT_SECRET=<value> in a file named .env inside Stormcoder\'s user data folder '
+			+ '(Menu > Open logs folder, one level up), then restart Stormcoder.');
 	}
 	return secret;
 }
@@ -654,7 +655,9 @@ export async function signInAntigravity(store: OAuthTokenStore): Promise<boolean
 	url.searchParams.set('code_challenge', pkce.challenge);
 	url.searchParams.set('code_challenge_method', 'S256');
 	url.searchParams.set('access_type', 'offline');
-	url.searchParams.set('prompt', 'consent');
+	// select_account makes Google show its account chooser even when the browser is already signed in,
+	// so a second Google account can be added without signing out of the first.
+	url.searchParams.set('prompt', 'select_account consent');
 	url.searchParams.set('state', state);
 
 	const code = await waitForAntigravityCallback(url.toString(), state);
@@ -673,8 +676,33 @@ export async function signInAntigravity(store: OAuthTokenStore): Promise<boolean
 	if (typeof json?.access_token !== 'string') {
 		throw new Error(`Antigravity sign-in failed (HTTP ${status}): ${JSON.stringify(json?.error ?? json).slice(0, 200)}`);
 	}
-	await store.add('antigravity', toRecord('antigravity', json));
+	const who = await fetchGoogleIdentity(json.access_token);
+	const base = toRecord('antigravity', json, who?.id);
+	const record: StoredOAuth = who?.email ? { ...base, label: who.email.slice(0, 200) } : base;
+	await store.add('antigravity', record);
 	return true;
+}
+
+/**
+ * Looks up which Google account a fresh token belongs to, so a repeat sign-in updates that account
+ * instead of adding a duplicate, and the account list can show the address. Best effort: without it
+ * the account is still stored, just unlabelled.
+ */
+async function fetchGoogleIdentity(accessToken: string): Promise<{ id?: string; email?: string } | undefined> {
+	try {
+		const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+			headers: { Authorization: `Bearer ${accessToken}` },
+			signal: AbortSignal.timeout(8000),
+		});
+		if (!res.ok) { return undefined; }
+		const json: any = await res.json();
+		return {
+			id: typeof json?.id === 'string' ? json.id : undefined,
+			email: typeof json?.email === 'string' ? json.email : undefined,
+		};
+	} catch {
+		return undefined;
+	}
 }
 
 /**

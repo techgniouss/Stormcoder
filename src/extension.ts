@@ -40,6 +40,8 @@ let activeViewProvider: ChatViewProvider | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
 	loadEnvFile(context.extensionPath);
+	// An installed app's own folder is read-only, so a user's .env lives in the user data folder.
+	loadEnvFile(path.dirname(context.globalStorageUri.fsPath));
 	applyStreamIdleTimeout();
 	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
 		if (e.affectsConfiguration('stormcoder.stream.idleTimeoutMs')) {

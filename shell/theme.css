@@ -305,18 +305,34 @@ body.settings-window #settingsPanel > .panel-header { display: none; }
 .save-key:hover, .mini-button:hover, .general-settings .settings-row button:hover, .provider-actions .sign-in:hover { filter: brightness(.9); transform: translateY(-1px); }
 .provider-actions { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .provider-actions .sign-in { background: var(--accent-fill); color: var(--accent-ink); box-shadow: 0 4px 14px var(--glow); }
-.provider-accounts > p { margin: 14px 0 8px; font-size: var(--fs-small); line-height: 1.5; color: var(--muted); }
-.provider-account { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--rule); }
-.provider-account:last-child { border-bottom: 0; }
-.provider-account-name { grid-column: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-.provider-account-status { grid-column: 1; font-size: var(--fs-small); color: var(--muted); line-height: 1.5; }
-.provider-account button { grid-column: 2; grid-row: 1 / span 2; }
+.provider-accounts { margin-top: 12px; border-top: 1px solid var(--rule); }
+.provider-accounts > summary { display: flex; align-items: baseline; gap: 10px; padding: 10px 0; cursor: pointer; list-style: none; font-size: var(--fs-small); border-radius: 6px; }
+.provider-accounts > summary::-webkit-details-marker { display: none; }
+.provider-accounts > summary::before { content: ''; flex: none; align-self: center; width: 6px; height: 6px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); transition: transform var(--t-ui) var(--ease-out); }
+.provider-accounts[open] > summary::before { transform: rotate(45deg); }
+.provider-accounts > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.accounts-count { color: var(--text); font-weight: 500; white-space: nowrap; }
+.accounts-sum { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.provider-account { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto auto; gap: 0 12px; align-items: center; padding: 9px 0; border-top: 1px solid var(--rule); }
+.account-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--border-strong); }
+.account-dot[data-state="active"] { background: var(--positive); }
+.account-dot[data-state="cooling"] { background: var(--warning); }
+.provider-account-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.provider-account-status { font-size: var(--fs-small); color: var(--muted); white-space: nowrap; }
 .provider-account button, .provider-accounts .refresh-accounts, .provider-actions .sign-in-code {
-	min-height: 32px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 8px;
+	min-height: 28px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 8px;
 	background: var(--surface); color: var(--text); font: 500 var(--fs-small) var(--font); cursor: pointer;
 }
+.provider-account .account-remove { border-color: transparent; background: none; color: var(--negative); }
 .provider-account button:hover, .provider-accounts .refresh-accounts:hover, .provider-actions .sign-in-code:hover { background: var(--hover); }
 .provider-account button:focus-visible, .provider-accounts .refresh-accounts:focus-visible, .provider-actions .sign-in-code:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.accounts-foot .refresh-accounts { flex: none; white-space: nowrap; }
+.accounts-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 10px; border-top: 1px solid var(--rule); font-size: var(--fs-small); color: var(--muted); line-height: 1.5; }
+@media (max-width: 520px) {
+	.provider-account { grid-template-columns: 8px minmax(0, 1fr) auto; }
+	.provider-account-status { grid-column: 2; grid-row: 2; white-space: normal; }
+	.accounts-foot { flex-direction: column; align-items: flex-start; }
+}
 @media (max-width: 680px) {
 	body.settings-window #settingsPanel { flex-direction: column; }
 	.area-nav { width: auto; flex-direction: row; overflow-x: auto; padding: 12px; border-right: 0; border-bottom: 1px solid var(--border); }

@@ -19,6 +19,7 @@ import { ASSET_ORIGIN } from '../host/vscode';
 import { createSecretCodec } from './secrets';
 import { prepareViewHtml } from './viewHtml';
 import * as extension from '../src/extension';
+import { UpdateService, UpdaterBackend } from '../host/updater';
 
 const appRoot = path.resolve(process.env.MJ_APP_ROOT ?? path.join(__dirname));
 const userDataDir = path.resolve(process.env.MJ_USER_DATA ?? path.join(process.cwd(), '.dev-data'));
@@ -51,6 +52,36 @@ const appCodecReady: Promise<void> = process.env.MJ_APP_KEYS === '1' && process.
 	})()
 	: Promise.resolve();
 
+/**
+ * With `MJ_FAKE_UPDATE=<version>` the browser dev host pretends a release is found and downloads it,
+ * so the shell's update UI can be driven end to end (the tests do) without a packaged build or GitHub.
+ */
+const fakeUpdates = process.env.MJ_FAKE_UPDATE
+	? new UpdateService({
+		version: 'dev',
+		canSelfUpdate: true,
+		repo: 'techgniouss/Stormcoder',
+		initialDelayMs: 0,
+		backend: async () => {
+			const listeners: Record<string, Array<(...args: any[]) => void>> = {};
+			const emit = (event: string, ...args: any[]) => (listeners[event] ?? []).forEach(l => l(...args));
+			return {
+				autoDownload: true,
+				autoInstallOnAppQuit: true,
+				on: (event: string, l: (...args: any[]) => void) => { (listeners[event] ??= []).push(l); },
+				checkForUpdates: async () => {
+					const version = process.env.MJ_FAKE_UPDATE!;
+					if (version === 'none') { emit('update-not-available'); return; }
+					emit('update-available', { version });
+					for (const percent of [20, 60, 100]) { await new Promise(r => setTimeout(r, 150)); emit('download-progress', { percent }); }
+					emit('update-downloaded', { version });
+				},
+				quitAndInstall: () => console.error('fake update installed'),
+			} as unknown as UpdaterBackend;
+		},
+	})
+	: undefined;
+
 const controller = new Controller({
 	appRoot,
 	userDataDir,
@@ -70,6 +101,7 @@ const controller = new Controller({
 	pickFiles: async () => undefined,
 	confirmTrust: async () => 'trust',
 	showFatal: (title, detail) => console.error(title, detail),
+	updates: fakeUpdates,
 }, extension, prepareViewHtml);
 
 /** The app serves assets from a custom scheme; over HTTP the same references point at this server. */

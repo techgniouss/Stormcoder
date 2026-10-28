@@ -398,6 +398,8 @@
 		const project = [
 			{ label: 'Open Project Folder…', description: 'Project', run: () => api.command('app.openFolder') },
 			{ label: 'Keyboard Shortcuts', description: 'Help', run: () => openShortcuts() },
+			...(update.status === 'ready' ? [{ label: 'Install Update and Restart', description: 'App', run: () => api.command('app.installUpdate') }] : []),
+			{ label: 'Check for Updates', description: 'App', run: () => api.command('app.checkUpdates') },
 			{ label: 'Toggle Light / Dark Theme', description: 'View', run: () => setTheme(theme === 'light' ? 'dark' : 'light') },
 			...(appState.folder ? [{ label: 'Close Project Folder', description: 'Project', run: () => api.command('app.closeFolder') }] : []),
 			...appState.recent.filter(f => f !== appState.folder).map(f => ({ label: 'Open ' + baseName(f), description: f, run: () => api.command('app.openFolder', f) })),
@@ -456,7 +458,7 @@
 			{ label: 'Zoom in', icon: IC.zoomIn, onSelect: () => api.command('app.zoomIn') },
 			{ label: 'Reset zoom', icon: IC.refresh, onSelect: () => api.command('app.zoomReset') },
 			{ type: 'sep' },
-			{ label: 'Check for updates…', icon: IC.refresh, onSelect: () => api.command('app.checkUpdates') },
+			updateMenuItem(),
 			{ label: 'Open logs folder', icon: IC.logs, onSelect: () => api.command('app.openLogs') },
 			{ label: 'Stormcoder on GitHub', icon: IC.link, onSelect: () => api.command('app.openGitHub') },
 			{ type: 'sep' },
@@ -767,6 +769,77 @@
 		note.textContent = 'Keys use file encryption (no OS keychain found)';
 		hostCommands = (state.commandList || []).filter(c => state.commands.includes(c.id));
 	});
+
+
+	// ------------------------------------------------------------------ updates
+
+	/** @type {{ status: string, current: string, version?: string, percent?: number, releaseUrl?: string, error?: string, manual: boolean, seq: number }} */
+	let update = { status: 'idle', current: '', manual: false, seq: 0 };
+	const announced = new Set();
+
+	/** The one app-menu row for updates: it says what is happening and does the useful thing. */
+	function updateMenuItem() {
+		const v = update.version || '';
+		switch (update.status) {
+			case 'ready': return { label: 'Restart to install ' + v, detail: 'Downloaded', icon: IC.refresh, onSelect: () => api.command('app.installUpdate') };
+			case 'available': return { label: 'Download ' + v + ' from GitHub', icon: IC.link, onSelect: () => api.command('app.openRelease') };
+			case 'downloading': return { label: 'Downloading ' + v + (update.percent ? ' \u00b7 ' + update.percent + '%' : ''), icon: IC.refresh, disabled: true, onSelect: () => undefined };
+			case 'checking': return { label: 'Checking for updates\u2026', icon: IC.refresh, disabled: true, onSelect: () => undefined };
+			default: return { label: 'Check for updates\u2026', detail: update.current ? 'v' + update.current : '', icon: IC.refresh, onSelect: () => api.command('app.checkUpdates') };
+		}
+	}
+
+	function renderUpdate() {
+		const pill = $('updatePill');
+		const v = update.version || '';
+		const text = update.status === 'ready' ? 'Restart to update'
+			: update.status === 'available' ? 'Update ' + v + ' available'
+				: update.status === 'downloading' ? 'Downloading ' + v + (update.percent ? ' \u00b7 ' + update.percent + '%' : '')
+					: update.status === 'checking' && update.manual ? 'Checking for updates\u2026' : '';
+		pill.classList.toggle('hidden', !text);
+		pill.textContent = text;
+		pill.dataset.status = update.status;
+		$('updateDot').classList.toggle('hidden', update.status !== 'ready' && update.status !== 'available');
+	}
+
+	function openUpdateMenu() {
+		const v = update.version || '';
+		const items = [];
+		if (update.status === 'ready') { items.push({ label: 'Restart and install ' + v, icon: IC.refresh, onSelect: () => api.command('app.installUpdate') }); }
+		if (update.status === 'available') { items.push({ label: 'Download ' + v + ' from GitHub', icon: IC.link, onSelect: () => api.command('app.openRelease') }); }
+		if (update.status === 'downloading') { items.push({ label: 'Downloading in the background\u2026', disabled: true, onSelect: () => undefined }); }
+		if (update.releaseUrl) { items.push({ label: 'What\u2019s new', icon: IC.link, onSelect: () => api.command('app.openRelease') }); }
+		if (update.status === 'ready') { items.push({ type: 'sep' }, { label: 'Later \u2014 installs when you quit', onSelect: () => undefined }); }
+		StormMenu.open({ anchor: $('updatePill'), placement: 'bottom-end', items, minWidth: 260, ariaLabel: 'Update' });
+	}
+
+	/** Tells the person what a check found: always after a manual one, and once when a download finishes by itself. */
+	function announceUpdate() {
+		const v = update.version || '';
+		const once = key => { if (announced.has(key)) { return false; } announced.add(key); return true; };
+		if (update.status === 'ready' && once('ready:' + v)) {
+			void toast({ level: 'info', text: 'Stormcoder ' + v + ' is ready to install.', actions: ['Restart to update', 'Later'] })
+				.then(choice => { if (choice === 'Restart to update') { void api.command('app.installUpdate'); } });
+		} else if (update.status === 'available' && update.manual && once('available:' + v + ':' + update.seq)) {
+			void toast({ level: 'info', text: 'Stormcoder ' + v + ' is available. This install cannot update itself, so download it from GitHub.', actions: ['Open release page', 'Later'] })
+				.then(choice => { if (choice === 'Open release page') { void api.command('app.openRelease'); } });
+		} else if (update.manual && update.status === 'uptodate') {
+			void toast({ level: 'info', text: 'You are on the latest version (' + update.current + ').', actions: [] });
+		} else if (update.manual && update.status === 'error') {
+			void toast({ level: 'error', text: 'Could not check for updates: ' + (update.error || 'unknown error'), actions: [] });
+		}
+	}
+
+	if (api.onUpdate) {
+		api.onUpdate(state => {
+			const fresh = state.seq !== update.seq;
+			update = state;
+			renderUpdate();
+			if (fresh) { announceUpdate(); }
+		});
+		void api.command('app.updateState').then(state => { if (state) { update = state; renderUpdate(); } }, () => undefined);
+		$('updatePill').addEventListener('click', openUpdateMenu);
+	}
 
 	// Tooltips for the rail sit beside it.
 	for (const el of document.querySelectorAll('#rail .rail-btn, #rail .rail-mark')) { el.dataset.tipSide = 'right'; }

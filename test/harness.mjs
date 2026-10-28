@@ -45,7 +45,7 @@ export async function startMock(reply, { chunkDelay = 0 } = {}) {
 }
 
 /** Starts the dev host on a temp project and data dir, configured to use the mock model. */
-export async function startHost({ mockPort, settings = {}, files = {} } = {}) {
+export async function startHost({ mockPort, settings = {}, files = {}, env = {} } = {}) {
 	const work = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-'));
 	const project = path.join(work, 'project');
 	const data = path.join(work, 'data');
@@ -63,7 +63,7 @@ export async function startHost({ mockPort, settings = {}, files = {} } = {}) {
 		...settings,
 	}));
 	const host = spawn(process.execPath, [path.join(root, 'dist/dev-host.js')], {
-		env: { ...process.env, MJ_USER_DATA: data, MJ_FOLDER: project, MJ_PORT: '0' },
+		env: { ...process.env, MJ_USER_DATA: data, MJ_FOLDER: project, MJ_PORT: '0', ...env },
 		stdio: ['ignore', 'pipe', 'pipe'],
 	});
 	let log = '';

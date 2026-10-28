@@ -9,6 +9,7 @@ import * as repo from '../src/git/repo';
 import { configureHost, HostEnvironment, readJsonFile, UiEvent, ViewId, writeJsonFile } from './env';
 import { cancelProgress, createContext, deliverToView, deliverUri, ExtensionContext, registeredCommands, reloadSettings, resetHost, runCommand, settingDefaults } from './vscode';
 import COMMAND_LIST from './command-list.json';
+import type { UpdateService } from './updater';
 
 /** What the embedding process (Electron main, or the browser dev host) supplies. */
 export interface ControllerOptions {
@@ -33,6 +34,8 @@ export interface ControllerOptions {
 	onExternalActivity?(): void;
 	/** App-level commands the shell can ask for (`app.quit`, `app.checkUpdates`, `app.openLogs`, `app.zoom`…). */
 	appCommand?(id: string, args: unknown[]): void | Promise<void>;
+	/** Keeps the app current from GitHub releases; its state is pushed to the shell as `app:update`. */
+	updates?: UpdateService;
 }
 
 interface AppState {
@@ -73,6 +76,7 @@ export class Controller {
 			this.state.folder = undefined;
 		}
 		configureHost(this.environment());
+		opts.updates?.onChange(state => this.toRenderer('app:update', state));
 	}
 
 	// ------------------------------------------------------------------ plumbing
@@ -376,6 +380,14 @@ export class Controller {
 				if (id === 'app.openFolder') { return this.openFolder(rest[0] as string | undefined); }
 				if (id === 'app.closeFolder') { return this.closeFolder(); }
 				if (id === 'app.state') { return this.publicState(); }
+				if (id === 'app.updateState') { return this.opts.updates?.state(); }
+				if (id === 'app.checkUpdates' && this.opts.updates) { return this.opts.updates.check(true); }
+				if (id === 'app.installUpdate' && this.opts.updates) { return this.opts.updates.install(); }
+				if (id === 'app.openRelease') {
+					const url = this.opts.updates?.state().releaseUrl;
+					if (url && /^https:\/\/github\.com\//.test(url)) { await this.opts.openExternal(url); }
+					return undefined;
+				}
 				if (id === 'app.cancelProgress') { cancelProgress(Number(rest[0])); return undefined; }
 				if (id === 'app.settingsDefaults') { return settingDefaults(); }
 				if (id.startsWith('git.')) { return this.gitCall(id.slice(4), rest); }

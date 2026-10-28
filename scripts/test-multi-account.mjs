@@ -28,7 +28,7 @@ const stub = {
 const originalLoad = Module._load;
 Module._load = function (name, ...rest) { return name === 'vscode' ? stub : originalLoad.call(this, name, ...rest); };
 const { ProviderRegistry } = await import('../out/providers/registry.js');
-const { OAuthTokenStore, signInAnthropic, chatgptAccountId } = await import('../out/oauth.js');
+const { OAuthTokenStore, signInAnthropic, signInAntigravity, chatgptAccountId } = await import('../out/oauth.js');
 const { withProviderResilience, isKeyFailure } = await import('../out/providers/resilience.js');
 const { RateLimitTracker } = await import('../out/providers/rateLimits.js');
 const { apiFetch, notePooledKeys, notePooledCredentialAlias, describeHttpError } = await import('../out/providers/types.js');
@@ -41,6 +41,20 @@ const session = (type, name, extra = {}) => ({ type, access: `${name}-access`, r
 const limited = () => new Error('Provider: rate limited (HTTP 429) usage_limit_reached');
 
 try {
+	// Browser-login accounts carry the name given at sign-in: it survives a token refresh, repeats are
+	// told apart, and removing the account forgets the name.
+	{
+		const r = new ProviderRegistry(new Secrets());
+		await r.addApiKey('copilot', 'gh-token-1', '@octocat');
+		await r.addApiKey('copilot', 'gh-token-2', '@octocat');
+		await r.addApiKey('copilot', 'pasted-key');
+		assert.deepEqual((await r.getAccounts('copilot')).map(a => a.label), ['@octocat', '@octocat (2)', 'API key 3']);
+		await r.replaceStoredKey('copilot', 'gh-token-1', 'gh-token-1-refreshed');
+		assert.equal((await r.getAccounts('copilot'))[0].label, '@octocat');
+		const second = (await r.getAccounts('copilot'))[1];
+		await r.removeAccount('copilot', second.id);
+		assert.deepEqual((await r.getAccounts('copilot')).map(a => a.label), ['@octocat', 'API key 2']);
+	}
 	// A depleted account's token window cannot pace another account on the same model.
 	{
 		const tracker = new RateLimitTracker();
@@ -257,6 +271,39 @@ try {
 		assert.deepEqual(statuses, [400, 200]);
 		assert.equal((await store.accounts('anthropic')).length, 2);
 		await assert.rejects(get(authorize.searchParams.get('redirect_uri')), { code: 'ECONNREFUSED' });
+	}
+	// Antigravity: the Google chooser is forced, each account is labelled, and signing the same account
+	// in again updates it instead of adding a duplicate.
+	{
+		process.env.ANTIGRAVITY_CLIENT_SECRET = 'test-secret';
+		const store = new OAuthTokenStore(new Secrets());
+		let user;
+		let prompts = [];
+		let n = 0;
+		openExternal = async url => {
+			const authorize = new URL(url);
+			prompts.push(authorize.searchParams.get('prompt'));
+			// No keep-alive: a reused socket would reach the previous attempt's closing server.
+			setTimeout(() => http.get(`http://127.0.0.1:51121/oauth-callback?state=${authorize.searchParams.get('state')}&code=c`, { agent: false }, res => res.resume()), 10);
+			return true;
+		};
+		globalThis.fetch = async url => {
+			if (String(url).includes('userinfo')) { return new Response(JSON.stringify({ id: user.id, email: user.email })); }
+			n++;
+			return new Response(JSON.stringify({ access_token: `g-access-${n}`, refresh_token: `g-refresh-${n}`, expires_in: 3600 }));
+		};
+		user = { id: '111', email: 'one@example.com' };
+		assert.equal(await signInAntigravity(store), true);
+		user = { id: '222', email: 'two@example.com' };
+		assert.equal(await signInAntigravity(store), true);
+		await new Promise(resolve => setTimeout(resolve, 50));
+		user = { id: '111', email: 'one@example.com' };
+		assert.equal(await signInAntigravity(store), true);
+		await new Promise(resolve => setTimeout(resolve, 50));
+		const accounts = await store.accounts('antigravity');
+		assert.equal(accounts.length, 2);
+		assert.deepEqual(accounts.map(a => a.record.label).sort(), ['one@example.com', 'two@example.com']);
+		assert.ok(prompts.every(p => p === 'select_account consent'));
 	}
 	// Claude authorization-code choice validates state and masks pasted codes.
 	{
