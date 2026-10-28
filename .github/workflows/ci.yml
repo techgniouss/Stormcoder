@@ -17,11 +17,13 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: node scripts/build-tests.mjs && node scripts/run-tests.mjs
+      - run: node bench/validate.mjs && node bench/run.mjs --provider oracle --tasks 01 10 12
       - run: node test/e2e.mjs
       - run: node test/multi-account-e2e.mjs
       - run: node test/remote-e2e.mjs
       - run: node test/android-shell.mjs
       - run: xvfb-run -a node test/electron-smoke.mjs
+      - run: xvfb-run -a node test/bench-appkeys.mjs
       - name: Relay worker tests
         run: cd openvs-relay && npm ci && node scripts/run-tests.mjs
   # The Android project cannot be built by `npm test`, so this is the only place a resource or
