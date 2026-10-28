@@ -10,7 +10,7 @@ Stormcoder is the desktop home of the Stormcoder chat engine (previously an exte
 
 ## What you get
 
-- **Many providers, one place.** OpenAI, Anthropic, Google Gemini, OpenRouter, NVIDIA, Groq, Mistral, Cloudflare Workers AI, Kimi, Qwen, Z.AI, OpenCode Zen, GitHub Copilot, Grok, Kiro, and any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM). Sign in with a ChatGPT or Claude account where the provider allows it, or paste a key. Keys rotate on rate limits and cool down on quota errors.
+- **Many providers, one place.** OpenAI, Anthropic, Google Gemini, OpenRouter, NVIDIA, Groq, Mistral, Cloudflare Workers AI, Kimi, Qwen, Z.AI, OpenCode Zen, GitHub Copilot, Grok, Kiro, and any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM). Add multiple ChatGPT or Claude sign-ins, API keys, or supported provider logins. When an account reaches its limit, Stormcoder tries the next available credential and cools down the exhausted account. Claude offers automatic browser sign-in and a separate authorization-code option.
 - **Ask, Plan and Agent modes.** The agent has file, search, shell and `fetch_url` tools, sub-agents, a todo list it must finish, and an Undo for every run. **Auto** mode routes planning, implementation and review to different models from the keys you hold.
 - **Parallel chats.** Tabs stream at the same time. Type while a run is going to queue a message or steer the agent. History is kept and can be reopened.
 - **Skills and rules.** Instruction packs you switch on per chat, plus always-on rules from `AGENTS.md`, `.stormcoder/rules.md` and similar files.
@@ -37,6 +37,8 @@ Stormcoder is the desktop home of the Stormcoder chat engine (previously an exte
 Download an installer from the Releases page, open a project folder, and add a provider in Settings. Press `Ctrl+K` (`Cmd+K`) for the command palette. `Ctrl+1` to `Ctrl+4` jump between Chat, History, Skills and MCP servers, and `Ctrl+,` opens Settings.
 
 Settings are in `settings.json` (palette: *Edit settings.json*). API keys are stored with your operating system's keychain; where there is none, they are encrypted in a local file and Stormcoder says so in the title bar.
+
+In Settings > Providers, **Add key** and the account sign-in buttons retain existing credentials. The account list shows the active credential and lets you remove individual accounts. API keys and subscription sign-ins can share a fallback pool for the same provider; the most recently added credential is selected first. To add another browser account, choose that account on the provider's sign-in page (sign out there first if the browser reuses the previous login). Provider subscriptions and API access still have their own model permissions. See [provider accounts and fallback](docs/PROVIDER-ACCOUNTS.md).
 
 ## Develop
 

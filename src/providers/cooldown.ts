@@ -39,6 +39,7 @@ export class CooldownTracker {
 		'quota exceeded', 'resource_exhausted', 'insufficient_quota',
 		'out of credits', 'insufficient credits', 'monthly', 'run out of credits',
 		'payment required', 'payment_required', 'billing', 'membership',
+		'usage_limit_reached', 'weekly', 'credit balance is too low',
 	];
 
 	/**
@@ -50,8 +51,10 @@ export class CooldownTracker {
 	markCooldown(providerId: string, model: string, detail: string, now = Date.now()): number {
 		const blob = (detail || '').toLowerCase();
 		const daily = CooldownTracker.DAILY_MARKERS.some(marker => blob.includes(marker));
-		const ms = daily ? CooldownTracker.DAILY_COOLDOWN_MS : CooldownTracker.COOLDOWN_MS;
-		const deadline = now + ms;
+		const retrySeconds = /try again in ~?(\d+)s/i.exec(detail)?.[1];
+		const ms = Math.max(daily ? CooldownTracker.DAILY_COOLDOWN_MS : CooldownTracker.COOLDOWN_MS,
+			Math.min(86_400_000, Number(retrySeconds ?? 0) * 1000));
+		const deadline = Math.max(now + ms, this.until.get(CooldownTracker.key(providerId, model)) ?? 0);
 		this.until.set(CooldownTracker.key(providerId, model), deadline);
 		return deadline;
 	}
@@ -64,6 +67,13 @@ export class CooldownTracker {
 	remainingMs(providerId: string, model: string, now = Date.now()): number {
 		const deadline = this.until.get(CooldownTracker.key(providerId, model)) ?? 0;
 		return Math.max(0, deadline - now);
+	}
+
+	/** A newly configured credential makes previous provider-wide exhaustion obsolete. */
+	clearProvider(providerId: string): void {
+		for (const key of this.until.keys()) {
+			if (key.startsWith(providerId + ' ')) { this.until.delete(key); }
+		}
 	}
 
 	/** Ends a cooldown early — call after a successful response for this pair. */

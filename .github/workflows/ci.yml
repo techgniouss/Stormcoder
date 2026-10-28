@@ -18,6 +18,7 @@ jobs:
       - run: npm run build
       - run: node scripts/build-tests.mjs && node scripts/run-tests.mjs
       - run: node test/e2e.mjs
+      - run: node test/multi-account-e2e.mjs
       - run: node test/remote-e2e.mjs
       - run: node test/android-shell.mjs
       - run: xvfb-run -a node test/electron-smoke.mjs

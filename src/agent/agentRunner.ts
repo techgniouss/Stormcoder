@@ -176,14 +176,6 @@ const TUNING_HINT_TOKENS = 25_000;
  */
 const MAX_STEP_RETRIES = 3;
 
-/**
- * How many times one step will rotate to a different stored API key on a 401/403/429
- * before giving up on rotation and falling through to the ordinary transient-retry (or
- * failure) path. Small and separate from {@link MAX_STEP_RETRIES}: without a cap, two
- * dead keys would rotate back and forth between each other forever on every retry.
- */
-const MAX_KEY_ROTATION_ATTEMPTS = 3;
-
 /** Backoff before re-asking a step, by retry index. Short: the transport already backed off. */
 const STEP_RETRY_DELAYS_MS = [1_000, 3_000, 8_000];
 
@@ -743,7 +735,7 @@ export class AgentRunner {
 		let truncationRounds = 0;
 		let emptyRounds = 0;
 		let stepRetries = 0;
-		let keyRotationAttempts = 0;
+		const failedCredentials = new Set<string>();
 		// Text carried across a max-token cutoff, plus how many provisional turns hold it in
 		// `messages`. The pieces are rejoined before the next step is judged, so a response
 		// the limit cut in half is read as the one answer the model meant to write.
@@ -849,8 +841,12 @@ export class AgentRunner {
 			callbacks.onStepStart();
 			const startedStep = this.now();
 			let raw: AgentStep;
+			let stepOutputStarted = false;
 			try {
-				raw = await this.step(messages, params, callbacks);
+				raw = await this.step(messages, params, { ...callbacks, onToken: delta => {
+					stepOutputStarted ||= !!delta;
+					callbacks.onToken(delta);
+				} });
 			} catch (err) {
 				// An abort is the user's decision and belongs to the caller. The signal is
 				// checked as well as the error shape: whatever a runtime chooses to throw on
@@ -872,17 +868,17 @@ export class AgentRunner {
 				// when the user configured a backup key for exactly this. Tried before the
 				// generic transient-retry check, and outside stepRetries' budget: rotating to a
 				// working key is progress, not a flaky-provider retry.
-				if (isKeyFailure(message) && this.onKeyFailure && keyRotationAttempts < MAX_KEY_ROTATION_ATTEMPTS) {
+				if (isKeyFailure(message) && this.onKeyFailure && !failedCredentials.has(params.apiKey)) {
+					failedCredentials.add(params.apiKey);
 					const nextKey = await this.onKeyFailure(message, params.apiKey);
-					if (nextKey !== undefined) {
+					if (nextKey !== undefined && !stepOutputStarted && !failedCredentials.has(nextKey)) {
 						params.apiKey = nextKey;
-						keyRotationAttempts++;
-						callbacks.onNote(`${message} — retrying with a different stored API key…`);
+						callbacks.onNote(`${message} — retrying with a different stored account or API key…`);
 						continue;
 					}
 				}
 
-				if (!isTransientProviderError(message) || stepRetries >= MAX_STEP_RETRIES) {
+				if ((isKeyFailure(message) && this.onKeyFailure) || !isTransientProviderError(message) || stepRetries >= MAX_STEP_RETRIES) {
 					// Ending with a result rather than throwing keeps everything the run
 					// accomplished on screen and says plainly why it stopped.
 					return {
@@ -901,7 +897,7 @@ export class AgentRunner {
 			}
 			// The step arrived, so earlier failures were a blip rather than a broken provider.
 			stepRetries = 0;
-			keyRotationAttempts = 0;
+			failedCredentials.clear();
 			this.onStepSuccess?.();
 			if (this.traceTiming) {
 				const secs = ((this.now() - startedStep) / 1_000).toFixed(1);
@@ -1743,27 +1739,22 @@ export class AgentRunner {
 				signal: params.signal,
 				onToken: delta => { text += delta; },
 			});
-			try {
-				await send(params.apiKey);
-			} catch (err) {
-				// compactMessages swallows a thrown summarizer failure and falls back to the
-				// lossy trim, so a rotated key here is a pure win with no new failure mode —
-				// one retry, same shape as a step's own key-failure handling above, just
-				// without the step-loop's retry-count bookkeeping (this runs at most once
-				// per compaction, not once per step).
-				const message = err instanceof Error ? err.message : String(err);
-				const nextKey = isKeyFailure(message) ? await this.onKeyFailure?.(message, params.apiKey) : undefined;
-				if (nextKey === undefined) {
-					throw err;
-				}
-				params.apiKey = nextKey;
+			const attempted = new Set<string>();
+			for (;;) {
+				if (params.signal.aborted) { throw new DOMException('Aborted', 'AbortError'); }
+				attempted.add(params.apiKey);
 				text = '';
-				// A second real HTTP request, same as a rotated retry in the main step loop
-				// (a fresh `step()` call there re-does its own accounting) — the ledger must
-				// count it too, or a rotated compaction reads as cheaper than it was.
-				this.totalPromptTokens += estimateMessagesTokens(toSummarize);
-				this.requestCount++;
-				await send(nextKey);
+				try {
+					await send(params.apiKey);
+					break;
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					const nextKey = isKeyFailure(message) && !params.signal.aborted ? await this.onKeyFailure?.(message, params.apiKey) : undefined;
+					if (nextKey === undefined || attempted.has(nextKey)) { throw err; }
+					params.apiKey = nextKey;
+					this.totalPromptTokens += estimateMessagesTokens(toSummarize);
+					this.requestCount++;
+				}
 			}
 			this.onStepSuccess?.();
 			// Reasoning models stream their chain of thought through onToken too;

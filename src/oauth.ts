@@ -61,8 +61,8 @@ const SIGN_IN_TIMEOUT_MS = 5 * 60 * 1000;
 
 const ANTHROPIC_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const ANTHROPIC_AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
-const ANTHROPIC_TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
-const ANTHROPIC_REDIRECT_URI = 'https://console.anthropic.com/oauth/code/callback';
+const ANTHROPIC_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
+const ANTHROPIC_REDIRECT_URI = 'https://platform.claude.com/oauth/code/callback';
 const ANTHROPIC_SCOPES = 'org:create_api_key user:profile user:inference';
 
 const OPENAI_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
@@ -85,6 +85,8 @@ export interface StoredOAuth {
 	 * extension-host restart; the in-process cache alone does not.
 	 */
 	readonly accountId?: string;
+	/** Display name supplied by the provider, never a token. */
+	readonly label?: string;
 }
 
 const OPENROUTER_AUTH_URL = 'https://openrouter.ai/auth';
@@ -207,86 +209,137 @@ export function chatgptAccountId(accessToken: string): string | undefined {
  * live in the exported `signIn*` functions below and write into this store.
  */
 export class OAuthTokenStore {
+	private readonly refreshing = new Map<string, Promise<string | undefined>>();
+	private readonly mutations = new Map<string, Promise<unknown>>();
+	private readonly latest = new Map<string, string>();
+
 	constructor(private readonly secrets: vscode.SecretStorage) { }
 
-	private key(id: string): string {
-		return SECRET_PREFIX + id;
+	/** Serializes changes so parallel sign-ins and refreshes cannot lose an account. */
+	private mutate<T>(id: string, fn: () => Promise<T>): Promise<T> {
+		const next = (this.mutations.get(id) ?? Promise.resolve()).catch(() => undefined).then(fn);
+		this.mutations.set(id, next);
+		void next.finally(() => {
+			if (this.mutations.get(id) === next) { this.mutations.delete(id); }
+		}).catch(() => undefined);
+		return next;
 	}
 
-	async get(id: string): Promise<StoredOAuth | undefined> {
-		const raw = await this.secrets.get(this.key(id));
-		if (!raw) {
-			return undefined;
-		}
+	/** Reads the legacy session plus independently refreshable additional accounts. */
+	async accounts(id: string): Promise<{ id: string; record: StoredOAuth }[]> {
+		const result: { id: string; record: StoredOAuth }[] = [];
+		const primary = await this.get(id);
+		if (primary) { result.push({ id: 'primary', record: primary }); }
+		const extra = await this.readExtra(id);
+		for (const [slot, record] of Object.entries(extra)) { result.push({ id: slot, record }); }
+		return result;
+	}
+
+	/** Only valid, provider-matched records from encrypted storage enter the pool. */
+	private valid(id: string, value: unknown): value is StoredOAuth {
+		const record = value as StoredOAuth | undefined;
+		return !!record && record.type === id && typeof record.access === 'string' && !!record.access
+			&& typeof record.refresh === 'string' && !!record.refresh && typeof record.expires === 'number' && Number.isFinite(record.expires);
+	}
+
+	private async readExtra(id: string): Promise<Record<string, StoredOAuth>> {
 		try {
-			const parsed = JSON.parse(raw);
-			if (typeof parsed?.access === 'string' && typeof parsed?.refresh === 'string') {
-				return parsed as StoredOAuth;
-			}
-		} catch {
-			// Corrupt record: treat as signed out.
-		}
-		return undefined;
+			const parsed: unknown = JSON.parse(await this.secrets.get(SECRET_PREFIX + 'accounts.' + id) ?? '{}');
+			if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) { return {}; }
+			return Object.fromEntries(Object.entries(parsed).filter(([slot, record]) => /^[a-f0-9-]{36}$/.test(slot) && this.valid(id, record)));
+		} catch { return {}; }
 	}
 
-	async set(id: string, record: StoredOAuth): Promise<void> {
-		await this.secrets.store(this.key(id), JSON.stringify(record));
+	async get(id: string, slot = 'primary'): Promise<StoredOAuth | undefined> {
+		if (slot !== 'primary') { return (await this.readExtra(id))[slot]; }
+		try {
+			const parsed: unknown = JSON.parse(await this.secrets.get(SECRET_PREFIX + id) ?? 'null');
+			return this.valid(id, parsed) ? parsed : undefined;
+		} catch { return undefined; }
+	}
+
+	/** Writes one session; callers changing an existing session keep its stable slot. */
+	async set(id: string, record: StoredOAuth, slot = 'primary'): Promise<void> {
+		await this.mutate(id, () => this.write(id, slot, record));
+	}
+
+	private async write(id: string, slot: string, record?: StoredOAuth): Promise<void> {
+		if (slot === 'primary') {
+			if (record) { await this.secrets.store(SECRET_PREFIX + id, JSON.stringify(record)); }
+			else { await this.secrets.delete(SECRET_PREFIX + id); }
+			return;
+		}
+		const extra = await this.readExtra(id);
+		if (record) { extra[slot] = record; } else { delete extra[slot]; }
+		if (Object.keys(extra).length) { await this.secrets.store(SECRET_PREFIX + 'accounts.' + id, JSON.stringify(extra)); }
+		else { await this.secrets.delete(SECRET_PREFIX + 'accounts.' + id); }
+	}
+
+	/** Adds a sign-in without overwriting other accounts; reauthorizing an account updates it. */
+	async add(id: string, record: StoredOAuth): Promise<string> {
+		if (!this.valid(id, record)) { throw new Error('The provider returned incomplete sign-in credentials. Please sign in again.'); }
+		return this.mutate(id, async () => {
+			const accounts = await this.accounts(id);
+			const existing = accounts.find(a => a.record.access === record.access || a.record.refresh === record.refresh
+				|| (!!record.accountId && a.record.accountId === record.accountId));
+			const slot = existing?.id ?? (accounts.some(a => a.id === 'primary') ? randomUUID() : 'primary');
+			await this.write(id, slot, record);
+			this.latest.set(id, slot);
+			return slot;
+		});
+	}
+
+	/** Slot saved by the last completed interactive sign-in. */
+	latestAccount(id: string): string { return this.latest.get(id) ?? 'primary'; }
+
+	async remove(id: string, slot: string): Promise<void> {
+		await this.mutate(id, () => this.write(id, slot));
 	}
 
 	async clear(id: string): Promise<void> {
-		await this.secrets.delete(this.key(id));
+		await this.mutate(id, async () => {
+			await this.secrets.delete(SECRET_PREFIX + id);
+			await this.secrets.delete(SECRET_PREFIX + 'accounts.' + id);
+			this.latest.delete(id);
+		});
 	}
 
-	/**
-	 * Returns a valid access token for the provider, refreshing (and re-persisting)
-	 * it when it is about to expire. Returns undefined when the user never signed in;
-	 * throws when the session exists but can no longer be refreshed.
-	 */
-	async getFreshAccessToken(id: string): Promise<string | undefined> {
-		const record = await this.get(id);
-		if (!record) {
-			return undefined;
-		}
-		if (record.type === 'openai' && record.accountId) {
-			// Warms the in-process cache from the persisted value on every lookup, not
-			// just after a fresh sign-in/refresh — the only two call sites that used to
-			// populate it — so a still-valid token survives an extension-host restart.
-			cacheChatGptAccountId(record.access, record.accountId);
-		}
-		if (record.expires - EXPIRY_SLACK_MS > Date.now()) {
-			return record.access;
-		}
-		// Single-flight per id: rotating refresh tokens mean a second concurrent refresh
-		// with the same (now spent) token would fail and wipe the winner's valid session.
-		let inflight = this.refreshing.get(id);
+	/** Refreshes only the selected account, with single-flight per stable account slot. */
+	async getFreshAccessToken(id: string, slot = 'primary'): Promise<string | undefined> {
+		const record = await this.get(id, slot);
+		if (!record) { return undefined; }
+		if (record.type === 'openai' && record.accountId) { cacheChatGptAccountId(record.access, record.accountId); }
+		if (record.expires - EXPIRY_SLACK_MS > Date.now()) { return record.access; }
+		const key = id + ':' + slot;
+		let inflight = this.refreshing.get(key);
 		if (!inflight) {
-			inflight = this.refreshRecord(id, record).finally(() => {
-				this.refreshing.delete(id);
-			});
-			this.refreshing.set(id, inflight);
+			inflight = this.refreshRecord(id, slot, record).finally(() => this.refreshing.delete(key));
+			this.refreshing.set(key, inflight);
 		}
 		return inflight;
 	}
 
-	private readonly refreshing = new Map<string, Promise<string>>();
-
-	/** Refreshes one record and persists the result; clears the session only when it is truly dead. */
-	private async refreshRecord(id: string, record: StoredOAuth): Promise<string> {
+	/** A late refresh may neither resurrect a removed session nor overwrite a newer login. */
+	private async refreshRecord(id: string, slot: string, record: StoredOAuth): Promise<string | undefined> {
 		const refreshed = record.type === 'anthropic' ? await refreshAnthropic(record.refresh)
 			: record.type === 'openai' ? await refreshOpenAI(record.refresh, record.access)
 				: await refreshAntigravity(record.refresh);
-		if (refreshed === 'invalid') {
-			// Another window or process may have rotated the token meanwhile; only clear
-			// when the stored refresh token is still the one that just failed.
-			const current = await this.get(id);
-			if (current && current.refresh !== record.refresh) {
+		return this.mutate(id, async () => {
+			const current = await this.get(id, slot);
+			if (!current) { return undefined; }
+			if (current.refresh !== record.refresh || current.access !== record.access) {
+				cacheChatGptAccountId(current.access, current.accountId);
 				return current.access;
 			}
-			await this.clear(id);
-			throw new Error('Your web sign-in session expired. Please sign in again.');
-		}
-		await this.set(id, refreshed);
-		return refreshed.access;
+			if (refreshed === 'invalid') {
+				await this.write(id, slot);
+				throw new Error('Your web sign-in session expired. Please sign in again (HTTP 401).');
+			}
+			const next = { ...refreshed, accountId: refreshed.accountId ?? current.accountId, label: refreshed.label ?? current.label };
+			await this.write(id, slot, next);
+			cacheChatGptAccountId(next.access, next.accountId);
+			return next.access;
+		});
 	}
 }
 
@@ -333,7 +386,9 @@ function toRecord(type: StoredOAuth['type'], json: any, accountId?: string): Sto
 		access: json.access_token,
 		refresh: json.refresh_token,
 		expires: Date.now() + (typeof json.expires_in === 'number' ? json.expires_in : 3600) * 1000,
-		accountId,
+		accountId: accountId ?? (type === 'anthropic' && typeof json?.account?.uuid === 'string' ? json.account.uuid : undefined),
+		label: typeof json?.account?.email_address === 'string' ? json.account.email_address.slice(0, 200)
+			: typeof decodeJwtClaims(typeof json?.id_token === 'string' ? json.id_token : '')?.email === 'string' ? String(decodeJwtClaims(json.id_token)!.email).slice(0, 200) : undefined,
 	};
 }
 
@@ -393,56 +448,111 @@ async function refreshAntigravity(refreshToken: string): Promise<StoredOAuth | '
 	return toRecord('antigravity', { ...json, refresh_token: json.refresh_token ?? refreshToken });
 }
 
-/**
- * Runs the Claude account sign-in: opens the claude.ai authorization page in the
- * browser and asks the user to paste back the code shown after approving (the flow
- * used by Anthropic's own CLI — no local callback server involved). Returns true
- * when a session was stored, false when the user cancelled.
- */
-export async function signInAnthropic(store: OAuthTokenStore): Promise<boolean> {
+/** The two supported Claude authorization flows. */
+export type ClaudeSignInMethod = 'browser' | 'code';
+
+/** Authorizes Claude with either an automatic loopback callback or a pasted code. */
+export async function signInAnthropic(store: OAuthTokenStore, method: ClaudeSignInMethod = 'browser'): Promise<boolean> {
 	const pkce = createPkce();
-	// Its own random value. It used to be the PKCE verifier itself, which put the one secret
-	// PKCE relies on into the authorize URL — browser history, the provider's logs — where
-	// together with an intercepted code it was enough to redeem the code for a token.
 	const expectedState = base64url(randomBytes(32));
-	const url = new URL(ANTHROPIC_AUTHORIZE_URL);
-	url.searchParams.set('code', 'true');
-	url.searchParams.set('client_id', ANTHROPIC_CLIENT_ID);
-	url.searchParams.set('response_type', 'code');
-	url.searchParams.set('redirect_uri', ANTHROPIC_REDIRECT_URI);
-	url.searchParams.set('scope', ANTHROPIC_SCOPES);
-	url.searchParams.set('code_challenge', pkce.challenge);
-	url.searchParams.set('code_challenge_method', 'S256');
-	url.searchParams.set('state', expectedState);
-
-	await vscode.env.openExternal(vscode.Uri.parse(url.toString()));
-
-	const pasted = await vscode.window.showInputBox({
-		title: 'Sign in with Claude',
-		prompt: 'Approve access in the browser, then paste the code shown on the confirmation page here.',
-		placeHolder: 'Paste authorization code…',
-		ignoreFocusOut: true,
-	});
-	if (!pasted?.trim()) {
-		return false;
-	}
-	const [code, state] = pasted.trim().split('#');
-	if (state !== undefined && state !== expectedState) {
-		throw new Error('That code belongs to a different sign-in attempt. Start the Claude sign-in again and paste the code it shows.');
+	const authorize = (redirectUri: string): string => {
+		const url = new URL(ANTHROPIC_AUTHORIZE_URL);
+		url.searchParams.set('code', 'true');
+		url.searchParams.set('client_id', ANTHROPIC_CLIENT_ID);
+		url.searchParams.set('response_type', 'code');
+		url.searchParams.set('redirect_uri', redirectUri);
+		url.searchParams.set('scope', ANTHROPIC_SCOPES);
+		url.searchParams.set('code_challenge', pkce.challenge);
+		url.searchParams.set('code_challenge_method', 'S256');
+		url.searchParams.set('state', expectedState);
+		return url.toString();
+	};
+	let code: string;
+	let redirectUri = ANTHROPIC_REDIRECT_URI;
+	if (method === 'browser') {
+		const result = await waitForOAuthCallback('Claude', authorize, expectedState);
+		if (!result) { return false; }
+		code = result.code;
+		redirectUri = result.redirectUri;
+	} else {
+		if (!await vscode.env.openExternal(vscode.Uri.parse(authorize(redirectUri)))) {
+			throw new Error('Could not open the Claude sign-in page in a browser.');
+		}
+		const pasted = await vscode.window.showInputBox({
+			title: 'Sign in with Claude — authorization code',
+			prompt: 'Approve access in the browser, then paste the authorization code shown on the confirmation page.',
+			placeHolder: 'Paste authorization code…', password: true, ignoreFocusOut: true,
+		});
+		if (!pasted?.trim()) { return false; }
+		const parts = pasted.trim().split('#');
+		code = parts[0];
+		if (!code || parts.length > 2 || (parts[1] !== undefined && parts[1] !== expectedState)) {
+			throw new Error('That code belongs to a different sign-in attempt. Start Claude sign-in again and paste the code it shows.');
+		}
 	}
 	const { status, json } = await postJson(ANTHROPIC_TOKEN_URL, {
-		grant_type: 'authorization_code',
-		code,
-		state: expectedState,
-		client_id: ANTHROPIC_CLIENT_ID,
-		redirect_uri: ANTHROPIC_REDIRECT_URI,
-		code_verifier: pkce.verifier,
+		grant_type: 'authorization_code', code, state: expectedState,
+		client_id: ANTHROPIC_CLIENT_ID, redirect_uri: redirectUri, code_verifier: pkce.verifier,
 	});
-	if (typeof json?.access_token !== 'string') {
-		throw new Error(`Claude sign-in failed (HTTP ${status}): ${JSON.stringify(json?.error ?? json).slice(0, 200)}`);
+	if (status < 200 || status >= 300 || typeof json?.access_token !== 'string' || !json.access_token
+		|| typeof json?.refresh_token !== 'string' || !json.refresh_token) {
+		throw new Error(`Claude sign-in failed (HTTP ${status}). Please start sign-in again.`);
 	}
-	await store.set('anthropic', toRecord('anthropic', json));
+	await store.add('anthropic', toRecord('anthropic', json));
 	return true;
+}
+
+/** Uses the public Claude OAuth client's supported localhost redirect, bound only to loopback. */
+function waitForOAuthCallback(label: string, authorize: (redirectUri: string) => string, expectedState: string, port = 0, callbackPath = '/callback'): Promise<{ code: string; redirectUri: string } | undefined> {
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		let redirectUri = '';
+		let cancelSubscription: vscode.Disposable | undefined;
+		let progressDone: (() => void) | undefined;
+		const finish = (complete: () => void): void => {
+			if (settled) { return; }
+			settled = true;
+			clearTimeout(timer);
+			cancelSubscription?.dispose();
+			server.close();
+			progressDone?.();
+			complete();
+		};
+		const server = http.createServer((req, res) => {
+			const url = new URL(req.url ?? '/', 'http://localhost');
+			if (url.pathname !== callbackPath || req.method !== 'GET') { res.writeHead(404).end(); return; }
+			if (url.searchParams.get('state') !== expectedState) { res.writeHead(400).end('Invalid sign-in state.'); return; }
+			const code = url.searchParams.get('code');
+			const error = url.searchParams.get('error');
+			res.writeHead(code && !error ? 200 : 400, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+			res.end('Sign-in received. Return to Stormcoder. You can close this page.');
+			finish(() => {
+				if (error || !code) { reject(new Error(`${label} sign-in was rejected or returned an invalid callback.`)); }
+				else { resolve({ code, redirectUri }); }
+			});
+		});
+		const timer = setTimeout(() => finish(() => reject(new Error(`${label} sign-in timed out. Try again.`))), SIGN_IN_TIMEOUT_MS);
+		server.on('error', (err: NodeJS.ErrnoException) => finish(() => reject(new Error(err.code === 'EADDRINUSE'
+			? `Port ${port} is in use. Close the other sign-in and try again.` : `Could not start the ${label} browser callback.`))));
+		server.listen(port, '127.0.0.1', () => {
+			if (settled) { server.close(); return; }
+			const address = server.address();
+			if (!address || typeof address === 'string') { finish(() => reject(new Error('Could not start the browser callback.'))); return; }
+			redirectUri = `http://localhost:${address.port}${callbackPath}`;
+			void vscode.window.withProgress(
+				{ location: vscode.ProgressLocation.Notification, title: `Waiting for ${label} sign-in in the browser…`, cancellable: true },
+				(_progress, cancel) => new Promise<void>(done => {
+					progressDone = done;
+					cancelSubscription = cancel.onCancellationRequested(() => finish(() => resolve(undefined)));
+					if (settled) { done(); }
+				}),
+			).then(undefined, () => finish(() => reject(new Error(`${label} sign-in was interrupted.`))));
+			if (settled) { return; }
+			void vscode.env.openExternal(vscode.Uri.parse(authorize(redirectUri))).then(opened => {
+				if (!opened) { finish(() => reject(new Error('Could not open the sign-in page in a browser.'))); }
+			}, () => finish(() => reject(new Error('Could not open the sign-in page in a browser.'))));
+		});
+	});
 }
 
 export interface OpenAISignInResult {
@@ -513,7 +623,7 @@ export async function signInOpenAI(store: OAuthTokenStore): Promise<OpenAISignIn
 		}
 	}
 
-	await store.set('openai', toRecord('openai', json, accountId));
+	await store.add('openai', toRecord('openai', json, accountId));
 	return { mode: 'chatgpt' };
 }
 
@@ -521,75 +631,8 @@ export async function signInOpenAI(store: OAuthTokenStore): Promise<OpenAISignIn
  * Serves the OAuth redirect on localhost:1455 for a single sign-in attempt and
  * resolves with the authorization code (or undefined on cancel/timeout).
  */
-function waitForOpenAICallback(authorizeUrl: string, expectedState: string): Promise<string | undefined> {
-	return new Promise<string | undefined>((resolve, reject) => {
-		let settled = false;
-		const server = http.createServer((req, res) => {
-			const requestUrl = new URL(req.url ?? '/', `http://localhost:${OPENAI_CALLBACK_PORT}`);
-			if (requestUrl.pathname !== '/auth/callback') {
-				res.writeHead(404).end();
-				return;
-			}
-			const error = requestUrl.searchParams.get('error');
-			const code = requestUrl.searchParams.get('code');
-			const state = requestUrl.searchParams.get('state');
-			if (state !== expectedState) {
-				// A stray or forged request must not abort the real sign-in: answer 400 and keep listening.
-				res.writeHead(400, { 'Content-Type': 'text/plain' }).end('Invalid sign-in state.');
-				return;
-			}
-			res.writeHead(200, { 'Content-Type': 'text/html' });
-			res.end('<html><body style="font-family:sans-serif"><h2>Sign-in received</h2><p>You can close this window and return to the editor.</p></body></html>');
-			finish(() => {
-				if (error) {
-					reject(new Error(`ChatGPT sign-in was rejected: ${error}`));
-				} else if (!code) {
-					reject(new Error('ChatGPT sign-in returned an invalid callback.'));
-				} else {
-					resolve(code);
-				}
-			});
-		});
-
-		const timer = setTimeout(() => finish(() => reject(new Error('Sign-in timed out. Please try again.'))), SIGN_IN_TIMEOUT_MS);
-
-		function finish(complete: () => void): void {
-			if (settled) {
-				return;
-			}
-			settled = true;
-			clearTimeout(timer);
-			server.close();
-			complete();
-		}
-
-		server.on('error', (err: NodeJS.ErrnoException) => {
-			finish(() => reject(err.code === 'EADDRINUSE'
-				? new Error(`Port ${OPENAI_CALLBACK_PORT} is in use (is another sign-in or Codex CLI running?). Close it and try again.`)
-				: err));
-		});
-
-		server.listen(OPENAI_CALLBACK_PORT, '127.0.0.1', () => {
-			vscode.env.openExternal(vscode.Uri.parse(authorizeUrl)).then(opened => {
-				if (!opened) {
-					finish(() => reject(new Error('Could not open the sign-in page in a browser.')));
-				}
-			});
-		});
-
-		void vscode.window.withProgress(
-			{ location: vscode.ProgressLocation.Notification, title: 'Waiting for ChatGPT sign-in in the browser…', cancellable: true },
-			(_progress, cancel) => new Promise<void>(done => {
-				cancel.onCancellationRequested(() => finish(() => resolve(undefined)));
-				const poll = setInterval(() => {
-					if (settled) {
-						clearInterval(poll);
-						done();
-					}
-				}, 250);
-			}),
-		);
-	});
+async function waitForOpenAICallback(authorizeUrl: string, expectedState: string): Promise<string | undefined> {
+	return (await waitForOAuthCallback('ChatGPT', () => authorizeUrl, expectedState, OPENAI_CALLBACK_PORT, '/auth/callback'))?.code;
 }
 
 /**
@@ -630,7 +673,7 @@ export async function signInAntigravity(store: OAuthTokenStore): Promise<boolean
 	if (typeof json?.access_token !== 'string') {
 		throw new Error(`Antigravity sign-in failed (HTTP ${status}): ${JSON.stringify(json?.error ?? json).slice(0, 200)}`);
 	}
-	await store.set('antigravity', toRecord('antigravity', json));
+	await store.add('antigravity', toRecord('antigravity', json));
 	return true;
 }
 
@@ -638,75 +681,8 @@ export async function signInAntigravity(store: OAuthTokenStore): Promise<boolean
  * Serves the OAuth redirect on localhost:51121 for a single sign-in attempt and
  * resolves with the authorization code (or undefined on cancel/timeout).
  */
-function waitForAntigravityCallback(authorizeUrl: string, expectedState: string): Promise<string | undefined> {
-	return new Promise<string | undefined>((resolve, reject) => {
-		let settled = false;
-		const server = http.createServer((req, res) => {
-			const requestUrl = new URL(req.url ?? '/', `http://localhost:${ANTIGRAVITY_CALLBACK_PORT}`);
-			if (requestUrl.pathname !== '/oauth-callback') {
-				res.writeHead(404).end();
-				return;
-			}
-			const error = requestUrl.searchParams.get('error');
-			const code = requestUrl.searchParams.get('code');
-			const state = requestUrl.searchParams.get('state');
-			if (state !== expectedState) {
-				// A stray or forged request must not abort the real sign-in: answer 400 and keep listening.
-				res.writeHead(400, { 'Content-Type': 'text/plain' }).end('Invalid sign-in state.');
-				return;
-			}
-			res.writeHead(200, { 'Content-Type': 'text/html' });
-			res.end('<html><body style="font-family:sans-serif"><h2>Sign-in received</h2><p>You can close this window and return to the editor.</p></body></html>');
-			finish(() => {
-				if (error) {
-					reject(new Error(`Antigravity sign-in was rejected: ${error}`));
-				} else if (!code) {
-					reject(new Error('Antigravity sign-in returned an invalid callback.'));
-				} else {
-					resolve(code);
-				}
-			});
-		});
-
-		const timer = setTimeout(() => finish(() => reject(new Error('Sign-in timed out. Please try again.'))), SIGN_IN_TIMEOUT_MS);
-
-		function finish(complete: () => void): void {
-			if (settled) {
-				return;
-			}
-			settled = true;
-			clearTimeout(timer);
-			server.close();
-			complete();
-		}
-
-		server.on('error', (err: NodeJS.ErrnoException) => {
-			finish(() => reject(err.code === 'EADDRINUSE'
-				? new Error(`Port ${ANTIGRAVITY_CALLBACK_PORT} is in use (is another sign-in already running?). Close it and try again.`)
-				: err));
-		});
-
-		server.listen(ANTIGRAVITY_CALLBACK_PORT, '127.0.0.1', () => {
-			vscode.env.openExternal(vscode.Uri.parse(authorizeUrl)).then(opened => {
-				if (!opened) {
-					finish(() => reject(new Error('Could not open the sign-in page in a browser.')));
-				}
-			});
-		});
-
-		void vscode.window.withProgress(
-			{ location: vscode.ProgressLocation.Notification, title: 'Waiting for Google Antigravity sign-in in the browser…', cancellable: true },
-			(_progress, cancel) => new Promise<void>(done => {
-				cancel.onCancellationRequested(() => finish(() => resolve(undefined)));
-				const poll = setInterval(() => {
-					if (settled) {
-						clearInterval(poll);
-						done();
-					}
-				}, 250);
-			}),
-		);
-	});
+async function waitForAntigravityCallback(authorizeUrl: string, expectedState: string): Promise<string | undefined> {
+	return (await waitForOAuthCallback('Antigravity', () => authorizeUrl, expectedState, ANTIGRAVITY_CALLBACK_PORT, '/oauth-callback'))?.code;
 }
 
 /**

@@ -1292,13 +1292,14 @@
 		for (const p of providers) {
 			const card = document.createElement('div');
 			card.className = 'provider-card';
+			const activeAccount = p.accounts?.find(account => account.active);
 			const status = p.authKind === 'oauth'
 				? '<span class="ok">● signed in</span>'
 				: p.hasApiKey
-					? `<span class="ok">● key set${p.hasEnvKey ? ' (env)' : ''}</span>`
+					? `<span class="ok">● key set${activeAccount?.kind === 'env' ? ' (env)' : ''}</span>`
 					: (p.requiresApiKey ? '<span class="warn">● no key</span>' : '<span>no key needed</span>');
-			const signInLabel = p.id === 'anthropic' ? 'Sign in with Claude'
-				: p.id === 'openai' ? 'Sign in with ChatGPT'
+			const signInLabel = p.id === 'anthropic' ? 'Add Claude account (browser)'
+				: p.id === 'openai' ? 'Add ChatGPT account'
 					: p.id === 'openrouter' ? 'Sign in with OpenRouter'
 						: 'Sign in';
 			const signInTitle = p.id === 'anthropic'
@@ -1326,7 +1327,7 @@
 					${p.supportsTools ? '<span class="tag">agent</span>' : ''}</div>
 				<div class="provider-row">
 					<input type="password" class="key-input" placeholder="${p.requiresApiKey ? 'Paste API key…' : 'Paste API key… (optional)'}" />
-					${hasAccountId ? '' : '<button class="save-key">Save</button>'}
+					${hasAccountId ? '' : '<button class="save-key">Add key</button>'}
 				</div>
 				${hasAccountId ? `
 				<div class="provider-row">
@@ -1335,12 +1336,14 @@
 					<button class="save-credentials" title="Saves the API token above together with this account id">Save</button>
 				</div>` : ''}
 				<div class="provider-actions">
-					<button class="sign-in" title="${signInTitle}">${signInLabel}</button>
+					<button class="sign-in" aria-label="${signInTitle}">${signInLabel}</button>
+					${p.id === 'anthropic' && !p.authUrl ? '<button class="sign-in-code">Use authorization code</button>' : ''}
 					${p.apiKeyUrl ? '<a class="get-key" href="#">Get API key</a>' : ''}
 					${p.hasApiKey ? '<a class="test-key" href="#">Test connection</a>' : ''}
-					${(p.hasApiKey && !p.hasEnvKey) ? `<a class="clear-key" href="#">${p.authKind === 'oauth' ? 'Sign out' : 'Clear key'}</a>` : ''}
-					${p.hasEnvKey ? '<span class="muted" title="Set via environment variable; unset it (and restart) to remove.">from environment</span>' : ''}
+					${(p.hasApiKey && !p.hasEnvKey) ? `<a class="clear-key" href="#">Remove all saved accounts</a>` : ''}
+					${p.hasEnvKey ? '<span class="muted" title="Set via environment variable; unset it (and restart) to remove.">Environment key configured</span>' : ''}
 				</div>
+				<div class="provider-accounts"></div>
 				${hasBaseUrl ? `
 				<details class="provider-advanced">
 					<summary>Base URL</summary>
@@ -1358,12 +1361,47 @@
 						<textarea class="extra-keys-input" rows="3"
 							placeholder="${p.id === 'web_gemini'
 								? 'One Chrome user-data-directory path per line — one per additional Google account, rotated in the same way a backup key would be'
-								: 'One backup key per line — rotated in automatically when the primary key is rate-limited or rejected'}"></textarea>
+								: 'One backup key per line — replaces the saved backup keys; use Add key to add one account at a time'}"></textarea>
 					</div>
 					<div class="provider-row">
-						<button class="save-extra-keys">Save</button>
+						<button class="save-extra-keys">Replace backup keys</button>
 					</div>
 				</details>` : ''}`;
+			const accountList = card.querySelector('.provider-accounts');
+			if (accountList && p.accounts?.length) {
+				const heading = document.createElement('p');
+				heading.className = 'muted';
+				heading.textContent = `${p.accounts.length} saved account${p.accounts.length === 1 ? '' : 's'} · Falls back automatically when an account reaches its limit.`;
+				accountList.appendChild(heading);
+				const refresh = document.createElement('button');
+				refresh.className = 'refresh-accounts';
+				refresh.textContent = 'Refresh status';
+				refresh.addEventListener('click', () => vscode.postMessage({ type: 'refreshAccounts' }));
+				accountList.appendChild(refresh);
+				for (const account of p.accounts) {
+					const row = document.createElement('div');
+					row.className = 'provider-account';
+					const name = document.createElement('span');
+					name.className = 'provider-account-name';
+					name.textContent = account.label;
+					const status = document.createElement('span');
+					status.className = 'provider-account-status';
+					status.textContent = account.cooldownUntil > Date.now()
+						? `Cooling down until ${new Date(account.cooldownUntil).toLocaleTimeString()}`
+						: account.active ? 'Active' : 'Ready for fallback';
+					row.append(name, status);
+					if (account.removable) {
+						const remove = document.createElement('button');
+						remove.textContent = 'Remove';
+						remove.setAttribute('aria-label', `Remove ${account.label}`);
+						remove.addEventListener('click', () => {
+							vscode.postMessage({ type: 'removeAccount', provider: p.id, accountId: account.id });
+						});
+						row.appendChild(remove);
+					}
+					accountList.appendChild(row);
+				}
+			}
 			const keyInput = /** @type {HTMLInputElement} */ (card.querySelector('.key-input'));
 			if (hasAccountId) {
 				const accountIdInput = /** @type {HTMLInputElement} */ (card.querySelector('.account-id-input'));
@@ -1403,6 +1441,7 @@
 				const extraKeysInput = /** @type {HTMLTextAreaElement} */ (card.querySelector('.extra-keys-input'));
 				card.querySelector('.save-extra-keys')?.addEventListener('click', () => {
 					const keys = extraKeysInput.value.split('\n').map(k => k.trim()).filter(Boolean);
+					if (!keys.length) { showNotice('Paste backup keys first. Use Remove beside an account to delete it.', true); return; }
 					vscode.postMessage({ type: 'saveExtraKeys', provider: p.id, keys });
 					// Like the primary key box: saved keys are not left sitting on screen.
 					extraKeysInput.value = '';
@@ -1412,7 +1451,10 @@
 				e.preventDefault(); vscode.postMessage({ type: 'openExternal', url: p.apiKeyUrl });
 			});
 			card.querySelector('.sign-in')?.addEventListener('click', (e) => {
-				e.preventDefault(); vscode.postMessage({ type: 'signIn', provider: p.id });
+				e.preventDefault(); vscode.postMessage({ type: 'signIn', provider: p.id, authMethod: 'browser' });
+			});
+			card.querySelector('.sign-in-code')?.addEventListener('click', () => {
+				vscode.postMessage({ type: 'signIn', provider: p.id, authMethod: 'code' });
 			});
 			card.querySelector('.test-key')?.addEventListener('click', (e) => {
 				e.preventDefault(); vscode.postMessage({ type: 'testKey', provider: p.id });

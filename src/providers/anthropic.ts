@@ -263,7 +263,7 @@ export class AnthropicProvider implements ChatProvider {
 			: {
 				...STREAM_FETCH_OPTS,
 				onRetry: info => request.onNotice?.(retryNotice(this.info.label, info)),
-				...this.rateLimits.fetchOpts(request.model),
+				...this.rateLimits.fetchOpts(request.model, request.apiKey),
 			};
 		// A completion is a 96-token prediction: thinking would spend the whole reply on it.
 		const response = request.isCompletion
@@ -326,7 +326,7 @@ export class AnthropicProvider implements ChatProvider {
 		const response = await this.send(request, true, {
 			...STREAM_FETCH_OPTS,
 			onRetry: info => request.onNotice?.(retryNotice(this.info.label, info)),
-			...this.rateLimits.fetchOpts(request.model),
+			...this.rateLimits.fetchOpts(request.model, request.apiKey),
 		}, request.tools);
 
 		if (!response.ok) {

@@ -48,13 +48,13 @@ export class WebAuthManager implements vscode.UriHandler {
 	 * Starts the sign-in flow for a provider. Returns true if a token was received
 	 * and stored. Throws if no auth URL is configured for the provider.
 	 */
-	async signIn(providerId: string): Promise<boolean> {
+	async signIn(providerId: string, method?: 'browser' | 'code'): Promise<boolean> {
 		const authUrl = this.registry.getAuthUrl(providerId);
 		if (!authUrl) {
 			// No custom auth backend configured: fall back to the provider's own
 			// account login when we have a built-in flow for it.
 			if (supportsNativeSignIn(providerId)) {
-				return this.nativeSignIn(providerId);
+				return this.nativeSignIn(providerId, method);
 			}
 			throw new Error('No web sign-in URL is configured for this provider. Set "stormcoder.' + providerId + '.authUrl" or add an API key instead.');
 		}
@@ -72,8 +72,13 @@ export class WebAuthManager implements vscode.UriHandler {
 		target.searchParams.set('provider', providerId);
 
 		const tokenPromise = new Promise<string | undefined>((resolve, reject) => {
-			this.pending.set(state, { providerId, resolve });
-			setTimeout(() => {
+			const finish = (token: string | undefined): void => {
+				clearTimeout(timer);
+				this.pending.delete(state);
+				resolve(token);
+			};
+			this.pending.set(state, { providerId, resolve: finish });
+			const timer = setTimeout(() => {
 				if (this.pending.has(state)) {
 					this.pending.delete(state);
 					reject(new Error('Sign-in timed out. Please try again.'));
@@ -81,10 +86,13 @@ export class WebAuthManager implements vscode.UriHandler {
 			}, TIMEOUT_MS);
 		});
 
-		const opened = await vscode.env.openExternal(vscode.Uri.parse(target.toString()));
-		if (!opened) {
-			this.pending.delete(state);
-			throw new Error('Could not open the sign-in page in a browser.');
+		try {
+			if (!await vscode.env.openExternal(vscode.Uri.parse(target.toString()))) {
+				throw new Error('Could not open the sign-in page in a browser.');
+			}
+		} catch (err) {
+			this.pending.get(state)?.resolve(undefined);
+			throw err;
 		}
 
 		const token = await vscode.window.withProgress(
@@ -104,7 +112,7 @@ export class WebAuthManager implements vscode.UriHandler {
 		if (!token) {
 			return false;
 		}
-		await this.registry.setApiKey(providerId, token);
+		await this.registry.addApiKey(providerId, token);
 		return true;
 	}
 
@@ -113,9 +121,9 @@ export class WebAuthManager implements vscode.UriHandler {
 	 * built-in OAuth flows in `oauth.ts`, so a paid subscription can be used without
 	 * an API key. Returns true when a credential was stored.
 	 */
-	private async nativeSignIn(providerId: string): Promise<boolean> {
+	private async nativeSignIn(providerId: string, method?: 'browser' | 'code'): Promise<boolean> {
 		if (providerId === 'anthropic') {
-			const ok = await signInAnthropic(this.registry.oauth);
+			const ok = await signInAnthropic(this.registry.oauth, method);
 			if (ok) {
 				await this.registry.adoptOAuth(providerId);
 			}
@@ -134,7 +142,7 @@ export class WebAuthManager implements vscode.UriHandler {
 			if (!key) {
 				return false;
 			}
-			await this.registry.setApiKey(providerId, key);
+			await this.registry.addApiKey(providerId, key);
 			return true;
 		}
 		const result = await signInOpenAI(this.registry.oauth);
@@ -144,7 +152,7 @@ export class WebAuthManager implements vscode.UriHandler {
 		if (result.mode === 'apiKey' && result.apiKey) {
 			// The account has API access: a real key was minted, which works with
 			// every OpenAI endpoint. Store it like a pasted key.
-			await this.registry.setApiKey(providerId, result.apiKey);
+			await this.registry.addApiKey(providerId, result.apiKey);
 		} else {
 			await this.registry.adoptOAuth(providerId);
 		}

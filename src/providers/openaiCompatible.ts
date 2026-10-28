@@ -203,11 +203,11 @@ export abstract class OpenAICompatibleProvider implements ChatProvider {
 	 * short, transient notice (rate limit / slow start) so an auto-retry doesn't look like
 	 * a silent hang. 429 gets its own patient budget inside {@link apiFetch}.
 	 */
-	private streamFetchOpts(model: string, onNotice?: (text: string) => void): ApiFetchOptions {
+	private streamFetchOpts(model: string, apiKey: string, onNotice?: (text: string) => void): ApiFetchOptions {
 		return {
 			...STREAM_FETCH_OPTS,
 			onRetry: (info: RetryInfo) => onNotice?.(retryNotice(this.info.label, info)),
-			...this.rateLimits.fetchOpts(model),
+			...this.rateLimits.fetchOpts(model, apiKey),
 		};
 	}
 
@@ -225,7 +225,7 @@ export abstract class OpenAICompatibleProvider implements ChatProvider {
 	private effectiveFetchOpts(request: ChatRequest): ApiFetchOptions {
 		return request.isCompletion
 			? { ...COMPLETION_FETCH_OPTS, ...this.rateLimits.noteOnlyOpts(request.model) }
-			: this.streamFetchOpts(request.model, request.onNotice);
+			: this.streamFetchOpts(request.model, request.apiKey, request.onNotice);
 	}
 
 	/**
@@ -399,7 +399,7 @@ export abstract class OpenAICompatibleProvider implements ChatProvider {
 				...this.requestExtras(request.model),
 			}),
 			request.signal,
-			this.streamFetchOpts(request.model, request.onNotice),
+			this.streamFetchOpts(request.model, request.apiKey, request.onNotice),
 		);
 
 		if (!response.ok) {

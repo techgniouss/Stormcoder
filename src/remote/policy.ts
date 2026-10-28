@@ -114,6 +114,8 @@ export const REMOTE_DENIED: readonly string[] = [
 	'closeSettingsWindow',
 	'saveKey',
 	'saveExtraKeys',
+	'removeAccount',
+	'refreshAccounts',
 	'clearKey',
 	'signIn',
 	'setRole',

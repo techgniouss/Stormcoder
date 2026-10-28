@@ -413,6 +413,7 @@ export class AutoOrchestrator {
 		// a small per-request allowance the planner was refused before the implementer — which
 		// does learn its ceiling — ever got to run.
 		const budgets = this.textBudgets(provider, assignment, maxTokens);
+		let outputStarted = false;
 		const { text, truncated, compactPrompt } = await withProviderResilience(this.registry, assignment.providerId, assignment.model, apiKey => streamBudgeted(provider, {
 			messages,
 			model: assignment.model,
@@ -421,9 +422,9 @@ export class AutoOrchestrator {
 			...budgets,
 			compactSystem,
 			signal,
-			onToken: delta => cb.token(delta),
+			onToken: delta => { outputStarted ||= !!delta; cb.token(delta); },
 			onNotice: text => cb.note(text),
-		}));
+		}), () => !outputStarted && !signal.aborted);
 		if (compactPrompt) {
 			this.noteCompactPrompt(cb, `${assignment.model}'s request budget is too small for the full instructions, so the ${assignment.roleLabel} phase was sent the compact prompt: condensed instructions, project rules shortened, active skills left out.`);
 		}
@@ -629,7 +630,7 @@ export class AutoOrchestrator {
 		return {
 			onKeyFailure: async (message, failedKey) => {
 				this.registry.cooldowns.markCooldown(providerId, model, message);
-				const rotated = await this.registry.rotateApiKey(providerId, failedKey);
+				const rotated = await this.registry.rotateApiKey(providerId, failedKey, message);
 				return rotated ? (await this.registry.getApiKey(providerId)) ?? '' : undefined;
 			},
 			onStepSuccess: () => {
