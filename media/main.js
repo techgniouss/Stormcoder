@@ -1490,14 +1490,15 @@
 	 * One button of a small button group (used instead of a native select, which the app's
 	 * styling cannot reach). `pressed` marks the current choice.
 	 * @param {HTMLElement} group @param {string[][]} options [value, label] pairs
-	 * @param {string} current @param {(value: string) => void} onPick
+	 * @param {string} current @param {(value: string) => void} onPick @param {string[]} [disabled] values to disable
 	 */
-	function buttonGroup(group, options, current, onPick) {
+	function buttonGroup(group, options, current, onPick, disabled = []) {
 		group.textContent = '';
 		for (const [value, label] of options) {
 			const b = document.createElement('button');
 			b.className = 'mini-button';
 			b.textContent = label;
+			b.disabled = disabled.includes(value);
 			b.setAttribute('aria-pressed', String(value === current));
 			b.addEventListener('click', () => onPick(value));
 			group.appendChild(b);
@@ -1654,7 +1655,9 @@
 			btn.textContent = memoryArmed.has(scope) ? 'Click again to clear' : 'Clear';
 			btn.classList.toggle('hidden', scope === 'user' ? !st.user : !st.project);
 		}
-		buttonGroup(els.memoryNewScope, [['project', 'This project'], ['user', 'Every project']], memoryNewScope, v => { memoryNewScope = v; renderMemory(); });
+		// Project notes cannot be written until the folder is trusted: default to personal notes.
+		if (!st.trusted && memoryNewScope === 'project') { memoryNewScope = 'user'; }
+		buttonGroup(els.memoryNewScope, [['project', 'This project'], ['user', 'Every project']], memoryNewScope, v => { memoryNewScope = v; renderMemory(); }, st.trusted ? [] : ['project']);
 		buttonGroup(els.memoryNewType, (st.types || []).map(t => [t, t]), memoryNewType, v => { memoryNewType = v; renderMemory(); });
 	}
 

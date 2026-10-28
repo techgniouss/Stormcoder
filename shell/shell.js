@@ -392,7 +392,7 @@
 
 	function commandItems() {
 		const nav = [
-			['Go to Chat', 'chat'], ['Go to History', 'history'], ['Go to Skills', 'skills'],
+			['Go to Chat', 'chat'], ['Go to History', 'history'], ['Go to Changes', 'changes'], ['Go to Skills', 'skills'],
 			['Go to MCP Servers', 'mcp'], ['Go to Settings', 'settings'],
 		].map(([label, key]) => ({ label, description: 'Navigate', run: () => navigate(key) }));
 		const project = [
@@ -422,6 +422,7 @@
 
 	/** 16px outline icon paths for menu rows. */
 	const IC = {
+		changes: 'M5 2.5v7M5 12.5a1.5 1.5 0 1 0 0 .01zM11 3.5a1.5 1.5 0 1 0 0 .01zM11 5v1.5a2.5 2.5 0 0 1-2.5 2.5H5',
 		chat: 'M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z', plus: 'M8 3v10M3 8h10', folder: 'M2 4.5h4l1.5 1.5H14v6.5H2z',
 		history: 'M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 5v3.2l2.2 1.4', skills: 'M3.5 2.5h7l2 2v9h-9zM5.5 7h5M5.5 9.5h5',
 		mcp: 'M6 2.5v3M10 2.5v3M4.5 5.5h7v2.5a3.5 3.5 0 0 1-7 0zM8 11.5v2', settings: 'M2.5 4.5h6M11.5 4.5h2M2.5 8h2M7.5 8h6M2.5 11.5h7M12.5 11.5h1',
@@ -444,6 +445,7 @@
 			{ type: 'sep' },
 			{ label: 'Chat', icon: IC.chat, shortcut: [mod, '1'], onSelect: () => navigate('chat') },
 			{ label: 'History', icon: IC.history, shortcut: [mod, '2'], onSelect: () => navigate('history') },
+			{ label: 'Changes', icon: IC.changes, shortcut: [mod, '5'], onSelect: () => navigate('changes') },
 			{ label: 'Skills', icon: IC.skills, shortcut: [mod, '3'], onSelect: () => navigate('skills') },
 			{ label: 'MCP servers', icon: IC.mcp, shortcut: [mod, '4'], onSelect: () => navigate('mcp') },
 			{ label: 'Settings', icon: IC.settings, shortcut: [mod, ','], onSelect: () => navigate('settings') },

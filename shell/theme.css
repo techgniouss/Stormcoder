@@ -291,6 +291,8 @@ body.settings-window #settingsPanel > .panel-header { display: none; }
 .key-input, .general-settings input, .general-settings textarea, .settings-number, .settings-textarea, .role-model, .role-provider, .provider-row input, .remote-pairing-link-input {
 	height: 36px; padding: 0 12px; border-radius: 10px; background: var(--ground); border: 1px solid var(--border-strong); color: var(--text);
 }
+.general-settings .field-label { margin-top: 18px; }
+.general-settings .field-label:first-child { margin-top: 8px; }
 .general-settings textarea, .settings-textarea { height: auto; padding: 10px 12px; line-height: 1.55; }
 .key-input:focus, .general-settings input:focus, .general-settings textarea:focus, .settings-number:focus, .settings-textarea:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); outline: none !important; }
 .save-key, .mini-button, .general-settings .settings-row button, .provider-actions .sign-in {
@@ -387,6 +389,12 @@ input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px;
 .composer-bar > * { min-width: 0; }
 .composer-actions { flex: none; display: inline-flex; gap: 2px; }
 #modelSelect, #providerSelect { flex: 0 1 auto; max-width: 34%; }
+/* In a narrow frame the pickers drop to a second row instead of pushing the action buttons out of view. */
+@media (max-width: 520px) {
+	.composer-bar { flex-wrap: wrap; }
+	.composer-bar .spacer { display: none; }
+	.composer-actions { margin-left: auto; }
+}
 /* Content scrolls out beneath a soft edge instead of being cut by the tab strip. */
 #tabs { position: relative; z-index: 3; background: linear-gradient(to bottom, var(--ground) 62%, transparent); padding-bottom: 14px; margin-bottom: -10px; } /* taste-skill-ignore: deliberate depth and accent */
 .model-picker { flex: 1 1 150px; min-width: 120px; display: inline-flex; align-items: center; gap: 4px; max-width: none; }

@@ -211,7 +211,10 @@
 		let text = 'This folder is not a git repository. You can still read its files; initialising one is left to you.';
 		if (fatal && !(st && st.gitMissing)) { title = 'Cannot read the project'; text = fatal; }
 		if (st && st.gitMissing) { title = 'Git is missing'; text = 'Install git and restart Stormcoder to use this view.'; }
+		const noFolder = !!fatal && /project folder/i.test(fatal) && !(st && st.gitMissing);
+		if (noFolder) { title = 'No project open'; text = 'Open a project folder to see its changes and files.'; }
 		box.append(el('strong', '', title), el('span', '', text));
+		if (noFolder) { box.append(button('Open folder…', 'ch-open', () => { void api.command('app.openFolder'); })); }
 		slot.list.append(box);
 		if (tab === 'files' || (st && !st.isRepo && !st.gitMissing)) {
 			if (!tree) { void loadTree(); }

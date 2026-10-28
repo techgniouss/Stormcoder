@@ -33,6 +33,7 @@
 .ch-commit code { font: 11.5px var(--mono); /* taste-skill-ignore: a commit hash */ color: var(--accent); }
 .ch-commit span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ch-empty { display: grid; gap: 4px; padding: 18px 14px; color: var(--muted); font-size: 13px; }
+.ch-open { justify-self: start; margin-top: 8px; }
 .ch-empty strong { color: var(--text-2); font-weight: 600; }
 .ch-note { padding: 8px 14px; color: var(--muted); font-size: 12px; }
 .ch-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
