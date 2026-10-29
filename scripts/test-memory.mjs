@@ -641,6 +641,7 @@ const file = rel => path.join(ws, rel);
 	assert.match(await mem.recallAll(vs.Uri.file(ws), 'helper'), /removed\/helper/, 'recall still finds it');
 	assert.equal((await store.view()).entries.filter(e => !e.legacy).length, 6, 'nothing was deleted');
 	assert.deepEqual(mem.pathsMentioned('see src/a/b.ts, ./lib/c.js and ../up/d.ts or dist/e.js or http://x.io/a/b.html'), ['src/a/b.ts', 'lib/c.js']);
+	assert.deepEqual(mem.pathsMentioned('ratio 1.5/2.0 and version 2.1/3.4 are numbers, not files'), [], 'numbers with a slash are not paths');
 	fs.rmSync(file('.stormcoder'), { recursive: true, force: true });
 }
 

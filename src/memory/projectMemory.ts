@@ -215,7 +215,7 @@ export function renderMemory(entries: readonly MemoryEntry[], maxChars = MAX_BLO
 
 /** Directories that hold build output or tooling: a path into one may be missing until a build runs. */
 const GENERATED_DIRS = new Set(['dist', 'build', 'out', 'node_modules', '.git', 'target', 'bin', 'obj', 'coverage', 'release', '.next', '__pycache__', 'tmp', 'temp']);
-const PATH_PATTERN = /(?<![\w:/.~@-])((?:\.{1,2}\/)?(?:[\w.@-]+\/)+[\w.-]*\.[A-Za-z0-9]{1,8})(?![\w/])/g;
+const PATH_PATTERN = /(?<![\w:/.~@-])((?:\.{1,2}\/)?(?:[\w.@-]+\/)+[\w.-]*\.[A-Za-z][A-Za-z0-9]{0,7})(?![\w/])/g;
 /** Most paths checked when building one block, so a long file cannot make starting a chat slow. */
 const MAX_PATH_CHECKS = 40;
 
