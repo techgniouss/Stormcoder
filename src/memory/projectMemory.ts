@@ -108,7 +108,8 @@ export function isDuplicate(entries: readonly MemoryEntry[], text: string): bool
 		if (!have || !next) {
 			return false;
 		}
-		return have === next || (next.length >= 20 && have.includes(next));
+		// Whole words only: "use npm test" is not inside "reuse npm test".
+		return have === next || (next.length >= 20 && ` ${have} `.includes(` ${next} `));
 	});
 }
 
@@ -544,10 +545,19 @@ export class MemoryStore {
 		return vscode.Uri.joinPath(this.dir, file);
 	}
 
-	private async read(uri: vscode.Uri): Promise<string> {
+	/**
+	 * The file's text; empty when it does not exist yet. Any other failure (a locked file, a permission
+	 * error) is thrown when `strict`, which every read that precedes a write uses: treating "could not read"
+	 * as "empty" there would write back a file holding only the new line and wipe what was saved.
+	 */
+	private async read(uri: vscode.Uri, strict = false): Promise<string> {
 		try {
 			return new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
-		} catch {
+		} catch (err) {
+			const code = (err as { code?: string } | undefined)?.code;
+			if (strict && code !== 'FileNotFound' && code !== 'ENOENT') {
+				throw err;
+			}
 			return '';
 		}
 	}
@@ -605,7 +615,7 @@ export class MemoryStore {
 
 	private async rememberNow(type: string, text: string, today: string): Promise<RememberOutcome> {
 		try {
-			const own = await this.read(this.uri(MEMORY_FILE));
+			const own = await this.read(this.uri(MEMORY_FILE), true);
 			// A fact the legacy file already holds is a repeat too.
 			const legacy = this.options.legacyFacts ? parseMemory(await this.read(this.options.legacyFacts)) : [];
 			if (legacy.length && isDuplicate(legacy, cleanText(text))) {
@@ -628,7 +638,7 @@ export class MemoryStore {
 
 	private async updateNow(raw: string, patch: EntryPatch, today: string): Promise<EditOutcome> {
 		try {
-			const outcome = updateMemory(await this.read(this.uri(MEMORY_FILE)), raw, patch, today);
+			const outcome = updateMemory(await this.read(this.uri(MEMORY_FILE), true), raw, patch, today);
 			if (outcome.ok && outcome.content !== undefined) {
 				await this.write(MEMORY_FILE, outcome.content);
 			}
@@ -645,7 +655,7 @@ export class MemoryStore {
 
 	private async removeNow(raw: string): Promise<EditOutcome> {
 		try {
-			const outcome = deleteMemory(await this.read(this.uri(MEMORY_FILE)), raw);
+			const outcome = deleteMemory(await this.read(this.uri(MEMORY_FILE), true), raw);
 			if (outcome.ok && outcome.content !== undefined) {
 				await this.write(MEMORY_FILE, outcome.content);
 			}
@@ -682,7 +692,7 @@ export class MemoryStore {
 			return;
 		}
 		try {
-			let lines = (await this.read(this.uri(JOURNAL_FILE))).split(/\r?\n/).filter(l => l.trim());
+			let lines = (await this.read(this.uri(JOURNAL_FILE), true)).split(/\r?\n/).filter(l => l.trim());
 			lines.push(formatJournal(record));
 			if (lines.length > MAX_JOURNAL_LINES * 2) {
 				lines = lines.slice(-MAX_JOURNAL_LINES);
@@ -694,8 +704,8 @@ export class MemoryStore {
 	}
 
 	/** Suggestions waiting for the user's yes or no. */
-	async proposals(): Promise<Proposal[]> {
-		return this.options.project ? parseProposalFile(await this.read(this.uri(PROPOSALS_FILE))) : [];
+	async proposals(strict = false): Promise<Proposal[]> {
+		return this.options.project ? parseProposalFile(await this.read(this.uri(PROPOSALS_FILE), strict)) : [];
 	}
 
 	/** Adds suggestions from a finished run. Never throws. */
@@ -708,7 +718,7 @@ export class MemoryStore {
 			return;
 		}
 		try {
-			await this.write(PROPOSALS_FILE, JSON.stringify(mergeProposals(await this.proposals(), fresh), null, 1));
+			await this.write(PROPOSALS_FILE, JSON.stringify(mergeProposals(await this.proposals(true), fresh), null, 1));
 		} catch {
 			// a suggestion lost is not worth failing a run
 		}
@@ -720,7 +730,12 @@ export class MemoryStore {
 	}
 
 	private async resolveProposalNow(id: string, accept: boolean): Promise<EditOutcome> {
-		const waiting = await this.proposals();
+		let waiting: Proposal[];
+		try {
+			waiting = await this.proposals(true);
+		} catch (err) {
+			return { ok: false, message: `Could not read suggestions: ${err instanceof Error ? err.message : String(err)}` };
+		}
 		const found = waiting.find(p => p.id === id);
 		if (!found) {
 			return { ok: false, message: 'That suggestion is already gone.' };
@@ -763,7 +778,7 @@ export class MemoryStore {
 		// It lists itself, so a project that never commits `.stormcoder/` does not see an untracked
 		// folder appear in `git status` just because a run was journaled.
 		const wanted = `.gitignore\n${MEMORY_FILE}\n${JOURNAL_FILE}\n${PROPOSALS_FILE}\n`;
-		const current = await this.read(ignore);
+		const current = await this.read(ignore, true);
 		// Written when absent, and upgraded when it is exactly what an earlier version wrote;
 		// a .gitignore the user edited is theirs.
 		if (current === '' || current === `${MEMORY_FILE}\n${JOURNAL_FILE}\n` || current === `${MEMORY_FILE}\n${JOURNAL_FILE}\n${PROPOSALS_FILE}\n`) {

@@ -57,6 +57,50 @@ const file = rel => path.join(ws, rel);
 	assert.equal(mem.addMemory('', 'convention', 'API tokens are read from the keychain, never from files.', '2026-10-24').saved, true);
 }
 
+// 2b. A duplicate is whole words inside a saved fact, not a fragment of one word.
+{
+	const saved = mem.parseMemory('- [command] Always reuse npm test script output when debugging (2026-10-01)');
+	assert.equal(mem.isDuplicate(saved, 'always reuse npm test script output'), true);
+	assert.equal(mem.isDuplicate(saved, 'always use npm test script output'), false);
+	assert.equal(mem.isDuplicate(saved, 'se npm test script output when'), false);
+}
+
+// 2c. A read that fails for any reason but "no such file" must not be mistaken for an empty file:
+// saving then would rewrite the file with only the new line and lose every saved fact.
+{
+	const store = mem.projectStore(vs.Uri.file(ws));
+	await store.remember('convention', 'Keep tabs, never spaces, in this repository.', '2026-10-01');
+	await store.remember('command', 'Run npm run gen after editing settings.', '2026-10-02');
+	const memFile = file('.stormcoder/memory.md');
+	const before = fs.readFileSync(memFile, 'utf8');
+	const realRead = vs.workspace.fs.readFile.bind(vs.workspace.fs);
+	let busy = 0;
+	vs.workspace.fs.readFile = async uri => {
+		if (busy > 0 && String(uri.fsPath).endsWith('.stormcoder/memory.md')) { busy--; throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }); }
+		return realRead(uri);
+	};
+	try {
+		busy = 1;
+		const saved = await store.remember('gotcha', 'Tests need the build first, always.', '2026-10-03');
+		assert.equal(saved.saved, false);
+		assert.match(saved.message, /Could not save memory: EBUSY/);
+		busy = 1;
+		assert.equal((await store.update(mem.parseMemory(before)[0].raw, { pinned: true })).ok, false);
+		busy = 1;
+		assert.equal((await store.remove(mem.parseMemory(before)[0].raw)).ok, false);
+		assert.equal(fs.readFileSync(memFile, 'utf8'), before, 'the saved facts are untouched');
+		// Reading for display stays soft, so a locked file never breaks starting a chat.
+		busy = 1;
+		assert.deepEqual(await store.facts(), []);
+	} finally {
+		vs.workspace.fs.readFile = realRead;
+	}
+	// And a file that is genuinely missing still starts empty.
+	fs.rmSync(file('.stormcoder'), { recursive: true, force: true });
+	assert.equal((await store.remember('note', 'A fresh start works fine here.', '2026-10-04')).saved, true);
+	fs.rmSync(file('.stormcoder'), { recursive: true, force: true });
+}
+
 // 3. Repeats are not stored twice, even reworded in case or punctuation.
 {
 	const once = mem.addMemory('', 'command', 'Run the unit tests with npm test.', '2026-10-24').content;
