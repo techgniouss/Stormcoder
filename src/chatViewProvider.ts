@@ -2038,7 +2038,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				await this.handleInsertAtCursor(message.content ?? '');
 				break;
 			case 'testKey':
-				await this.handleTestKey(message.provider);
+				await this.handleTestKey(message.provider, origin);
 				break;
 			case 'slashInline':
 				if (message.command && INLINE_KINDS.includes(message.command as InlineKind)) {
@@ -2305,25 +2305,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	/** Verifies a provider's key works by listing its models, reporting the result inline. */
-	private async handleTestKey(providerId?: string): Promise<void> {
+	private async handleTestKey(providerId?: string, origin: string = WEBVIEW_SINK_ID): Promise<void> {
 		if (!providerId) {
 			return;
 		}
 		const provider = this.registry.getProvider(providerId);
 		if (!provider) {
-			this.post({ type: 'info', message: `Unknown provider: ${providerId}` });
+			this.bus.postTo(origin, { type: 'info', message: `Unknown provider: ${providerId}` });
 			return;
 		}
 		try {
 			const models = await this.modelCache.load(providerId, true);
 			const message = `${provider.info.label}: connection OK — ${models.length} model${models.length === 1 ? '' : 's'} available.`;
-			this.post({ type: 'info', message });
-			this.post({ type: 'testKeyResult', provider: providerId, ok: true, message: `Connected — ${models.length} model${models.length === 1 ? '' : 's'} available.` });
+			this.bus.postTo(origin, { type: 'info', message });
+			this.bus.postTo(origin, { type: 'testKeyResult', provider: providerId, ok: true, message: `Connected — ${models.length} model${models.length === 1 ? '' : 's'} available.` });
 			this.post({ type: 'models', provider: providerId, models });
 		} catch (err) {
 			const detail = err instanceof Error ? err.message : String(err);
-			this.post({ type: 'info', message: `${provider.info.label}: ${detail}` });
-			this.post({ type: 'testKeyResult', provider: providerId, ok: false, message: detail });
+			this.bus.postTo(origin, { type: 'info', message: `${provider.info.label}: ${detail}` });
+			this.bus.postTo(origin, { type: 'testKeyResult', provider: providerId, ok: false, message: detail });
 		}
 	}
 

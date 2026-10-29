@@ -85,7 +85,7 @@ restore a removed account or overwrite a newer authorization.
 
 Settings receives only opaque account IDs, display names, credential kinds and cooldown
 state. Keys, access tokens and refresh tokens are never sent to the webview. Credential
-administration stays desktop-only and is denied to paired remote clients.
+administration stays desktop-only and is denied to paired remote clients. A paired phone is also not sent the account list (names such as e-mail addresses and GitHub logins) or a self-hosted server's full address, only whether a provider has credentials and the server's host.
 
 ## Verification
 

@@ -42,6 +42,19 @@ assert.equal(
 	redactForRemote({ type: 'config', providers: [{ id: 'custom', baseUrl: 'https://gw.example.com/v1?token=secret' }] }).providers[0].baseUrl,
 	'gw.example.com');
 
+// Who is signed in, and a self-hosted server's full address, stay on the desktop.
+{
+	const sent = redactForRemote({ type: 'config', providers: [{
+		id: 'antigravity', hasApiKey: true, authKind: 'oauth', baseUrlOverride: 'http://10.0.0.5:11434/private/v1',
+		accounts: [{ id: 'oauth:a', label: 'me@example.com', kind: 'oauth', active: true, cooldownUntil: 0, removable: true }],
+	}] }).providers[0];
+	assert.equal('accounts' in sent, false, 'account names are not sent to a phone');
+	assert.doesNotMatch(JSON.stringify(sent), /me@example\.com/);
+	assert.equal(sent.baseUrlOverride, '10.0.0.5:11434', 'host only, no path');
+	assert.equal(sent.hasApiKey, true, 'a phone still learns that credentials exist');
+	assert.equal(sent.authKind, 'oauth');
+}
+
 // Tool arguments/results, prompts and errors are scrubbed of credential shapes and bounded,
 // at any nesting depth.
 {

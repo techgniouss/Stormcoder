@@ -195,7 +195,7 @@ function hostnameOnly(url: string): string {
 	}
 }
 
-/** Redacts `baseUrl`/`authUrl` to hostname-only inside a `config` message's per-provider list. */
+/** Redacts `baseUrl`/`authUrl`/`baseUrlOverride` to hostname-only and drops the account list inside a `config` message's per-provider list. */
 function redactProviders(providers: unknown): unknown {
 	if (!Array.isArray(providers)) {
 		return providers;
@@ -211,6 +211,14 @@ function redactProviders(providers: unknown): unknown {
 		if (typeof redacted.authUrl === 'string') {
 			redacted.authUrl = hostnameOnly(redacted.authUrl);
 		}
+		// The address as typed into Settings (a self-hosted server's full URL, possibly with a path or
+		// credentials) is desktop-only, like `baseUrl`.
+		if (typeof redacted.baseUrlOverride === 'string') {
+			redacted.baseUrlOverride = hostnameOnly(redacted.baseUrlOverride);
+		}
+		// Who is signed in (e-mail addresses, GitHub logins, cooldown times) is account administration,
+		// which stays on the desktop; a phone only needs to know a provider has credentials.
+		delete redacted.accounts;
 		return redacted;
 	});
 }
