@@ -13,7 +13,7 @@ import { CLOUDFLARE_ACCOUNT_PLACEHOLDER, CloudflareProvider } from './cloudflare
 import { CooldownTracker } from './cooldown';
 import { CopilotProvider } from './copilot';
 import { OAuthProxyChatProvider } from './oauthProxy';
-import { CustomProvider } from './custom';
+import { CustomProvider, normalizeCustomBaseUrl } from './custom';
 import { GeminiProvider } from './gemini';
 import { GrokProvider } from './grok';
 import { GroqProvider } from './groq';
@@ -195,7 +195,7 @@ export class ProviderRegistry {
 			const accountId = cfg.get<string>('cloudflare.accountId')?.trim();
 			return accountId ? configured.replace(CLOUDFLARE_ACCOUNT_PLACEHOLDER, accountId) : configured;
 		}
-		return configured;
+		return id === 'custom' ? normalizeCustomBaseUrl(configured) : configured;
 	}
 
 	getAuthUrl(id: string): string {

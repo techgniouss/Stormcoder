@@ -2302,10 +2302,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		}
 		try {
 			const models = await this.modelCache.load(providerId, true);
-			this.post({ type: 'info', message: `${provider.info.label}: connection OK — ${models.length} models available.` });
+			const message = `${provider.info.label}: connection OK — ${models.length} model${models.length === 1 ? '' : 's'} available.`;
+			this.post({ type: 'info', message });
+			this.post({ type: 'testKeyResult', provider: providerId, ok: true, message: `Connected — ${models.length} model${models.length === 1 ? '' : 's'} available.` });
 			this.post({ type: 'models', provider: providerId, models });
 		} catch (err) {
-			this.post({ type: 'info', message: `${provider.info.label}: ${err instanceof Error ? err.message : String(err)}` });
+			const detail = err instanceof Error ? err.message : String(err);
+			this.post({ type: 'info', message: `${provider.info.label}: ${detail}` });
+			this.post({ type: 'testKeyResult', provider: providerId, ok: false, message: detail });
 		}
 	}
 

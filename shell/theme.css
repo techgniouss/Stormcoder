@@ -305,6 +305,11 @@ body.settings-window #settingsPanel > .panel-header { display: none; }
 .save-key:hover, .mini-button:hover, .general-settings .settings-row button:hover, .provider-actions .sign-in:hover { filter: brightness(.9); transform: translateY(-1px); }
 .provider-actions { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .provider-actions .sign-in { background: var(--accent-fill); color: var(--accent-ink); box-shadow: 0 4px 14px var(--glow); }
+.provider-actions .test-result { font-size: var(--fs-small); color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.provider-actions .test-result.ok { color: var(--positive); }
+.provider-actions .test-result.bad { color: var(--negative); }
+.provider-card .hint { margin: 8px 0 4px; font-size: var(--fs-small); line-height: 1.5; color: var(--muted); }
+.provider-card .field-label { display: block; margin: 14px 0 6px; font-size: var(--fs-small); font-weight: 500; color: var(--text-2); }
 .provider-accounts { margin-top: 12px; border-top: 1px solid var(--rule); }
 .provider-accounts > summary { display: flex; align-items: baseline; gap: 10px; padding: 10px 0; cursor: pointer; list-style: none; font-size: var(--fs-small); border-radius: 6px; }
 .provider-accounts > summary::-webkit-details-marker { display: none; }

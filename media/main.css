@@ -888,7 +888,7 @@ body.settings-window #settingsPanel {
 .provider-row { display: flex; gap: 6px; margin-bottom: 6px; }
 /* Every field and Save button a provider card can draw — the Cloudflare pair and the backup-key
    box were missing from these lists and rendered as raw grey OS controls. */
-.provider-row .key-input, .provider-row .account-id-input, .provider-row .base-url-input, .provider-row .extra-keys-input {
+.provider-row .key-input, .provider-row .account-id-input, .provider-row .base-url-input, .provider-row .custom-model-input, .provider-row .extra-keys-input {
 	flex: 1 1 auto;
 	font-family: inherit;
 	/* An input's automatic minimum is its ~20-character intrinsic width; without this the
@@ -898,15 +898,15 @@ body.settings-window #settingsPanel {
 	border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px; padding: 4px 6px;
 }
 .provider-row .extra-keys-input { resize: vertical; }
-.provider-row .key-input:focus, .provider-row .account-id-input:focus, .provider-row .base-url-input:focus, .provider-row .extra-keys-input:focus {
+.provider-row .key-input:focus, .provider-row .account-id-input:focus, .provider-row .base-url-input, .provider-row .custom-model-input:focus, .provider-row .extra-keys-input:focus {
 	outline: none;
 	border-color: var(--vscode-focusBorder);
 }
-.provider-row .save-key, .provider-row .save-account-id, .provider-row .save-credentials, .provider-row .save-base-url, .provider-row .save-extra-keys, .edit-apply button {
+.provider-row .save-key, .provider-row .save-account-id, .provider-row .save-credentials, .provider-row .save-base-url, .provider-row .save-custom-model, .provider-row .save-extra-keys, .edit-apply button {
 	background: var(--vscode-button-background); color: var(--vscode-button-foreground);
 	border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-family: inherit;
 }
-.provider-row .save-key:hover, .provider-row .save-credentials:hover, .provider-row .save-base-url:hover, .provider-row .save-extra-keys:hover, .edit-apply button:hover {
+.provider-row .save-key:hover, .provider-row .save-credentials:hover, .provider-row .save-base-url, .provider-row .save-custom-model:hover, .provider-row .save-extra-keys:hover, .edit-apply button:hover {
 	background: var(--vscode-button-hoverBackground);
 }
 .provider-advanced { margin-top: 4px; }

@@ -1292,6 +1292,7 @@
 		for (const p of providers) {
 			const card = document.createElement('div');
 			card.className = 'provider-card';
+			card.dataset.provider = p.id;
 			const activeAccount = p.accounts?.find(account => account.active);
 			const status = p.authKind === 'oauth'
 				? '<span class="ok">● signed in</span>'
@@ -1322,6 +1323,7 @@
 			// Cloudflare Workers AI needs the account id too — a token alone can't
 			// authenticate, since the id goes in the request URL, not a header.
 			const hasAccountId = p.cloudflareAccountId !== undefined;
+			const isCustom = p.id === 'custom';
 			// Most providers never need this — it's a collapsed <details> so 11 provider
 			// cards don't each grow a row nobody but the "point this at my own gateway /
 			// local Ollama" user wants open by default.
@@ -1335,8 +1337,21 @@
 				card.innerHTML = `
 				<div class="provider-title"><span class="provider-avatar" style="--h:${hueOf(p.id)}" aria-hidden="true">${escapeHtml(monogram(p.label))}</span><strong>${escapeHtml(p.label)}</strong> ${status}
 					${p.supportsTools ? '<span class="tag">agent</span>' : ''}</div>
+				${isCustom ? `
+				<p class="hint">Works with any OpenAI-compatible server: Ollama, LM Studio, llama.cpp, vLLM and similar, on this computer or elsewhere. Only the address is needed; add an API key only if your server asks for one.</p>
+				<label class="field-label">Server address</label>
 				<div class="provider-row">
-					<input type="password" class="key-input" placeholder="${p.requiresApiKey ? 'Paste API key…' : 'Paste API key… (optional)'}" />
+					<input type="text" class="base-url-input" placeholder="http://localhost:11434/v1" value="${escapeHtml(p.baseUrlOverride || '')}" />
+					<button class="save-base-url">Save</button>
+				</div>
+				<label class="field-label">Model name</label>
+				<div class="provider-row">
+					<input type="text" class="custom-model-input" placeholder="llama3.1" value="${escapeHtml(p.model || '')}" />
+					<button class="save-custom-model" title="Used when the server does not list its models. Models it does list appear in the model picker.">Save</button>
+				</div>
+				<label class="field-label">API key (optional)</label>` : ''}
+				<div class="provider-row">
+					<input type="password" class="key-input" placeholder="${p.requiresApiKey ? 'Paste API key…' : isCustom ? 'Only if your server needs one…' : 'Paste API key… (optional)'}" />
 					${hasAccountId ? '' : '<button class="save-key">Add key</button>'}
 				</div>
 				${hasAccountId ? `
@@ -1346,15 +1361,15 @@
 					<button class="save-credentials" title="Saves the API token above together with this account id">Save</button>
 				</div>` : ''}
 				<div class="provider-actions">
-					<button class="sign-in" aria-label="${signInTitle}">${signInLabel}</button>
+					${isCustom ? '' : `<button class="sign-in" aria-label="${signInTitle}">${signInLabel}</button>`}
 					${p.id === 'anthropic' && !p.authUrl ? '<button class="sign-in-code">Use authorization code</button>' : ''}
 					${p.apiKeyUrl ? '<a class="get-key" href="#">Get API key</a>' : ''}
-					${p.hasApiKey ? '<a class="test-key" href="#">Test connection</a>' : ''}
+					${(p.hasApiKey || isCustom) ? '<a class="test-key" href="#">Test connection</a><span class="test-result" role="status"></span>' : ''}
 					${(p.hasApiKey && !p.hasEnvKey) ? `<a class="clear-key" href="#">Remove all saved accounts</a>` : ''}
 					${p.hasEnvKey ? '<span class="muted" title="Set via environment variable; unset it (and restart) to remove.">Environment key configured</span>' : ''}
 				</div>
 				<details class="provider-accounts"></details>
-				${hasBaseUrl ? `
+				${hasBaseUrl && !isCustom ? `
 				<details class="provider-advanced">
 					<summary>Base URL</summary>
 					<div class="provider-row">
@@ -1378,6 +1393,8 @@
 					</div>
 				</details>` : ''}`;
 			const accountList = /** @type {HTMLDetailsElement | null} */ (card.querySelector('.provider-accounts'));
+			// With nothing saved the section would show the browser's default "Details" label.
+			if (accountList && !p.accounts?.length) { accountList.remove(); }
 			if (accountList && p.accounts?.length) {
 				const now = Date.now();
 				const cooling = p.accounts.filter(a => a.cooldownUntil > now).length;
@@ -1461,6 +1478,12 @@
 					keyInput.value = '';
 				});
 			}
+			if (isCustom) {
+				const modelInput = /** @type {HTMLInputElement} */ (card.querySelector('.custom-model-input'));
+				card.querySelector('.save-custom-model')?.addEventListener('click', () => {
+					if (modelInput.value.trim()) { vscode.postMessage({ type: 'setModel', provider: p.id, model: modelInput.value.trim() }); }
+				});
+			}
 			if (hasBaseUrl) {
 				const baseUrlInput = /** @type {HTMLInputElement} */ (card.querySelector('.base-url-input'));
 				card.querySelector('.save-base-url')?.addEventListener('click', () => {
@@ -1489,8 +1512,12 @@
 			card.querySelector('.sign-in-code')?.addEventListener('click', () => {
 				vscode.postMessage({ type: 'signIn', provider: p.id, authMethod: 'code' });
 			});
+			showTestResult(card, testResults[p.id]);
 			card.querySelector('.test-key')?.addEventListener('click', (e) => {
-				e.preventDefault(); vscode.postMessage({ type: 'testKey', provider: p.id });
+				e.preventDefault();
+				testResults[p.id] = { ok: true, message: 'Testing…', pending: true };
+				showTestResult(card, testResults[p.id]);
+				vscode.postMessage({ type: 'testKey', provider: p.id });
 			});
 			card.querySelector('.clear-key')?.addEventListener('click', (e) => {
 				e.preventDefault(); vscode.postMessage({ type: 'clearKey', provider: p.id });
@@ -1508,6 +1535,15 @@
 	/** @type {{ enabled: boolean, autoPropose: boolean, hasProject: boolean, trusted: boolean, tokens: number, types: string[], project?: any, user?: any } | null} */
 	let memoryState = null;
 	let memoryNewScope = 'project';
+	/** Last "Test connection" outcome per provider, shown on its card and kept across card rebuilds. */
+	const testResults = {};
+	/** @param {Element | null} card @param {{ ok: boolean, message: string, pending?: boolean } | undefined} result */
+	function showTestResult(card, result) {
+		const el = card?.querySelector('.test-result');
+		if (!el) { return; }
+		el.textContent = result ? result.message : '';
+		el.className = 'test-result' + (result && !result.pending ? (result.ok ? ' ok' : ' bad') : '');
+	}
 	/** Providers whose account list the user has expanded; kept across the card rebuilds a refresh causes. */
 	const openAccountPanels = new Set();
 	let memoryNewType = 'note';
@@ -3457,6 +3493,10 @@
 			}
 			case 'info':
 				addNotice(sessionFor(msg), msg.message, false);
+				break;
+			case 'testKeyResult':
+				testResults[msg.provider] = { ok: !!msg.ok, message: String(msg.message || '') };
+				showTestResult(document.querySelector(`.provider-card[data-provider="${CSS.escape(msg.provider)}"]`), testResults[msg.provider]);
 				break;
 			case 'error': {
 				addNotice(sessionFor(msg), msg.message, true);
