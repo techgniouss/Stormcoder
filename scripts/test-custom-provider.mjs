@@ -21,6 +21,7 @@ let seenAuth;
 const server = http.createServer((req, res) => {
 	seenAuth = req.headers.authorization;
 	if (need && req.headers.authorization !== `Bearer ${need}`) { res.writeHead(401, { 'content-type': 'application/json' }).end('{"error":{"message":"unauthorized"}}'); return; }
+	if (req.url === '/v1/chat/completions') { req.resume(); res.writeHead(404, { 'content-type': 'application/json' }).end('{"error":{"message":"model \\"nope\\" not found, try pulling it first"}}'); return; }
 	if (req.url === '/v1/models') { res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'llama3.1:8b' }, { id: 'nomic-embed-text' }] })); return; }
 	res.writeHead(404).end('404 page not found');
 });
@@ -42,6 +43,8 @@ try {
 	await assert.rejects(list(base), /HTTP 404[\s\S]*\.\.\.\/v1/);
 	// Nothing listening: say so, name the address, and keep "fetch failed" for the retry logic.
 	await assert.rejects(list('http://127.0.0.1:1/v1'), err => /could not reach http:\/\/127\.0\.0\.1:1\/v1/.test(err.message) && /fetch failed/.test(err.message) && /running/.test(err.message));
+	// An unknown model is a 404 too, but the address is right, so no advice about the address.
+	await assert.rejects(provider.streamChat({ baseUrl: `${base}/v1`, apiKey: '', model: 'nope', messages: [{ role: 'user', content: 'hi' }], onToken() {}, signal: AbortSignal.timeout(3000) }), err => /not found/.test(err.message) && !/server address/.test(err.message));
 	// No address at all.
 	await assert.rejects(list(''), /no server address is set/);
 	await assert.rejects(provider.streamChat({ baseUrl: '', apiKey: '', model: 'm', messages: [], onToken() {}, signal: AbortSignal.timeout(1000) }), /no server address is set/);

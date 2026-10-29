@@ -1474,6 +1474,7 @@
 						showNotice(`Paste a key for ${p.label} first — use "Clear key" to remove the saved one.`, true);
 						return;
 					}
+					delete testResults[p.id];
 					vscode.postMessage({ type: 'saveKey', provider: p.id, key: keyInput.value });
 					keyInput.value = '';
 				});
@@ -1487,6 +1488,7 @@
 			if (hasBaseUrl) {
 				const baseUrlInput = /** @type {HTMLInputElement} */ (card.querySelector('.base-url-input'));
 				card.querySelector('.save-base-url')?.addEventListener('click', () => {
+					delete testResults[p.id];
 					vscode.postMessage({ type: 'setBaseUrl', provider: p.id, text: baseUrlInput.value.trim() });
 				});
 			}

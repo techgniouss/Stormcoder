@@ -80,7 +80,8 @@ export class CustomProvider extends OpenAICompatibleProvider {
 				}
 				throw new Error(`${label}: could not reach ${baseUrl}${code ? ` (${code})` : ''}. Is the server running, and is the address right? (${message})`);
 			}
-			if (/HTTP 404/.test(message)) {
+			// A 404 that names a model is "model not found" (Ollama answers that way): the address is fine.
+			if (/HTTP 404/.test(message) && !/model/i.test(message)) {
 				throw new Error(`${message} Check the server address: most servers answer under .../v1 (Ollama: http://localhost:11434/v1).`);
 			}
 			throw err;
