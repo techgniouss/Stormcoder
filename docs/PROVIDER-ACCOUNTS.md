@@ -19,9 +19,12 @@ use its own web sign-in flow.
 
 Antigravity signs in with Google. Stormcoder asks Google to show its account chooser each time, so
 a second Google account is added by picking it there. Each account is stored with its address, and
-signing into an account that is already saved updates it. The sign-in needs
-`ANTIGRAVITY_CLIENT_SECRET`, set as an environment variable or in a `.env` file in Stormcoder's user
-data folder.
+signing into an account that is already saved updates it. The sign-in needs Antigravity's OAuth
+client secret. Official releases carry it: the release workflow passes the repository secret
+`ANTIGRAVITY_CLIENT_SECRET` to the build, which compiles it into the app, so nothing needs setting up.
+It is not protection (a value inside an app can be read out of it) and it is never committed. A value
+in the environment, or in a `.env` file in Stormcoder's user data folder, takes precedence over the
+built-in one. A build made without the secret says so when you try to sign in.
 
 GitHub Copilot, Grok and Kiro sign-ins are stored as named accounts too (`@login` for GitHub, the
 address in the token for Grok and Kiro when it has one). Copilot and Grok use a device-code page, which

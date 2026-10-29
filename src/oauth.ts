@@ -122,10 +122,23 @@ const ANTIGRAVITY_SCOPES = [
  * secret-scanner patterns (`GOCSPX-...`) — set it via this environment variable
  * instead of hardcoding it here.
  */
-function antigravityClientSecret(): string {
-	const secret = process.env['ANTIGRAVITY_CLIENT_SECRET'];
+/**
+ * Filled in at build time from the `ANTIGRAVITY_CLIENT_SECRET` environment variable of the build
+ * (the release workflow passes it from a repository secret), so an installed app signs in without any
+ * setup. It is a convenience, not protection: a value inside an app can be read out of it. Unset when
+ * the build had no such variable, and in the unit tests, which load this file without the bundler.
+ */
+declare const __ANTIGRAVITY_CLIENT_SECRET__: string | undefined;
+
+/**
+ * The client secret, from the first place that has one: the environment (including a `.env` in the
+ * user data folder), then the value baked into this build. Exported for tests.
+ */
+export function antigravityClientSecret(): string {
+	const baked = typeof __ANTIGRAVITY_CLIENT_SECRET__ === 'string' ? __ANTIGRAVITY_CLIENT_SECRET__ : '';
+	const secret = process.env['ANTIGRAVITY_CLIENT_SECRET'] || baked;
 	if (!secret) {
-		throw new Error('Google Antigravity sign-in needs ANTIGRAVITY_CLIENT_SECRET. Set it as an environment variable, or put '
+		throw new Error('Google Antigravity sign-in needs ANTIGRAVITY_CLIENT_SECRET, and this build does not include it. Set it as an environment variable, or put '
 			+ 'ANTIGRAVITY_CLIENT_SECRET=<value> in a file named .env inside Stormcoder\'s user data folder '
 			+ '(Menu > Open logs folder, one level up), then restart Stormcoder.');
 	}

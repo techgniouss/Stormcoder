@@ -36,7 +36,16 @@ jobs:
             *) V="$INPUT_VERSION" ;;
           esac
           npm version --no-git-tag-version --allow-same-version "$V"
-      - run: npm run build
+      - name: Build
+        shell: bash
+        env:
+          # Baked into the app so Google Antigravity sign-in works with no setup (see src/oauth.ts).
+          ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.ANTIGRAVITY_CLIENT_SECRET }}
+        run: |
+          if [ -z "$ANTIGRAVITY_CLIENT_SECRET" ]; then
+            echo "::warning::ANTIGRAVITY_CLIENT_SECRET is not set; this release will not include Antigravity sign-in."
+          fi
+          npm run build
       - run: npx electron-builder --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

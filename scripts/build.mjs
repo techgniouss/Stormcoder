@@ -23,6 +23,9 @@ const common = {
 	sourcemap: true,
 	logLevel: 'info',
 	alias: { vscode: path.join(root, 'host/vscode.ts') },
+	// Antigravity's OAuth client secret comes from the build's environment, never from a file in the
+	// repository. Without it the app still builds; sign-in then needs the variable at run time.
+	define: { __ANTIGRAVITY_CLIENT_SECRET__: JSON.stringify(process.env.ANTIGRAVITY_CLIENT_SECRET ?? '') },
 	// sql.js finds its .wasm next to itself, so it stays a real package at runtime.
 	external: ['electron', 'sql.js', 'ws', 'electron-updater'],
 };
