@@ -694,7 +694,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		if (sessionId && this.memorySnapshots.has(sessionId)) {
 			return this.memorySnapshots.get(sessionId)!;
 		}
-		const block = await buildPromptBlock(this.memoryRoot(), this.memoryRecentRuns());
+		// What the user first asked for picks which saved facts fit the block when not all of them do.
+		const goal = sessionId ? goalOf(this.sessionStore.getSession(sessionId)?.messages ?? []) : '';
+		const block = await buildPromptBlock(this.memoryRoot(), this.memoryRecentRuns(), goal);
 		if (sessionId) {
 			if (this.memorySnapshots.size >= 50) {
 				this.memorySnapshots.delete(this.memorySnapshots.keys().next().value as string);
@@ -713,7 +715,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			if (!memory || !files.length || !goal) {
 				return;
 			}
-			await memory.appendJournal({ date: new Date().toISOString().slice(0, 10), goal, files, verified: workLog.verified() });
+			await memory.appendJournal({
+				date: new Date().toISOString().slice(0, 10), goal, files, verified: workLog.verified(),
+				...(workLog.verifyCommand() ? { verify: workLog.verifyCommand() } : {}),
+				...(workLog.verifyFailed() ? { verifyFailed: true } : {}),
+			});
 		} catch {
 			// bookkeeping must never turn a finished run into an error
 		}
@@ -816,7 +822,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	/** `/memory`: lists what is remembered, saves a note, or switches memory on or off. */
-	private async handleMemorySlash(args: string, reply: (text: string) => void): Promise<void> {
+	private async handleMemorySlash(args: string, reply: (text: string) => void, sessionId?: string): Promise<void> {
 		const cfg = vscode.workspace.getConfiguration('stormcoder');
 		const [sub = '', ...restWords] = args.trim().split(/\s+/).filter(Boolean);
 		const word = sub.toLowerCase();
@@ -861,6 +867,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		reply([
 			`**Project memory** is on: ${count(state.project)} saved fact${count(state.project) === 1 ? '' : 's'} here, ${count(state.user)} of yours across projects, about ${state.tokens} tokens at the start of a new chat.`,
 			waiting ? `${waiting} suggested note${waiting === 1 ? ' is' : 's are'} waiting for your decision.` : '',
+			// A chat reads its memory once, so changes made since it began show up in the next chat.
+			sessionId && this.memorySnapshots.has(sessionId) && this.memorySnapshots.get(sessionId) !== await buildPromptBlock(this.memoryRoot(), this.memoryRecentRuns(), goalOf(this.sessionStore.getSession(sessionId)?.messages ?? []))
+				? 'Memory changed since this chat started; the changes apply to your next chat.' : '',
 			'Manage it in Settings > Memory. `/memory add [user] <text>` saves a note; `/memory off` switches it off.',
 		].filter(Boolean).join('\n'));
 	}
@@ -1896,6 +1905,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			case 'memoryAdd':
 			case 'memoryEdit':
 			case 'memoryDelete':
+			case 'memoryShare':
 			case 'memoryClear':
 			case 'memoryProposal': {
 				const store = this.memoryStoreFor(message.memoryScope);
@@ -1915,6 +1925,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 					});
 				} else if (message.type === 'memoryDelete') {
 					outcome = await store.remove(message.memoryRaw ?? '');
+				} else if (message.type === 'memoryShare') {
+					outcome = message.memoryScope === 'user'
+						? { ok: false, message: 'Only project notes can be shared.' }
+						: await store.share(message.memoryRaw ?? '');
 				} else if (message.type === 'memoryProposal') {
 					outcome = await store.resolveProposal(message.suggestionId ?? '', !!message.suggestionAccept);
 				} else {
@@ -3060,7 +3074,7 @@ ${context.content}` }
 			openMcpSettings: () => { this.openSettingsWindow(); },
 			reply: text => { this.bus.postTo(origin, { type: 'info', sessionId, message: text }); },
 			compact: () => { void this.compactSession(sessionId, origin); },
-			memory: args => { void this.handleMemorySlash(args, text => this.bus.postTo(origin, { type: 'info', sessionId, message: text })); },
+			memory: args => { void this.handleMemorySlash(args, text => this.bus.postTo(origin, { type: 'info', sessionId, message: text }), sessionId); },
 			undoRun: () => { void this.undoLastRun(sessionId, origin); },
 			listSkills: () => skillsSnapshot,
 		};

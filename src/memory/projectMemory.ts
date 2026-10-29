@@ -162,31 +162,74 @@ export function addMemory(current: string, type: string, rawText: string, today:
 }
 
 /**
- * The saved facts as a prompt block, newest kept when over budget. Each line is reduced
- * to one clean line: the file is workspace content and must not be able to smuggle in
- * headings or fake turns.
+ * The saved facts as a prompt block. Pinned lines claim their space first. The rest are chosen by
+ * relevance to `goal` (what the user first asked for, when known) and then by recency, and when
+ * there is no goal, newest first. Each line is reduced to one clean line: the file is workspace
+ * content and must not be able to smuggle in headings or fake turns. When some facts do not fit,
+ * one short line says how many, so the model knows `recall` can find them.
+ * `skipped` counts facts the caller held back (about files that no longer exist).
  */
-export function renderMemory(entries: readonly MemoryEntry[], maxChars = MAX_BLOCK_ENTRY_CHARS): string {
+export function renderMemory(entries: readonly MemoryEntry[], maxChars = MAX_BLOCK_ENTRY_CHARS, goal = '', skipped = 0): string {
 	const line = (e: MemoryEntry): string => `- ${e.type ? `[${e.type}] ` : ''}${cleanText(e.text)}`;
-	const keep = new Set<number>();
-	let size = 0;
-	const take = (i: number): boolean => {
-		const length = line(entries[i]).length + 1;
-		if (size + length > maxChars) {
-			return false;
+	const words = queryWords(goal);
+	const score = new Map(entries.map((e, i) => [i, words.length ? wordHits(e.text, words) : 0]));
+	const select = (limit: number): Set<number> => {
+		const keep = new Set<number>();
+		let size = 0;
+		const take = (i: number): boolean => {
+			const length = line(entries[i]).length + 1;
+			if (size + length > limit) {
+				return false;
+			}
+			size += length;
+			keep.add(i);
+			return true;
+		};
+		entries.forEach((e, i) => { if (e.pinned) { take(i); } });
+		const rest = entries.map((_, i) => i).filter(i => !entries[i].pinned);
+		if (words.length) {
+			// Relevant facts first (newest among equals); a fact that is too long is skipped, not a stopping point.
+			rest.sort((a, b) => (score.get(b)! - score.get(a)!) || b - a);
+			for (const i of rest) { take(i); }
+		} else {
+			for (const i of rest.reverse()) {
+				if (!take(i)) { break; }
+			}
 		}
-		size += length;
-		keep.add(i);
-		return true;
+		return keep;
 	};
-	// Pinned lines claim their space first, so a long tail of newer facts cannot push one out.
-	entries.forEach((e, i) => { if (e.pinned) { take(i); } });
-	for (let i = entries.length - 1; i >= 0; i--) {
-		if (!entries[i].pinned && !take(i)) {
-			break;
-		}
+	let keep = select(maxChars);
+	// Room is kept back for the "more facts" line, but only when there is something to say.
+	if (entries.length - keep.size + skipped > 0) {
+		const roomy = select(Math.max(0, maxChars - 90));
+		// A budget too small for even one line plus the note keeps the line.
+		if (roomy.size > 0 || keep.size === 0) { keep = roomy; }
 	}
-	return entries.filter((_, i) => keep.has(i)).map(line).join('\n');
+	const shown = entries.filter((_, i) => keep.has(i)).map(line);
+	const omitted = entries.length - keep.size + skipped;
+	if (omitted > 0 && shown.length) {
+		shown.push(`- (${omitted} more saved fact${omitted === 1 ? '' : 's'} not shown; the recall tool searches them)`);
+	}
+	return shown.join('\n');
+}
+
+/** Directories that hold build output or tooling: a path into one may be missing until a build runs. */
+const GENERATED_DIRS = new Set(['dist', 'build', 'out', 'node_modules', '.git', 'target', 'bin', 'obj', 'coverage', 'release', '.next', '__pycache__', 'tmp', 'temp']);
+const PATH_PATTERN = /(?<![\w:/.~@-])((?:\.{1,2}\/)?(?:[\w.@-]+\/)+[\w.-]*\.[A-Za-z0-9]{1,8})(?![\w/])/g;
+/** Most paths checked when building one block, so a long file cannot make starting a chat slow. */
+const MAX_PATH_CHECKS = 40;
+
+/** Project-relative file paths a fact names (`src/auth/login.ts`), skipping URLs, home paths and build output. */
+export function pathsMentioned(text: string): string[] {
+	const found = new Set<string>();
+	for (const m of text.replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, ' ').matchAll(PATH_PATTERN)) {
+		const rel = m[1].replace(/^\.\//, '');
+		if (rel.startsWith('..') || GENERATED_DIRS.has(rel.split('/')[0])) {
+			continue;
+		}
+		found.add(rel);
+	}
+	return [...found];
 }
 
 /** One finished run, as the journal records it. */
@@ -196,6 +239,16 @@ export interface JournalRecord {
 	readonly files: string[];
 	/** True when a verification command passed after the last write, false when none did. */
 	readonly verified: boolean;
+	/** The last verification command run (the one that passed, or the one that failed), shortened. */
+	readonly verify?: string;
+	/** True when that last verification command failed. */
+	readonly verifyFailed?: boolean;
+}
+
+/** "Verified (npm test).", "Verification failed (npm test).", or "Not verified." */
+function verifyNote(r: Pick<JournalRecord, 'verified' | 'verify' | 'verifyFailed'>): string {
+	const cmd = r.verify ? ` (${cleanText(r.verify).slice(0, 60)})` : '';
+	return r.verified ? `Verified${cmd}.` : r.verifyFailed ? `Verification failed${cmd}.` : 'Not verified.';
 }
 
 /** What the journal and suggestions may quote of a request: one line, short, and never a credential the user pasted into it. */
@@ -211,6 +264,8 @@ export function formatJournal(record: JournalRecord): string {
 		goal: safeGoal(record.goal),
 		files: record.files.slice(0, MAX_JOURNAL_FILES),
 		verified: record.verified,
+		...(record.verify ? { verify: cleanText(record.verify).slice(0, 60) } : {}),
+		...(record.verifyFailed ? { verifyFailed: true } : {}),
 	});
 }
 
@@ -229,6 +284,8 @@ export function parseJournal(text: string): JournalRecord[] {
 					goal: v.goal,
 					files: Array.isArray(v.files) ? v.files.filter((f): f is string => typeof f === 'string') : [],
 					verified: v.verified === true,
+					...(typeof v.verify === 'string' && v.verify ? { verify: v.verify.slice(0, 60) } : {}),
+					...(v.verifyFailed === true ? { verifyFailed: true } : {}),
 				});
 			}
 		} catch {
@@ -242,7 +299,7 @@ export function parseJournal(text: string): JournalRecord[] {
 export function renderRecentWork(records: readonly JournalRecord[], count = DEFAULT_RECENT_RUNS, maxChars = MAX_BLOCK_JOURNAL_CHARS): string {
 	const lines = (count > 0 ? records.slice(-count) : []).map(r => {
 		const files = r.files.length ? ` Changed: ${r.files.map(cleanText).join(', ')}.` : '';
-		return `- ${r.date}: ${cleanText(r.goal)}.${files} ${r.verified ? 'Verified.' : 'Not verified.'}`;
+		return `- ${r.date}: ${cleanText(r.goal)}.${files} ${verifyNote(r)}`;
 	});
 	const kept: string[] = [];
 	let size = 0;
@@ -447,6 +504,24 @@ function queryWords(query: string): string[] {
 	return [...new Set(query.toLowerCase().split(/[^a-z0-9_./-]+/).filter(w => w.length >= 2))];
 }
 
+/** A word with its common English ending removed, so "testing" and "tests" meet at "test". */
+function stem(word: string): string {
+	return word.length > 4 ? word.replace(/(ing|ed|es|s)$/, '') : word;
+}
+
+/**
+ * How many of the query `words` the text mentions. A path or file name (it has a `/`, `.` or `-`)
+ * must appear as written; any other word matches a word of the text that starts with it or shares
+ * its stem, so "db" no longer finds "feedback" and "tests" finds "testing".
+ */
+function wordHits(text: string, words: readonly string[]): number {
+	const lower = text.toLowerCase();
+	const tokens = lower.split(/[^a-z0-9_]+/).filter(Boolean);
+	return words.filter(w => /[./-]/.test(w)
+		? lower.includes(w)
+		: tokens.some(t => t === w || (w.length >= 3 && t.startsWith(w)) || stem(t) === stem(w))).length;
+}
+
 /**
  * Searches saved facts and the whole journal for `query`, best matches first. Pure: the
  * caller reads the files. A hit is a line sharing words with the query; an empty query
@@ -456,23 +531,24 @@ function queryWords(query: string): string[] {
 export function recallMemory(entries: readonly MemoryEntry[], records: readonly JournalRecord[], query: string, limit = DEFAULT_RECALL_LIMIT): string {
 	const words = queryWords(query);
 	const max = Math.min(MAX_RECALL_LIMIT, Math.max(1, Math.floor(limit) || DEFAULT_RECALL_LIMIT));
-	interface Hit { score: number; order: number; line: string }
+	interface Hit { score: number; line: string }
 	const hits: Hit[] = [];
-	const consider = (text: string, line: string, order: number): void => {
-		const haystack = text.toLowerCase();
-		const score = words.length ? words.filter(w => haystack.includes(w)).length : 1;
-		if (score > 0) {
-			hits.push({ score, order, line });
+	const total = entries.length + records.length;
+	// A match counts for most; being pinned or recent only breaks ties between equal matches.
+	const consider = (text: string, line: string, order: number, pinned: boolean): void => {
+		const matched = words.length ? wordHits(text, words) : 1;
+		if (matched > 0) {
+			hits.push({ score: matched + (pinned ? 0.5 : 0) + (order / Math.max(1, total)) * 0.25, line });
 		}
 	};
-	entries.forEach((e, i) => consider(e.text, `- ${e.type ? `[${e.type}] ` : ''}${cleanText(e.text)}${e.date ? ` (${e.date})` : ''}`, i));
+	entries.forEach((e, i) => consider(e.text, `- ${e.type ? `[${e.type}] ` : ''}${cleanText(e.text)}${e.date ? ` (${e.date})` : ''}`, i, !!e.pinned));
 	records.forEach((r, i) => consider(`${r.goal} ${r.files.join(' ')}`,
-		`- ${r.date}: ${cleanText(r.goal)}.${r.files.length ? ` Changed: ${r.files.join(', ')}.` : ''} ${r.verified ? 'Verified.' : 'Not verified.'}`, entries.length + i));
+		`- ${r.date}: ${cleanText(r.goal)}.${r.files.length ? ` Changed: ${r.files.join(', ')}.` : ''} ${verifyNote(r)}`, entries.length + i, false));
 	if (!hits.length) {
 		return `Nothing in project memory matches "${cleanText(query)}".`;
 	}
 	// Best match first; among equals, the newest (later in the file or journal).
-	hits.sort((a, b) => b.score - a.score || b.order - a.order);
+	hits.sort((a, b) => b.score - a.score);
 	const lines: string[] = [];
 	let size = 0;
 	for (const hit of hits.slice(0, max)) {
@@ -511,6 +587,8 @@ interface StoreOptions {
 	readonly legacyFacts?: vscode.Uri;
 	/** Keep a run journal and proposals here, and write a `.gitignore` that keeps them out of the repo. */
 	readonly project: boolean;
+	/** The project folder, so a fact about a file that is gone can be held back and notes can be shared into its rules file. */
+	readonly root?: vscode.Uri;
 }
 
 /** One line shown in the panel. */
@@ -564,7 +642,24 @@ export class MemoryStore {
 
 	private async write(file: string, text: string): Promise<void> {
 		await this.ensureDir();
-		await vscode.workspace.fs.writeFile(this.uri(file), new TextEncoder().encode(text));
+		await this.writeUri(this.uri(file), text);
+	}
+
+	/**
+	 * Replaces a file without ever leaving it half written: the text goes to a sibling file that is then
+	 * renamed over the target, so a crash or power cut keeps either the old content or the new, never a
+	 * torn mix. Where the rename is refused, the text is written in place as before.
+	 */
+	private async writeUri(target: vscode.Uri, text: string): Promise<void> {
+		const bytes = new TextEncoder().encode(text);
+		const temp = target.with({ path: `${target.path}.tmp` });
+		try {
+			await vscode.workspace.fs.writeFile(temp, bytes);
+			await vscode.workspace.fs.rename(temp, target, { overwrite: true });
+		} catch {
+			await Promise.resolve(vscode.workspace.fs.delete(temp)).catch(() => undefined);
+			await vscode.workspace.fs.writeFile(target, bytes);
+		}
 	}
 
 	/**
@@ -590,9 +685,51 @@ export class MemoryStore {
 		return [...legacy, ...await this.ownEntries()];
 	}
 
-	/** The saved facts as prompt lines, within `maxChars`. */
-	async factsBlock(maxChars?: number): Promise<string> {
-		return renderMemory(await this.facts(), maxChars);
+	/**
+	 * The saved facts as prompt lines, within `maxChars`, most relevant to `goal` first. In a project, a
+	 * fact that names a file which no longer exists is held back (the file may have been renamed or
+	 * deleted since, and an outdated pointer sends the model the wrong way); it stays saved, shows in
+	 * Settings, and `recall` still finds it. Pinned facts are always kept.
+	 */
+	async factsBlock(maxChars?: number, goal = ''): Promise<string> {
+		const all = await this.facts();
+		const current = await this.withoutStale(all);
+		return renderMemory(current, maxChars, goal, all.length - current.length);
+	}
+
+	private async withoutStale(entries: MemoryEntry[]): Promise<MemoryEntry[]> {
+		const root = this.options.root;
+		if (!root) {
+			return entries;
+		}
+		const exists = new Map<string, boolean>();
+		let checks = 0;
+		const gone = async (rel: string): Promise<boolean> => {
+			if (!exists.has(rel)) {
+				if (checks++ >= MAX_PATH_CHECKS) {
+					return false;
+				}
+				try {
+					await vscode.workspace.fs.stat(vscode.Uri.joinPath(root, ...rel.split('/')));
+					exists.set(rel, true);
+				} catch (err) {
+					// Only "no such file" counts; any other failure leaves the fact in.
+					exists.set(rel, (err as { code?: string } | undefined)?.code !== 'FileNotFound' && (err as { code?: string } | undefined)?.code !== 'ENOENT');
+				}
+			}
+			return exists.get(rel) === false;
+		};
+		const kept: MemoryEntry[] = [];
+		for (const e of entries) {
+			let stale = false;
+			if (!e.pinned) {
+				for (const rel of pathsMentioned(e.text)) {
+					if (await gone(rel)) { stale = true; break; }
+				}
+			}
+			if (!stale) { kept.push(e); }
+		}
+		return kept;
 	}
 
 	/** The block's recent-work lines. Empty for a store without a journal. */
@@ -662,6 +799,45 @@ export class MemoryStore {
 			return outcome;
 		} catch (err) {
 			return { ok: false, message: `Could not save memory: ${err instanceof Error ? err.message : String(err)}` };
+		}
+	}
+
+	/**
+	 * Moves one project note into `.stormcoder/rules.md`, which unlike the memory file is meant to be
+	 * committed: the whole team's assistant then follows it as a rule. It goes under a "Shared project
+	 * notes" heading, and leaves the memory file once it is safely in the rules file.
+	 */
+	share(raw: string): Promise<EditOutcome> {
+		return this.exclusive(() => this.shareNow(raw));
+	}
+
+	private async shareNow(raw: string): Promise<EditOutcome> {
+		const root = this.options.root;
+		if (!root) {
+			return { ok: false, message: 'Only project notes can be shared.' };
+		}
+		try {
+			const entries = parseMemory(await this.read(this.uri(MEMORY_FILE), true));
+			const at = indexOfRaw(entries, raw);
+			if (at < 0) {
+				return { ok: false, message: 'That line changed or is gone; reload the list.' };
+			}
+			const note = `- ${cleanText(entries[at].text)}`;
+			const rules = vscode.Uri.joinPath(root, MEMORY_DIR, 'rules.md');
+			const text = await this.read(rules, true);
+			if (!text.split(/\r?\n/).some(l => l.trim() === note)) {
+				const heading = '## Shared project notes';
+				const next = text.includes(heading)
+					? text.replace(heading, () => `${heading}\n${note}`)
+					: `${text}${text && !text.endsWith('\n') ? '\n' : ''}${text ? '\n' : ''}${heading}\n${note}\n`;
+				await this.ensureDir();
+				await this.writeUri(rules, next);
+			}
+			entries.splice(at, 1);
+			await this.write(MEMORY_FILE, entries.length ? entries.map(e => e.raw).join('\n') + '\n' : '');
+			return { ok: true, message: 'Moved to .stormcoder/rules.md. Commit that file to share it with your team.' };
+		} catch (err) {
+			return { ok: false, message: `Could not share the note: ${err instanceof Error ? err.message : String(err)}` };
 		}
 	}
 
@@ -844,6 +1020,7 @@ export function configureMemory(host: MemoryHost): void {
 export function projectStore(root: vscode.Uri): MemoryStore {
 	return new MemoryStore(vscode.Uri.joinPath(root, MEMORY_DIR), {
 		project: true,
+		root,
 		legacyFacts: vscode.Uri.joinPath(root, ...LEGACY_MEMORY_FILE.split('/')),
 	});
 }
@@ -864,16 +1041,16 @@ export function memoryEnabled(): boolean {
  * cloned repository's memory file is text anyone could have written; the user's own notes
  * live outside any repository and are always safe to read.
  */
-export async function buildPromptBlock(root: vscode.Uri | undefined, recentRuns = DEFAULT_RECENT_RUNS): Promise<string> {
+export async function buildPromptBlock(root: vscode.Uri | undefined, recentRuns = DEFAULT_RECENT_RUNS, goal = ''): Promise<string> {
 	if (!memoryEnabled()) {
 		return '';
 	}
-	const user = await userStore()?.factsBlock(MAX_BLOCK_USER_CHARS);
+	const user = await userStore()?.factsBlock(MAX_BLOCK_USER_CHARS, goal);
 	if (!root || !vscode.workspace.isTrusted) {
 		return composeBlock('', '', user ?? '');
 	}
 	const project = projectStore(root);
-	return composeBlock(await project.factsBlock(), await project.recentWork(recentRuns), user ?? '');
+	return composeBlock(await project.factsBlock(undefined, goal), await project.recentWork(recentRuns), user ?? '');
 }
 
 /**

@@ -562,4 +562,136 @@ const file = rel => path.join(ws, rel);
 	assert.equal(rules.isError, false, 'the rest of the folder (rules, skills, MCP config) stays writable: ' + rules.result);
 }
 
+// 23. Writes are atomic: no sibling temp file is left behind, and a refused rename still saves.
+{
+	fs.rmSync(file('.stormcoder'), { recursive: true, force: true });
+	const store = mem.projectStore(vs.Uri.file(ws));
+	await store.remember('note', 'First fact about atomic writes here.', '2026-10-01');
+	assert.deepEqual(fs.readdirSync(file('.stormcoder')).filter(n => n.endsWith('.tmp')), [], 'no temp file remains');
+	const realRename = vs.workspace.fs.rename.bind(vs.workspace.fs);
+	vs.workspace.fs.rename = async () => { throw new Error('EPERM'); };
+	try {
+		assert.equal((await store.remember('note', 'Second fact saved when rename is refused.', '2026-10-02')).saved, true);
+	} finally { vs.workspace.fs.rename = realRename; }
+	assert.match(fs.readFileSync(file('.stormcoder/memory.md'), 'utf8'), /Second fact/);
+	assert.deepEqual(fs.readdirSync(file('.stormcoder')).filter(n => n.endsWith('.tmp')), [], 'the failed rename left no temp file');
+	fs.rmSync(file('.stormcoder'), { recursive: true, force: true });
+}
+
+// 24. recall matches word starts and stems, not fragments, and ranks matches above recency.
+{
+	const entries = mem.parseMemory([
+		'- [gotcha] Users give feedback through the form (2026-01-01)',
+		'- [command] The db migration runs with npm run migrate (2026-01-02)',
+		'- [convention*] Tests run with vitest, never jest (2026-01-03)',
+		'- [note] Unrelated newest line about lunch (2026-01-04)',
+	].join('\n'));
+	const ask = q => mem.recallMemory(entries, [], q);
+	assert.doesNotMatch(ask('db'), /feedback/, '"db" is not inside "feedback"');
+	assert.match(ask('db'), /migration/);
+	assert.match(ask('testing'), /vitest/, '"testing" finds "Tests"');
+	assert.match(ask('migrations'), /migration runs/, 'plural finds singular');
+	assert.match(ask('src/auth/login.ts'), /Nothing in project memory/);
+	const both = ask('vitest migrate').split('\n');
+	assert.match(both[1], /migration|vitest/, 'both-word matches lead');
+	assert.doesNotMatch(ask('vitest'), /lunch/);
+}
+
+// 25. When facts do not all fit, the block favours the ones relevant to the first request and says how many are out.
+{
+	const entries = mem.parseMemory([
+		'- [convention] Alpha unrelated fact number one about billing exports (2026-01-01)',
+		'- [gotcha] Database migrations need the docker container running first (2026-01-02)',
+		'- [note] Beta unrelated fact number two about email templates here (2026-01-03)',
+		'- [note] Gamma unrelated fact number three about the logo colours (2026-01-04)',
+	].join('\n'));
+	const out = mem.renderMemory(entries, 200, 'fix the database migrations');
+	assert.match(out, /Database migrations/, 'the relevant fact is kept though older');
+	assert.match(out, /more saved facts? not shown; the recall tool/);
+	assert.ok(out.length <= 200, `within budget (${out.length})`);
+	const recency = mem.renderMemory(entries, 200);
+	assert.match(recency, /Gamma/, 'without a goal the newest is kept');
+	assert.equal(mem.renderMemory(entries.slice(0, 1)).includes('not shown'), false, 'nothing omitted, no note');
+	assert.match(mem.renderMemory(entries, 5_000, '', 2), /2 more saved facts not shown/, 'held-back facts are counted');
+}
+
+// 26. A fact about a file that is gone is held back from the block, never deleted; real, generated, pinned and home paths stay.
+{
+	fs.rmSync(file('.stormcoder'), { recursive: true, force: true });
+	fs.mkdirSync(file('src'), { recursive: true });
+	fs.writeFileSync(file('src/present.ts'), 'x');
+	fs.mkdirSync(file('.stormcoder'), { recursive: true });
+	fs.writeFileSync(file('.stormcoder/memory.md'), [
+		'- [gotcha] Edit src/present.ts before running anything else (2026-01-01)',
+		'- [gotcha] The old helper in src/removed/helper.ts needs a patch (2026-01-02)',
+		'- [gotcha*] Pinned note about src/removed/other.ts stays (2026-01-03)',
+		'- [command] Build output lands in dist/app/main.js after a build (2026-01-04)',
+		'- [note] Config lives at ~/settings/app.json on this machine (2026-01-05)',
+		'- [note] See https://example.com/docs/guide/index.html for the guide (2026-01-06)',
+	].join('\n') + '\n');
+	const store = mem.projectStore(vs.Uri.file(ws));
+	const block = await store.factsBlock();
+	assert.match(block, /src\/present\.ts/);
+	assert.doesNotMatch(block, /removed\/helper/, 'the fact about a missing file is held back');
+	assert.match(block, /Pinned note about src\/removed\/other/, 'a pinned fact is kept');
+	assert.match(block, /dist\/app\/main\.js/, 'build output is not judged');
+	assert.match(block, /~\/settings/);
+	assert.match(block, /example\.com/);
+	assert.match(block, /1 more saved fact not shown/);
+	assert.match(await mem.recallAll(vs.Uri.file(ws), 'helper'), /removed\/helper/, 'recall still finds it');
+	assert.equal((await store.view()).entries.filter(e => !e.legacy).length, 6, 'nothing was deleted');
+	assert.deepEqual(mem.pathsMentioned('see src/a/b.ts, ./lib/c.js and ../up/d.ts or dist/e.js or http://x.io/a/b.html'), ['src/a/b.ts', 'lib/c.js']);
+	fs.rmSync(file('.stormcoder'), { recursive: true, force: true });
+}
+
+// 27. The journal says which command verified a run, or that it failed.
+{
+	const line = mem.formatJournal({ date: '2026-10-01', goal: 'fix it', files: ['a.ts'], verified: true, verify: 'npm test' });
+	const [rec] = mem.parseJournal(line);
+	assert.equal(rec.verify, 'npm test');
+	assert.match(mem.renderRecentWork([rec]), /Verified \(npm test\)\./);
+	const failed = mem.parseJournal(mem.formatJournal({ date: '2026-10-02', goal: 'try', files: [], verified: false, verify: 'npm test', verifyFailed: true }))[0];
+	assert.match(mem.renderRecentWork([failed]), /Verification failed \(npm test\)\./);
+	assert.match(mem.renderRecentWork(mem.parseJournal('{"date":"2026-01-01","goal":"old","files":[],"verified":false}')), /Not verified\./, 'an old line still reads');
+	const log = new WorkLog();
+	log.record({ id: '1', name: 'edit_file', args: { path: 'a.ts' } }, 'ok', false);
+	log.record({ id: '2', name: 'run_command', args: { command: 'npm test' } }, 'FAIL', true);
+	assert.equal(log.verifyCommand(), 'npm test');
+	assert.equal(log.verifyFailed(), true);
+	assert.equal(log.verified(), false);
+	log.record({ id: '3', name: 'edit_file', args: { path: 'a.ts' } }, 'ok', false);
+	assert.equal(log.verifyFailed(), false, 'a later edit makes the failure stale');
+	log.record({ id: '4', name: 'run_command', args: { command: 'npm test' } }, 'ok', false);
+	assert.equal(log.verified(), true);
+}
+
+// 28. Sharing moves a project note into the committed rules file, once, and out of memory.
+{
+	fs.rmSync(file('.stormcoder'), { recursive: true, force: true });
+	const store = mem.projectStore(vs.Uri.file(ws));
+	const own = async () => (await store.view()).entries.filter(e => !e.legacy);
+	await store.remember('convention', 'Always use named exports in this codebase.', '2026-10-01');
+	await store.remember('gotcha', 'The seed script needs the local database running.', '2026-10-02');
+	const [first] = await own();
+	const done = await store.share(first.raw);
+	assert.equal(done.ok, true, done.message);
+	const rules = fs.readFileSync(file('.stormcoder/rules.md'), 'utf8');
+	assert.match(rules, /## Shared project notes\n- Always use named exports in this codebase\./);
+	assert.doesNotMatch(fs.readFileSync(file('.stormcoder/memory.md'), 'utf8'), /named exports/);
+	assert.match(fs.readFileSync(file('.stormcoder/memory.md'), 'utf8'), /seed script/, 'the other note stays');
+	// A second note goes under the same heading, above the first; an existing rules file is kept.
+	const [second] = await own();
+	assert.equal((await store.share(second.raw)).ok, true);
+	const both = fs.readFileSync(file('.stormcoder/rules.md'), 'utf8');
+	assert.equal(both.match(/## Shared project notes/g).length, 1);
+	assert.ok(both.indexOf('seed script') < both.indexOf('named exports'));
+	fs.writeFileSync(file('.stormcoder/rules.md'), '# Team rules\nBe kind.');
+	await store.remember('note', 'A third shareable note for the team.', '2026-10-03');
+	assert.equal((await store.share((await own())[0].raw)).ok, true);
+	assert.match(fs.readFileSync(file('.stormcoder/rules.md'), 'utf8'), /^# Team rules\nBe kind\.\n\n## Shared project notes\n- A third shareable note/);
+	assert.equal((await store.share('- [note] not there (2026-01-01)')).ok, false, 'a changed line is refused');
+	assert.equal((await mem.userStore?.()?.share?.('x'))?.ok ?? false, false, 'personal notes are not shared');
+	fs.rmSync(file('.stormcoder'), { recursive: true, force: true });
+}
+
 console.log('test-memory: all assertions passed');

@@ -1650,6 +1650,15 @@
 				mk(e.pinned ? 'Unpin' : 'Pin', () => memoryPost({ type: 'memoryEdit', memoryScope: scope, memoryRaw: e.raw, memoryPinned: !e.pinned }));
 			}
 			mk('Edit', () => { memoryEditing = e.raw; renderMemory(); });
+			if (scope === 'project') {
+				// Moves the note into .stormcoder/rules.md, which is meant to be committed; asks twice because it changes who sees it.
+				const key = 'share:' + e.raw;
+				mk(memoryArmed.has(key) ? 'Click again to move to rules.md' : 'Share', () => {
+					if (!memoryArmed.has(key)) { memoryArmed.add(key); renderMemory(); return; }
+					memoryArmed.delete(key);
+					memoryPost({ type: 'memoryShare', memoryScope: scope, memoryRaw: e.raw });
+				});
+			}
 			mk('Delete', () => memoryPost({ type: 'memoryDelete', memoryScope: scope, memoryRaw: e.raw }));
 			row.appendChild(actions);
 		}

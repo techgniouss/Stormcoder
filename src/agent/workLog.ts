@@ -23,6 +23,9 @@ export class WorkLog {
 	private readonly lines: string[] = [];
 	private readonly changed = new Set<string>();
 	private verifiedSinceWrite = false;
+	/** The last foreground verification command (passed or failed), shortened, for the journal. */
+	private lastVerify = '';
+	private lastVerifyFailed = false;
 
 	/** Records one finished top-level tool call. */
 	record(raw: ToolCall, result: string, isError: boolean): void {
@@ -30,10 +33,15 @@ export class WorkLog {
 		const path = typeof call.args.path === 'string' ? call.args.path : '';
 		const flag = isError ? ' (failed)' : '';
 		let line: string | undefined;
+		if (call.name === 'run_command' && !asBoolean(call.args.background) && isVerificationCommand(commandTextOf(call.args))) {
+			this.lastVerify = commandTextOf(call.args).replace(/\s+/g, ' ').trim().slice(0, 60);
+			this.lastVerifyFailed = isError;
+		}
 		if (!isError) {
 			if ((call.name === 'write_file' || call.name === 'edit_file' || call.name === 'edit_notebook') && path) {
 				this.changed.add(path);
 				this.verifiedSinceWrite = false;
+				this.lastVerifyFailed = false;
 			} else if (call.name === 'run_command' && !asBoolean(call.args.background) && isVerificationCommand(commandTextOf(call.args))) {
 				this.verifiedSinceWrite = true;
 			}
@@ -84,6 +92,16 @@ export class WorkLog {
 	/** Whether a verification command passed after the last successful write. */
 	verified(): boolean {
 		return this.verifiedSinceWrite;
+	}
+
+	/** The last verification command run, for the journal ("" when none ran). */
+	verifyCommand(): string {
+		return this.lastVerify;
+	}
+
+	/** Whether that last verification command failed and nothing has been written since. */
+	verifyFailed(): boolean {
+		return this.lastVerifyFailed;
 	}
 
 	/** The digest, newest activity kept when it has to be cut. Empty when nothing was recorded. */

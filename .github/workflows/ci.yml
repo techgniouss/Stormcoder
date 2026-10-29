@@ -22,6 +22,7 @@ jobs:
       - run: node test/multi-account-e2e.mjs
       - run: node test/update-e2e.mjs
       - run: node test/custom-e2e.mjs
+      - run: node test/memory-e2e.mjs
       - run: node test/remote-e2e.mjs
       - run: node test/android-shell.mjs
       - run: xvfb-run -a node test/electron-smoke.mjs

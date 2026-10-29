@@ -135,6 +135,7 @@ export const REMOTE_DENIED: readonly string[] = [
 	'memoryAdd',
 	'memoryEdit',
 	'memoryDelete',
+	'memoryShare',
 	'memoryClear',
 	'memoryProposal',
 	'setMemoryRecentRuns',
