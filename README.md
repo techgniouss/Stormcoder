@@ -2,11 +2,37 @@
 
 # Stormcoder
 
-A standalone desktop AI coding workspace. Chat with any model, plan a change, or hand a task to an agent that reads, edits and runs code in your project. It is its own application: there is no VS Code underneath.
+<p align="center"><strong>A desktop AI coding workspace that runs on your own keys and your own models.</strong><br>
+Chat, plan, or hand a task to an agent that reads, edits and runs code in your project, with an Undo for every run.</p>
 
-Stormcoder is the desktop home of the Stormcoder chat engine (previously an extension for a VS Code fork), rebuilt as an Electron app with its own interface.
+<p align="center">
+  <a href="https://github.com/techgniouss/Stormcoder/releases/latest"><img src="https://img.shields.io/github/v/release/techgniouss/Stormcoder?style=for-the-badge" alt="Latest release"></a>
+  <a href="https://github.com/techgniouss/Stormcoder/stargazers"><img src="https://img.shields.io/github/stars/techgniouss/Stormcoder?style=for-the-badge&logo=github" alt="GitHub stars"></a>
+  <img src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-supported-444?style=for-the-badge" alt="Platforms">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge" alt="MIT license"></a>
+</p>
 
 ![Stormcoder, dark theme](docs/screenshots/chat-dark.png)
+
+It is a standalone Electron app: no VS Code underneath, no subscription, no account with us. Bring an API key, a ChatGPT or Claude sign-in, or a local model (Ollama, LM Studio, vLLM) and start working.
+
+## Quick start
+
+1. Download the installer for your OS from [Releases](https://github.com/techgniouss/Stormcoder/releases/latest).
+2. Open a project folder and add a provider in **Settings > Providers** (or point *Custom (Local / Self-hosted)* at `http://localhost:11434` for Ollama).
+3. Pick **Agent** mode and describe the change. Review the diff, approve, and use **Undo** if you change your mind.
+
+## Why Stormcoder
+
+| | Stormcoder | Typical AI editor |
+| --- | --- | --- |
+| Models | 15+ providers and any OpenAI-compatible endpoint, mixed per chat | One vendor, or a fixed list |
+| Keys | Yours, kept in the OS keychain; no middleman server | Often routed through the vendor |
+| Limits | Falls back to your next account when one hits its limit | Stops until the limit resets |
+| Local models | First class (Ollama, LM Studio, vLLM) | Limited or paid |
+| Safety | Protected paths, denied commands and workspace confinement enforced in code | Mostly prompt-based |
+| Away from desk | Phone pairing with end-to-end encrypted approvals | Rare |
+| Price | Free, MIT licensed | Subscription |
 
 ## What you get
 
