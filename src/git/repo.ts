@@ -158,8 +158,8 @@ function run(args: string[], cwd: string, input?: string, timeout = TIMEOUT_MS):
 }
 
 /** Runs git and returns stdout; throws a {@link GitError} carrying git's own words when it fails. */
-async function ok(args: string[], cwd: string, input?: string): Promise<string> {
-	const r = await run(args, cwd, input);
+async function ok(args: string[], cwd: string, input?: string, timeout?: number): Promise<string> {
+	const r = await run(args, cwd, input, timeout);
 	if (r.code !== 0) {
 		throw new GitError(`${r.stderr}${r.stdout}`.trim() || `git ${args[0]} failed`, 'failed');
 	}
@@ -750,6 +750,8 @@ export interface WorkingTreeDiffLimits {
 	readonly maxNewFiles: number;
 	/** Longest new file included whole, in bytes. */
 	readonly maxNewFileBytes: number;
+	/** Deadline for each git command, in ms; the process is killed when it passes. Defaults to git's usual one. */
+	readonly timeoutMs?: number;
 }
 
 const DEFAULT_DIFF_LIMITS: WorkingTreeDiffLimits = { maxChars: 60_000, maxNewFiles: 20, maxNewFileBytes: 20_000 };
@@ -770,16 +772,16 @@ export async function workingTreeSections(cwd: string, limits: WorkingTreeDiffLi
 	const flags = ['--no-color', '--no-ext-diff', '--no-textconv'];
 	let tracked: string;
 	try {
-		tracked = await ok(['diff', 'HEAD', ...flags], root);
+		tracked = await ok(['diff', 'HEAD', ...flags], root, undefined, limits.timeoutMs);
 	} catch {
 		// A repository with no commit yet has no HEAD: staged and unstaged changes are separate then.
-		tracked = (await ok(['diff', '--cached', ...flags], root)) + (await ok(['diff', ...flags], root));
+		tracked = (await ok(['diff', '--cached', ...flags], root, undefined, limits.timeoutMs)) + (await ok(['diff', ...flags], root, undefined, limits.timeoutMs));
 	}
 	const cap = (text: string): string => (text.length > limits.maxChars ? `${text.slice(0, limits.maxChars)}\n… [file diff truncated, ${text.length} characters]\n` : text);
 	const sections: DiffSection[] = tracked.split(/^(?=diff --git )/m)
 		.filter(chunk => chunk.startsWith('diff --git '))
 		.map(chunk => ({ key: chunk.slice(0, chunk.indexOf('\n') >= 0 ? chunk.indexOf('\n') : undefined), text: cap(chunk) }));
-	const fresh = (await ok(['ls-files', '--others', '--exclude-standard'], root)).split('\n').filter(Boolean);
+	const fresh = (await ok(['ls-files', '--others', '--exclude-standard'], root, undefined, limits.timeoutMs)).split('\n').filter(Boolean);
 	for (const rel of fresh.slice(0, limits.maxNewFiles)) {
 		const file = path.join(root, rel);
 		const outside = path.relative(root, file);

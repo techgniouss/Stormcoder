@@ -103,7 +103,9 @@ export function relativeToRoot(root: string, raw: string): { readonly ok: true; 
  * well as its `path`, because either can reach out.
  */
 export function patternEscapes(pattern: string): boolean {
-	return /^[\\/~]/.test(pattern) || /^[A-Za-z]:/.test(pattern) || /(^|[\\/{,])\.\.([\\/},]|$)/.test(pattern);
+	// Absolute, home-relative or drive-lettered, at the start or at the start of any alternative: `{/etc/*,x}`,
+	// `!/etc/x`, `@(~/a|b)`. And a `..` step anywhere, including inside braces.
+	return /(^|[{,!(|@])\s*([\\/~]|[A-Za-z]:)/.test(pattern) || /(^|[\\/{,(|])\.\.([\\/},)|]|$)/.test(pattern);
 }
 
 /** The first word of a command, for approval identities ("always allow `npm` here"). */

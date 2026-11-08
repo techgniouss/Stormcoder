@@ -164,6 +164,8 @@ export interface EngineTurn {
 	readonly maxTurns?: number;
 	/** Wall-clock ceiling for the turn in ms; 0 or absent for none. The built-in agent has the same limit. */
 	readonly maxRunMs?: number;
+	/** How long the harness may take to send its first message before it is judged not to have started (default 60 seconds). */
+	readonly startTimeoutMs?: number;
 	/** The main model's context window, so the harness compacts at the right size. */
 	readonly contextWindow: number;
 	readonly loadProjectSettings: boolean;
@@ -194,6 +196,9 @@ export interface EngineResult extends RunResult {
 	/** The harness's own running cost estimate for this chat, USD. */
 	readonly costUsd?: number;
 }
+
+/** How long the harness may take to send its first message before it is judged not to have started. */
+const START_TIMEOUT_MS = 60_000;
 
 /**
  * Switches off the harness's own background features that make extra model calls or reach
@@ -590,8 +595,17 @@ export class ClaudeEngine {
 			abort.abort();
 			void query?.interrupt().catch(() => undefined);
 		}, turn.maxRunMs) : undefined;
+		let neverStarted = false;
+		const startTimer = setTimeout(() => {
+			if (mapper.seen === 0) {
+				neverStarted = true;
+				abort.abort();
+				void query?.interrupt().catch(() => undefined);
+			}
+		}, turn.startTimeoutMs ?? START_TIMEOUT_MS);
+		let mappingFaults = 0;
 		const limitResult = (): EngineResult => ({
-			reason: 'limit', started: true, sessionId: mapper.sessionId, costUsd: mapper.costUsd,
+			reason: 'limit', started: mapper.seen > 0, sessionId: mapper.sessionId, costUsd: mapper.costUsd,
 			detail: `The Claude Code engine was stopped after ${Math.round((turn.maxRunMs ?? 0) / 60_000)} minutes (stormcoder.agent.maxRunMinutes). Send "continue" to carry on.`,
 		});
 		try {
@@ -599,15 +613,25 @@ export class ClaudeEngine {
 			const options = buildQueryOptions(turn, { env, abort, tracker, stderr: data => { stderr = (stderr + data).slice(-2_000); }, note: text => cb.onNote(text) });
 			query = sdk.query({ prompt: buildPrompt(turn), options });
 			for await (const message of query) {
+				if (mapper.seen === 0) {
+					clearTimeout(startTimer);
+				}
 				try {
 					mapper.handle(message);
-				} catch {
-					// A message the UI mapping tripped on is skipped; it must not end the whole run.
+				} catch (err) {
+					// A message the UI mapping tripped on is skipped; it must not end the whole run. The user is told
+					// once, so a glitch is not silent.
+					if (mappingFaults++ === 0) {
+						cb.onNote(`Part of the engine's output could not be displayed (${err instanceof Error ? err.message : String(err)}). The work itself continues.`);
+					}
 				}
 			}
 			mapper.flush();
 		} catch (err) {
 			mapper.flush();
+			if (neverStarted && !turn.signal.aborted) {
+				return { reason: 'error', detail: `The Claude Code engine did not start within ${Math.round((turn.startTimeoutMs ?? START_TIMEOUT_MS) / 1000)} seconds.`, started: false };
+			}
 			if (timedOut && !turn.signal.aborted) {
 				return limitResult();
 			}
@@ -617,6 +641,7 @@ export class ClaudeEngine {
 			const detail = `${err instanceof Error ? err.message : String(err)}${stderr.trim() ? `\n${stderr.trim()}` : ''}`;
 			return { reason: 'error', detail, started: mapper.seen > 0, failure: err instanceof Error ? err : new Error(detail), sessionId: mapper.sessionId, costUsd: mapper.costUsd };
 		} finally {
+			clearTimeout(startTimer);
 			if (timer) { clearTimeout(timer); }
 			turn.signal.removeEventListener('abort', onAbort);
 			gatewaySession?.dispose();
@@ -624,6 +649,9 @@ export class ClaudeEngine {
 		}
 		if (turn.signal.aborted) {
 			throw new DOMException('Aborted', 'AbortError');
+		}
+		if (neverStarted) {
+			return { reason: 'error', detail: `The Claude Code engine did not start within ${Math.round((turn.startTimeoutMs ?? START_TIMEOUT_MS) / 1000)} seconds.`, started: false };
 		}
 		if (timedOut) {
 			return limitResult();

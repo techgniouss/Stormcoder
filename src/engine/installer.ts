@@ -106,6 +106,10 @@ function closeStream(stream: fs.WriteStream): Promise<void> {
 /** Waits until a stream can take more data, or has closed (after a failure it never will). */
 function drainedOrClosed(stream: fs.WriteStream): Promise<void> {
 	return new Promise(resolve => {
+		if (stream.destroyed || stream.closed) {
+			resolve();
+			return;
+		}
 		const done = (): void => { stream.off('drain', done); stream.off('close', done); resolve(); };
 		stream.once('drain', done);
 		stream.once('close', done);

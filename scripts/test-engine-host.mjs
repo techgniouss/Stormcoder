@@ -271,6 +271,13 @@ await test('a harness that keeps failing to start is left alone for a while; a w
 
 		Date.now = () => realNow() + 6 * 60_000; // after the pause
 		assert.equal((await h.preflight()).ok, true, 'it is tried again once the pause is over');
+		Date.now = realNow;
+
+		// A hang before the first message (reported as a limit that never started) counts as well.
+		const hang = { reason: 'limit', detail: 'stopped', started: false };
+		await go(hang);
+		await go(hang);
+		assert.equal((await h.preflight()).ok, false, 'two hangs in a row pause the engine too');
 	} finally {
 		Date.now = realNow;
 		delete settings['engine.claudeCode.sdkPath'];

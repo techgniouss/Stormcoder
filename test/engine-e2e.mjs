@@ -24,6 +24,8 @@ const sdkRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-sdk-'));
 const sdkDir = path.join(sdkRoot, 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
 fs.mkdirSync(sdkDir, { recursive: true });
 const callsFile = path.join(sdkDir, 'calls.jsonl');
+const counterFile = path.join(sdkDir, 'sessions.count');
+const staleFlag = path.join(sdkDir, 'stale.flag');
 fs.writeFileSync(path.join(sdkDir, 'package.json'), JSON.stringify({
 	name: '@anthropic-ai/claude-agent-sdk', version: '0.3.999', type: 'module', exports: { '.': { default: './sdk.mjs' } },
 }));
@@ -37,6 +39,13 @@ const TOOLS = [
 	{ name: 'Write', description: 'Writes a file', input_schema: { type: 'object', properties: { file_path: { type: 'string' }, content: { type: 'string' } }, required: ['file_path', 'content'] } },
 ];
 
+function nextSession() {
+	const file = ${JSON.stringify(counterFile)};
+	const n = (fs.existsSync(file) ? Number(fs.readFileSync(file, 'utf8')) : 0) + 1;
+	fs.writeFileSync(file, String(n));
+	return n;
+}
+
 export function query({ prompt, options }) {
 	const text = typeof prompt === 'string' ? prompt : '[stream]';
 	fs.appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({
@@ -48,7 +57,9 @@ export function query({ prompt, options }) {
 		close() {},
 		async interrupt() {},
 		async *[Symbol.asyncIterator]() {
-			const sessionId = options.resume ?? 'FAKE-SESSION-1';
+			// A saved conversation the harness no longer has fails before it says anything.
+			if (options.resume && fs.existsSync(${JSON.stringify(staleFlag)})) { throw new Error('No conversation found with session ID: ' + options.resume); }
+			const sessionId = options.resume ?? 'FAKE-SESSION-' + nextSession();
 			yield { type: 'system', subtype: 'init', session_id: sessionId };
 			const { ANTHROPIC_BASE_URL: base, ANTHROPIC_AUTH_TOKEN: token, ANTHROPIC_MODEL: model } = options.env;
 			const messages = [{ role: 'user', content: text }];
@@ -133,7 +144,8 @@ const mock = await startMock(req => {
 	if (lastMessage?.role === 'tool') {
 		return `Tool said: ${String(lastMessage.content).trim()}`;
 	}
-	const prompt = String(lastMessage?.content ?? '');
+	const whole = String(lastMessage?.content ?? '');
+	const prompt = whole.includes('My request now:\n') ? whole.split('My request now:\n').pop() : whole;
 	if (/create notes/.test(prompt)) { return { text: 'Writing it.', tool: { name: 'Write', args: { file_path: 'notes.txt', content: 'remember the milk\n' } } }; }
 	if (/danger/.test(prompt)) { return { text: 'Cleaning up.', tool: { name: 'Bash', args: { command: 'rm -rf build' } } }; }
 	if (/read/.test(prompt)) { return { text: 'Reading it.', tool: { name: 'Read', args: { file_path: 'hello.txt' } } }; }
@@ -263,6 +275,24 @@ try {
 	assert.equal(calls().length, harnessCalls, 'the harness did not run');
 	assert.match(String(mock.seen.at(-1).messages[1].content), /DIRTY BEFORE RUN/, '/review covers all uncommitted work');
 	assert.match(String(mock.seen.at(-1).messages[1].content), /remember the milk/);
+
+	// 7. The harness has lost the saved conversation: this chat's engine session is started afresh, once,
+	//    with the earlier messages summarised; no fallback, no error, and the new session is the one resumed.
+	fs.writeFileSync(staleFlag, '1');
+	const callsBefore = calls().length;
+	await send('after the saved conversation was lost');
+	await chat.getByText('A plain answer.').nth(3).waitFor({ timeout: 30000 });
+	const attempts = calls().slice(callsBefore);
+	assert.equal(attempts.length, 2, 'one attempt on the lost session, one fresh');
+	assert.equal(attempts[0].resume, 'FAKE-SESSION-1');
+	assert.equal(attempts[1].resume, undefined);
+	assert.match(attempts[1].prompt, /Summary of our earlier conversation/);
+	assert.equal(mock.seen.length, 12, 'the failed attempt cost no model request');
+	assert.equal(await chat.getByText(/did not start/).count(), 0, 'it was recovered, not reported');
+	fs.rmSync(staleFlag);
+	await send('and the new session carries on');
+	await chat.getByText('A plain answer.').nth(4).waitFor({ timeout: 30000 });
+	assert.equal(calls().at(-1).resume, 'FAKE-SESSION-2', 'the fresh session is the one that is resumed');
 
 	// The gateway served everything on its translated path; nothing else was reached.
 	assert.deepEqual(errors, [], `page errors: ${errors.join('; ')}`);

@@ -228,10 +228,10 @@ request). Switching engines mid-conversation therefore keeps the gist, not the f
 | Piece | Where | Verified by |
 |---|---|---|
 | Messages API translators, SSE writer, thinking filter, error shapes | `src/engine/anthropicWire.ts` | `scripts/test-engine-gateway.mjs` |
-| Local gateway: pass-through (byte-identical, key rotation, usage tap) and translation | `src/engine/gateway.ts` | same, 49 tests against a fake Anthropic server and fake providers |
+| Local gateway: pass-through (byte-identical, key rotation, usage tap) and translation | `src/engine/gateway.ts` | same, 51 tests against a fake Anthropic server and fake providers |
 | Model aliasing, per-target capability checks | `src/engine/modelMap.ts`, `capabilities.ts` | same |
 | Tool bridge: guardrails, trust, allow-list, user hooks, sub-agent caps, timeout clamp, Undo tracking | `src/engine/toolBridge.ts` | `scripts/test-engine-bridge.mjs`, 25 tests, including the same verdict as `checkCommand` under every policy |
-| SDK adapter: options, scrubbed env, sandbox mapping, message mapping, wall-clock limit, SDK discovery | `src/engine/claudeEngine.ts` | `scripts/test-engine-claude.mjs`, 34 tests against a scripted fake SDK |
+| SDK adapter: options, scrubbed env, sandbox mapping, message mapping, wall-clock limit, SDK discovery | `src/engine/claudeEngine.ts` | `scripts/test-engine-claude.mjs`, 38 tests against a scripted fake SDK |
 | Engine host: boot-once selection, routes, gateway lifecycle, preflight, start-failure circuit breaker | `src/engine/engineHost.ts` | `scripts/test-engine-host.mjs` |
 | SDK installer: verified download, streaming tar extraction, atomic swap | `src/engine/installer.ts` | `scripts/test-engine-installer.mjs` (22 tests, every failure leaves the old install intact); the extractor was also compared byte for byte with system `tar` on two real npm packages |
 | Routing seam, fallback, restart prompt, post-run review, `/review` | `src/chatViewProvider.ts`, `src/extension.ts`, `host/controller.ts`, `electron/main.ts` | `test/engine-e2e.mjs` |
@@ -259,6 +259,9 @@ degrade to the built-in agent, not take the app down:
   (20 second limit), or a harness that produces nothing at all: the message is served by the built-in
   agent with a one-time note. After two start failures in a row the engine is left alone for five
   minutes instead of launching a failing process on every message.
+- A harness that sends nothing for 60 seconds is judged not to have started and stopped. A saved
+  engine conversation the harness no longer has is replaced by a fresh one, once, with the earlier
+  messages summarised; the user is not troubled with it.
 - Edit mode (an editor feature, not an agent loop) always uses the built-in path.
 - An engine turn always ends with `done`; every failure inside it is a message in the chat. A hung
   turn is stopped by `agent.maxRunMinutes`; Stop works at any point.

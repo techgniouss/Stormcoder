@@ -70,13 +70,21 @@ const ENGINE_SESSIONS_KEY = 'stormcoder.engineSessions';
 /** The longest a git snapshot for a review may take; past it the review is skipped rather than holding up the turn. */
 const GIT_SNAPSHOT_MS = 15_000;
 
-/** `promise`'s value, or undefined if it fails or takes longer than `ms`. */
-function orTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	return Promise.race([
-		promise.catch(() => undefined),
-		new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), ms); }),
-	]).finally(() => { if (timer) { clearTimeout(timer); } });
+/** What {@link snapshotTree} found. */
+type TreeSnapshot = { readonly sections: DiffSection[] } | { readonly sections?: undefined; readonly why: 'timeout' | 'not-a-repository' };
+
+/**
+ * The working tree as per-file sections, within a deadline that also stops the git processes. A
+ * repository too large to read in time, and a folder that is not a repository, are told apart so the
+ * user can be given the true reason a review did not run.
+ */
+async function snapshotTree(folder: string): Promise<TreeSnapshot> {
+	const started = Date.now();
+	try {
+		return { sections: await workingTreeSections(folder, { maxChars: 60_000, maxNewFiles: 20, maxNewFileBytes: 20_000, timeoutMs: GIT_SNAPSHOT_MS }) };
+	} catch {
+		return { why: Date.now() - started >= GIT_SNAPSHOT_MS - 500 ? 'timeout' : 'not-a-repository' };
+	}
 }
 
 /** The most chats whose engine session id is remembered; older ones fall out. */
@@ -3023,7 +3031,11 @@ ${context.content}` }
 			const reviewCommand = reviewer && last.content === REVIEW_PROMPT;
 			// A review of the run's changes happens only when this run changed the tree, so the tree is compared
 			// before and after; without a pinned reviewer (or a git repository) none of this costs anything.
-			const before = reviewer && mode === 'agent' && !reviewCommand ? await orTimeout(workingTreeSections(folder), GIT_SNAPSHOT_MS) : undefined;
+			const snapshot = reviewer && mode === 'agent' && !reviewCommand ? await snapshotTree(folder) : undefined;
+			const before = snapshot?.sections;
+			if (snapshot && !snapshot.sections && snapshot.why === 'timeout') {
+				post({ type: 'info', message: 'Review skipped for this run: reading the project\'s changes took too long.' });
+			}
 			post({ type: 'todos', items: [] });
 			if (!this.engineAnnounced.has(sessionId)) {
 				this.engineAnnounced.add(sessionId);
@@ -3056,7 +3068,8 @@ ${context.content}` }
 			const review = this.pendingReviews.get(sessionId);
 			this.pendingReviews.delete(sessionId);
 			const request = review ? `A second reviewer examined your last changes and reported:\n\n${review}\n\nMy message now:\n${last.content}` : last.content;
-			const result = await this.engineHost.run({
+			const appendPrompt = cfg.get<boolean>('engine.appendProjectMemory') === true ? (await this.memoryBlock(sessionId)) || undefined : undefined;
+			const startTurn = (resume: string | undefined) => this.engineHost.run({
 				sessionId,
 				prompt: context?.content ? `${context.content}\n\n${request}` : request,
 				images: last.images,
@@ -3067,18 +3080,30 @@ ${context.content}` }
 				approver: this.approverFor(sessionId, runId, controller.signal),
 				trusted: vscode.workspace.isTrusted,
 				signal: controller.signal,
-				resumeId,
-				transcriptSeed: resumeId ? undefined : buildTranscriptSeed(history.slice(0, -1)) || undefined,
-				appendPrompt: cfg.get<boolean>('engine.appendProjectMemory') === true ? (await this.memoryBlock(sessionId)) || undefined : undefined,
+				resumeId: resume,
+				transcriptSeed: resume ? undefined : buildTranscriptSeed(history.slice(0, -1)) || undefined,
+				appendPrompt,
 				maxTurns: this.configuredMaxSteps(),
 				maxRunMs: this.configuredMaxRunMs(),
 				contextWindow: resolved.contextWindow,
 				title: last.content.replace(/\s+/g, ' ').trim().slice(0, 60) || undefined,
 			}, callbacks);
-			if (result.reason === 'error' && !result.started) {
+			const neverStarted = (r: { reason: string; started: boolean }): boolean => !r.started && (r.reason === 'error' || r.reason === 'limit');
+			let result = await startTurn(resumeId);
+			if (resumeId && neverStarted(result)) {
+				// The harness may simply no longer have the saved conversation (its files were cleared). Forget
+				// it and start this chat's engine session afresh, once, before giving up on the engine.
+				this.rememberEngineSession(sessionId, undefined);
+				result = await startTurn(undefined);
+			}
+			if (neverStarted(result)) {
 				// The harness produced nothing at all, so it cannot run here (a corrupt binary, a sandbox the
-				// machine lacks, ...). The built-in agent serves this message, and the user is told why.
+				// machine lacks, a hang at launch). The built-in agent serves this message, the reviewer's findings
+				// (consumed above) are kept for it, and the user is told why.
 				fellBack = true;
+				if (review) {
+					this.pendingReviews.set(sessionId, review);
+				}
 				post({ type: 'info', message: `The Claude Code engine did not start (${(result.detail ?? 'unknown error').split('\n')[0].slice(0, 200)}). This message was handled by the built-in agent instead.` });
 				return false;
 			}
@@ -3204,8 +3229,12 @@ ${context.content}` }
 				post({ type: 'info', message: `Review skipped: ${assignment.problem ?? 'the review model is unavailable.'}` });
 				return false;
 			}
-			const after = await orTimeout(workingTreeSections(folder), GIT_SNAPSHOT_MS);
-			const changed = after ? changedSections(before, after) : [];
+			const after = await snapshotTree(folder);
+			if (!after.sections && after.why === 'timeout') {
+				post({ type: 'info', message: 'The review could not run: reading the project\'s changes took too long.' });
+				return false;
+			}
+			const changed = after.sections ? changedSections(before, after.sections) : [];
 			if (!changed.length) {
 				return false; // nothing changed, or not a git repository: nothing to review
 			}

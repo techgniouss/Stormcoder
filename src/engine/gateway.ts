@@ -36,6 +36,9 @@ const PING_MS = 10_000;
  */
 const EARLY_START_MS = 3_000;
 
+/** How long an oversized upload is read and dropped after it was refused, before the connection is closed. */
+const DRAIN_AFTER_REFUSAL_MS = 5_000;
+
 /** HTTP statuses a different stored key has a real chance of surviving (mirrors `withProviderResilience`). */
 const KEY_STATUSES = new Set([401, 402, 403, 429]);
 
@@ -88,6 +91,8 @@ export interface GatewayDeps {
 	readonly pingMs?: number;
 	/** Overrides how long a translated stream waits for the model before opening anyway. */
 	readonly earlyStartMs?: number;
+	/** Overrides how long an oversized upload is read and dropped after the 413 before the connection is cut. */
+	readonly refusalDrainMs?: number;
 }
 
 interface ActiveSession extends SessionRegistration {
@@ -263,7 +268,7 @@ export class AnthropicGateway {
 	}
 
 	private async messages(req: http.IncomingMessage, res: http.ServerResponse, session: ActiveSession, url: URL, upstreamPath: string): Promise<void> {
-		const raw = await readBody(req, this.deps.maxBodyBytes ?? MAX_BODY_BYTES);
+		const raw = await readBody(req, this.deps.maxBodyBytes ?? MAX_BODY_BYTES, this.deps.refusalDrainMs ?? DRAIN_AFTER_REFUSAL_MS);
 		let parsed: AnthropicRequest;
 		try {
 			parsed = JSON.parse(raw.toString('utf8')) as AnthropicRequest;
@@ -317,20 +322,34 @@ export class AnthropicGateway {
 
 		const attempted = new Set<string>();
 		let upstream: Response | undefined;
+		// A key-failure response is held, not discarded, until the next turn of the loop has a different
+		// key to try; if there is none it is the answer, error body and all.
+		let held: Response | undefined;
 		for (let attempt = 0; attempt < 6; attempt++) {
-			let apiKey: string;
+			let apiKey = '';
 			try {
 				apiKey = (await registry.getApiKey(target.providerId)) ?? '';
 			} catch (err) {
+				if (held) {
+					upstream = held;
+					held = undefined;
+					break;
+				}
 				this.respond(res, 401, errorBody(401, err instanceof Error ? err.message : String(err)));
 				return;
 			}
-			if (!apiKey) {
+			if (!apiKey && !held) {
 				this.respond(res, 401, errorBody(401, 'No Anthropic API key is saved. Add one in Providers.'));
 				return;
 			}
-			if (attempted.has(apiKey)) {
+			if (!apiKey || attempted.has(apiKey)) {
+				upstream = held ?? upstream;
+				held = undefined;
 				break;
+			}
+			if (held) {
+				await held.body?.cancel().catch(() => undefined);
+				held = undefined;
 			}
 			attempted.add(apiKey);
 			try {
@@ -356,14 +375,14 @@ export class AnthropicGateway {
 				return;
 			}
 			if (KEY_STATUSES.has(upstream.status) && await registry.rotateApiKey(target.providerId, apiKey, `HTTP ${upstream.status}`)) {
-				// Only give this response up once there is a different key to try; otherwise it is the answer.
-				const next = await registry.getApiKey(target.providerId).catch(() => undefined);
-				if (next && !attempted.has(next)) {
-					await upstream.body?.cancel().catch(() => undefined);
-					continue;
-				}
+				held = upstream;
+				continue;
 			}
 			break;
+		}
+		if (held) {
+			// The loop ran out of attempts with a response still held: it is the answer.
+			upstream = held;
 		}
 		if (!upstream) {
 			this.respond(res, 503, errorBody(503, 'No Anthropic credential could be used.'));
@@ -451,7 +470,11 @@ export class AnthropicGateway {
 		early.unref();
 		// Reasoning a provider streams inline is not the answer: the harness must never see it.
 		const thinking = new ThinkingFilter();
-		const show = (text: string): void => { if (stream && text) { begin(); safeWrite(res, frames.text(text)); } };
+		let visible = '';
+		const show = (text: string): void => {
+			visible += text;
+			if (stream && text) { begin(); safeWrite(res, frames.text(text)); }
+		};
 		let step: AgentStep;
 		try {
 			step = await withProviderResilience(registry, target.providerId, target.model, apiKey => this.runStep(provider, {
@@ -480,13 +503,13 @@ export class AnthropicGateway {
 		clearTimeout(early);
 		if (ping) { clearInterval(ping); }
 
-		// The answer without any inline reasoning, however the provider delivered it.
-		const answer = stripThinking(step.content);
+		// The answer without any inline reasoning: what was streamed, or (for a provider that returned it
+		// whole) the content with its reasoning block removed.
+		const answer = visible.trim() ? visible : stripThinking(step.content);
 		step = { ...step, content: answer };
 		const usage: WireUsage = estimateUsage({ ...internal, tools }, step);
 		const finish = step.truncated ? 'length' : step.finishReason;
 		if (stream) {
-			show(thinking.flush());
 			// A provider may hand back its whole answer without streaming any of it.
 			if (!frames.hasText) {
 				show(answer.trim());
@@ -526,6 +549,10 @@ export class AnthropicGateway {
 /** Resolves when `res` can take more data, or has been closed (a client that left never drains). */
 function drained(res: http.ServerResponse): Promise<void> {
 	return new Promise(resolve => {
+		if (res.destroyed) {
+			resolve();
+			return;
+		}
 		const done = (): void => {
 			res.off('drain', done);
 			res.off('close', done);
@@ -570,7 +597,7 @@ class BodyError extends Error {
 }
 
 /** Reads a request body up to `limit` bytes. */
-function readBody(req: http.IncomingMessage, limit: number): Promise<Buffer> {
+function readBody(req: http.IncomingMessage, limit: number, drainMs: number): Promise<Buffer> {
 	return new Promise((resolve, reject) => {
 		const declared = Number(req.headers['content-length'] ?? 0);
 		if (declared > limit) {
@@ -590,6 +617,12 @@ function readBody(req: http.IncomingMessage, limit: number): Promise<Buffer> {
 				over = true;
 				chunks.length = 0;
 				reject(new BodyError(413, `The request is larger than the ${limit} byte limit.`));
+				// The upload is read and dropped just long enough for the 413 to reach the client, then cut:
+				// destroying at once would reset the connection before the answer arrived, and never
+				// destroying would let one endless upload hold a slot.
+				const cut = setTimeout(() => req.destroy(), drainMs);
+				cut.unref();
+				req.once('close', () => clearTimeout(cut));
 				return;
 			}
 			chunks.push(chunk);

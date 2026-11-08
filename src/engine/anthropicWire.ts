@@ -247,58 +247,37 @@ export function buildMessage(id: string, model: string, step: AgentStep, usage: 
 	};
 }
 
-/** Length of the longest suffix of `text` that is a proper prefix of `mark`. */
-function partialMarkSuffix(text: string, mark: string): number {
-	for (let len = Math.min(text.length, mark.length - 1); len > 0; len--) {
-		if (text.endsWith(mark.slice(0, len))) {
-			return len;
-		}
-	}
-	return 0;
-}
-
 /**
  * Removes the reasoning a provider streams inline from a token stream, leaving the answer.
  *
- * Providers with native reasoning wrap it in {@link OPEN_MARK} and {@link CLOSE_MARK} so Stormcoder's
- * own chat can fold it away. The Claude Code harness has no such convention: sent through, the
- * reasoning would appear as the model's answer and be replayed in every later request. Marks may be
- * split across chunks, so a possible partial mark is held back until the next chunk settles it.
+ * Providers with native reasoning bracket it with {@link OPEN_MARK} and {@link CLOSE_MARK} so
+ * Stormcoder's own chat can fold it away, and each provider emits a mark as a token of its own
+ * (`onToken(OPEN_MARK)`, reasoning deltas, `onToken(CLOSE_MARK)`). The Claude Code harness has no
+ * such convention: sent through, the reasoning would show as the model's answer and be replayed in
+ * every later request. A mark is recognised only as a whole token, never as a substring of one, so a
+ * markdown rule (`---`) inside the reasoning cannot end it early. Reasoning that never closes is
+ * dropped to the end of the stream. The one thing this cannot tell apart is a reasoning delta that is,
+ * by itself and exactly, the closing mark; providers do not produce one.
  */
 export class ThinkingFilter {
 	private inside = false;
-	private held = '';
 
 	/** Feeds one streamed delta; returns the part of it that is answer text. */
 	push(delta: string): string {
-		let text = this.held + delta;
-		this.held = '';
-		let visible = '';
-		for (;;) {
-			const mark = this.inside ? CLOSE_MARK : OPEN_MARK;
-			const at = text.indexOf(mark);
-			if (at >= 0) {
-				if (!this.inside) {
-					visible += text.slice(0, at);
-				}
-				text = text.slice(at + mark.length);
-				this.inside = !this.inside;
-				continue;
-			}
-			const keep = partialMarkSuffix(text, mark);
-			if (!this.inside) {
-				visible += text.slice(0, text.length - keep);
-			}
-			this.held = text.slice(text.length - keep);
-			return visible;
+		if (!this.inside && delta === OPEN_MARK) {
+			this.inside = true;
+			return '';
 		}
+		if (this.inside && delta === CLOSE_MARK) {
+			this.inside = false;
+			return '';
+		}
+		return this.inside ? '' : delta;
 	}
 
-	/** Called when the stream ends: a held partial mark outside reasoning was ordinary text after all. */
-	flush(): string {
-		const rest = this.inside ? '' : this.held;
-		this.held = '';
-		return rest;
+	/** Whether the stream ended inside reasoning that never closed. */
+	get unclosed(): boolean {
+		return this.inside;
 	}
 }
 

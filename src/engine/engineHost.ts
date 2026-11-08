@@ -259,7 +259,7 @@ export class EngineHost {
 			loadProjectSettings: cfg.get<boolean>('engine.claudeCode.loadProjectSettings') !== false,
 		}, callbacks);
 		// A harness that cannot start costs a process launch each time; after repeated failures it is left alone for a while.
-		if (result.reason === 'error' && !result.started) {
+		if (!result.started && (result.reason === 'error' || result.reason === 'limit')) {
 			this.lastStartFailure = (result.detail ?? 'unknown error').split('\n')[0].slice(0, 160);
 			if (++this.startFailures >= START_FAILURES_BEFORE_BLOCK) {
 				this.blockedUntil = Date.now() + START_FAILURE_BLOCK_MS;

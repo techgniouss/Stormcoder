@@ -376,7 +376,7 @@ await test('a folder whose name merely starts with two dots is inside the worksp
 });
 
 await test('Glob and Grep are judged by their patterns too, not only their path', async () => {
-	for (const bad of ['/etc/**', '../../**/*.env', '~/.ssh/*', '{../x,y}', 'C:/Users/**', '\\\\server\\share\\*', 'a/../../b', '..', 'src/{a,../b}']) {
+	for (const bad of ['/etc/**', '../../**/*.env', '~/.ssh/*', '{../x,y}', 'C:/Users/**', '\\\\server\\share\\*', 'a/../../b', '..', 'src/{a,../b}', '{/etc/*,src/**}', '{~/.ssh/*,x}', '!/etc/passwd', '@(~/a|b)', '(../x|y)', 'src/{a, /etc/x}', '{C:/x,y}']) {
 		assert.ok(patternEscapes(bad), `escapes: ${bad}`);
 		const glob = await decideToolUse('Glob', { pattern: bad }, ctx());
 		assert.equal(glob.behavior, 'deny', `Glob ${bad}`);

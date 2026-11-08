@@ -562,20 +562,23 @@ await test('translated: a failure inside the grace period is still a real HTTP s
 	delete providers.flaky;
 });
 
-await test('reasoning a provider streams inline never reaches the harness, even with marks split across chunks', async () => {
+await test('reasoning a provider streams inline never reaches the harness, even one containing a markdown rule', async () => {
+	// Exactly how providers emit it: each mark as a token of its own, reasoning in deltas between them.
 	agentBehavior = async request => {
-		const wholeStream = `${OPEN_MARK}step by step: the secret reasoning${CLOSE_MARK}The answer is 42.`;
-		for (let i = 0; i < wholeStream.length; i += 3) { request.onToken(wholeStream.slice(i, i + 3)); }
-		return { content: wholeStream, toolCalls: [], finishReason: 'stop' };
+		request.onToken(OPEN_MARK);
+		// A markdown rule inside the reasoning, arriving as part of a larger delta as it does in practice.
+		for (const piece of ['step by step: ', 'the secret reasoning\n\n---\n\nand more secret reasoning']) { request.onToken(piece); }
+		request.onToken(CLOSE_MARK);
+		for (const piece of ['The answer ', 'is 42.']) { request.onToken(piece); }
+		return { content: `${OPEN_MARK}step by step: the secret reasoning\n\n---\n\nand more secret reasoning${CLOSE_MARK}The answer is 42.`, toolCalls: [], finishReason: 'stop' };
 	};
 	const r = await call('/v1/messages', { body: { model: MAIN_ALIAS, stream: true, max_tokens: 100, tools: [readFileTool], messages: [{ role: 'user', content: 'go' }] } });
 	const text = frames(r.text).filter(f => f.event === 'content_block_delta').map(f => f.data.delta.text).join('');
 	assert.equal(text, 'The answer is 42.');
-	assert.ok(!r.text.includes('secret reasoning') && !r.text.includes('Thinking'));
+	assert.ok(!r.text.includes('secret reasoning') && !r.text.includes('Thinking'), 'a rule inside the reasoning did not end it early');
 	const plain = await call('/v1/messages', { body: { model: MAIN_ALIAS, stream: false, max_tokens: 100, tools: [readFileTool], messages: [{ role: 'user', content: 'go' }] } });
 	assert.deepEqual(plain.json.content, [{ type: 'text', text: 'The answer is 42.' }]);
 });
-
 await test('an answer a provider returns without streaming any of it is still delivered', async () => {
 	agentBehavior = async () => ({ content: `${OPEN_MARK}thinking${CLOSE_MARK}Delivered whole.`, toolCalls: [], finishReason: 'stop' });
 	const r = await call('/v1/messages', { body: { model: MAIN_ALIAS, stream: true, max_tokens: 100, tools: [readFileTool], messages: [{ role: 'user', content: 'go' }] } });
@@ -609,6 +612,47 @@ await test('a rotated key that turns out to be the same one keeps the real error
 	await g.stop();
 });
 
+await test('if the credential store fails after a rotation, the provider\'s own error is still what the harness gets', async () => {
+	upstreamSeen.length = 0;
+	upstreamBehavior = () => ({ status: 401, json: { type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } } });
+	let lookups = 0;
+	const flaky = { ...registry, rotateApiKey: async () => true, getApiKey: async id => { if (id !== 'anthropic') { return undefined; } if (++lookups > 1) { throw new Error('credential store is locked'); } return 'sk-ant-first'; } };
+	const g = new AnthropicGateway({ registry: flaky });
+	await g.start();
+	const s = g.registerSession({ id: 'flaky-store', route: claudeRoute });
+	const res = await new Promise((resolve, reject) => {
+		const body = JSON.stringify({ model: 'claude-sonnet-x', max_tokens: 9, messages: [{ role: 'user', content: 'x' }] });
+		const req = http.request({ host: '127.0.0.1', port: Number(new URL(g.baseUrl).port), path: '/v1/messages', method: 'POST', headers: { authorization: `Bearer ${s.token}`, 'content-length': Buffer.byteLength(body) } }, r => {
+			const chunks = [];
+			r.on('data', c => chunks.push(c));
+			r.on('end', () => resolve({ status: r.statusCode, text: Buffer.concat(chunks).toString('utf8') }));
+		});
+		req.on('error', reject);
+		req.end(body);
+	});
+	assert.equal(res.status, 401);
+	assert.equal(JSON.parse(res.text).error.message, 'invalid x-api-key');
+	await g.stop();
+});
+
+await test('an upload that never stops after a 413 is cut off, not allowed to hold a slot', async () => {
+	const small = new AnthropicGateway({ registry, maxBodyBytes: 1024, refusalDrainMs: 150 });
+	await small.start();
+	const s = small.registerSession({ id: 'endless', route });
+	const outcome = await new Promise(resolve => {
+		let status;
+		const req = http.request({ host: '127.0.0.1', port: Number(new URL(small.baseUrl).port), path: '/v1/messages', method: 'POST', headers: { authorization: `Bearer ${s.token}`, 'transfer-encoding': 'chunked' } });
+		req.on('response', res => { status = res.statusCode; res.resume(); });
+		const writer = setInterval(() => { try { req.write('x'.repeat(2000)); } catch { /* closed */ } }, 10);
+		req.on('error', () => { clearInterval(writer); resolve({ status, closed: true }); });
+		req.on('close', () => { clearInterval(writer); resolve({ status, closed: true }); });
+		setTimeout(() => { clearInterval(writer); req.destroy(); resolve({ status, closed: false }); }, 3000);
+	});
+	assert.equal(outcome.closed, true, 'the gateway closed the connection by itself');
+	assert.equal(outcome.status, 413, 'after telling the client why');
+	await small.stop();
+});
+
 await test('an oversized chunked upload is answered with a 413, not a dropped connection', async () => {
 	const small = new AnthropicGateway({ registry, maxBodyBytes: 1024 });
 	await small.start();
@@ -629,23 +673,26 @@ await test('an oversized chunked upload is answered with a 413, not a dropped co
 	await small.stop();
 });
 
-await test('ThinkingFilter: every split point, an unclosed block, and text that merely looks like a mark', () => {
-	const whole = `Before. ${OPEN_MARK}hidden${CLOSE_MARK}After.`;
-	for (let cut = 0; cut <= whole.length; cut++) {
-		const f = new wire.ThinkingFilter();
-		const out = f.push(whole.slice(0, cut)) + f.push(whole.slice(cut)) + f.flush();
-		assert.equal(out, 'Before. After.', `cut at ${cut}`);
-	}
-	const unclosed = new wire.ThinkingFilter();
-	assert.equal(unclosed.push(`Hi ${OPEN_MARK}reasoning that never ends`) + unclosed.flush(), 'Hi ', 'a block that never closes is all reasoning');
-	const lookalike = new wire.ThinkingFilter();
-	assert.equal(lookalike.push('a\n\n--') + lookalike.push('-b') + lookalike.flush(), 'a\n\n---b', 'a rule outside reasoning is ordinary text');
-	const partial = new wire.ThinkingFilter();
-	assert.equal(partial.push('ends with 🤔 *Thi') + partial.flush(), 'ends with 🤔 *Thi', 'a held partial mark is released if the stream ends');
-	const two = new wire.ThinkingFilter();
-	assert.equal(two.push(`${OPEN_MARK}a${CLOSE_MARK}x${OPEN_MARK}b${CLOSE_MARK}y`), 'xy');
-});
+await test('ThinkingFilter: marks are whole tokens; a rule inside reasoning stays inside; unclosed reasoning is dropped', () => {
+	const f = new wire.ThinkingFilter();
+	const out = [];
+	for (const token of ['Before. ', OPEN_MARK, 'hidden\n\n---\n\nstill hidden', CLOSE_MARK, 'After.']) { out.push(f.push(token)); }
+	assert.equal(out.join(''), 'Before. After.');
+	assert.equal(f.unclosed, false);
 
+	const unclosed = new wire.ThinkingFilter();
+	assert.equal(['Hi ', OPEN_MARK, 'reasoning that never ends'].map(t => unclosed.push(t)).join(''), 'Hi ');
+	assert.equal(unclosed.unclosed, true);
+
+	const rule = new wire.ThinkingFilter();
+	assert.equal(['a', '\n\n---\n\n', 'b'].map(t => rule.push(t)).join(''), 'a\n\n---\n\nb', 'a rule in the answer is ordinary text');
+
+	const two = new wire.ThinkingFilter();
+	assert.equal([OPEN_MARK, 'a', CLOSE_MARK, 'x', OPEN_MARK, 'b', CLOSE_MARK, 'y'].map(t => two.push(t)).join(''), 'xy');
+
+	const stray = new wire.ThinkingFilter();
+	assert.equal(stray.push(CLOSE_MARK), CLOSE_MARK, 'a close mark with nothing open is just text');
+});
 await test('a disposed session stops working', async () => {
 	const s = gateway.registerSession({ id: 'gone', route });
 	assert.equal((await call('/v1/models', { method: 'GET', token: s.token })).status, 200);

@@ -583,6 +583,67 @@ await test('run: a callback that throws on one message does not end the run', as
 	assert.deepEqual(seen, ['read_file'], 'later messages were still handled');
 });
 
+await test('run: a harness that says nothing within the start timeout is not started, and is told to stop', async () => {
+	let interrupted = false;
+	const silent = {
+		query(params) {
+			return {
+				close: () => { },
+				interrupt: async () => { interrupted = true; },
+				async *[Symbol.asyncIterator]() {
+					await new Promise(resolve => params.options.abortController.signal.addEventListener('abort', resolve));
+					throw new Error('aborted');
+				},
+			};
+		},
+	};
+	const gateway = fakeGateway();
+	const began = Date.now();
+	const result = await new ClaudeEngine({ gateway: () => gateway, load: async () => silent, env: {} }).run(turn({ startTimeoutMs: 80 }), recorder().cb);
+	assert.equal(result.reason, 'error');
+	assert.equal(result.started, false);
+	assert.match(result.detail, /did not start within \d+ seconds/);
+	assert.ok(interrupted);
+	assert.ok(Date.now() - began < 3000);
+	assert.equal(gateway.state.disposed, 1);
+});
+
+await test('run: the start timeout does not apply once the harness has spoken', async () => {
+	const slow = {
+		query() {
+			return {
+				close: () => { }, interrupt: async () => { },
+				async *[Symbol.asyncIterator]() {
+					yield { type: 'system', subtype: 'init', session_id: 'S' };
+					await new Promise(resolve => setTimeout(resolve, 200)); // a long model call, well past the start timeout
+					yield { type: 'result', subtype: 'success', is_error: false, result: 'done', session_id: 'S' };
+				},
+			};
+		},
+	};
+	const result = await new ClaudeEngine({ gateway: () => fakeGateway(), load: async () => slow, env: {} }).run(turn({ startTimeoutMs: 60 }), recorder().cb);
+	assert.equal(result.reason, 'done');
+	assert.equal(result.started, true);
+});
+
+await test('run: a hang until the run limit before any message counts as never having started', async () => {
+	const silent = { query: params => ({ close: () => { }, interrupt: async () => { }, async *[Symbol.asyncIterator]() { await new Promise(resolve => params.options.abortController.signal.addEventListener('abort', resolve)); throw new Error('aborted'); } }) };
+	const result = await new ClaudeEngine({ gateway: () => fakeGateway(), load: async () => silent, env: {} }).run(turn({ maxRunMs: 60, startTimeoutMs: 60_000 }), recorder().cb);
+	assert.equal(result.reason, 'limit');
+	assert.equal(result.started, false, 'nothing was ever received, whatever the reason it stopped');
+});
+
+await test('run: a message the UI mapping cannot handle is reported once, and the run goes on', async () => {
+	const notes = [];
+	const cb = { ...recorder().cb, onToolStart: () => { throw new Error('card could not be drawn'); }, onNote: t => notes.push(t) };
+	const tool = id => ({ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: 'a' } }] } });
+	const script = [{ type: 'system', subtype: 'init', session_id: 'S' }, tool('a'), tool('b'), tool('c'), { type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: 'S' }];
+	const result = await new ClaudeEngine({ gateway: () => fakeGateway(), load: async () => fakeSdk(script).sdk, env: {} }).run(turn(), cb);
+	assert.equal(result.reason, 'done');
+	assert.equal(notes.filter(n => /could not be displayed/.test(n)).length, 1, 'one note, however many messages failed');
+	assert.match(notes[0], /card could not be drawn/);
+});
+
 // --- finding and loading the SDK -----------------------------------------------------------------
 
 await test('SDK discovery order and version note', () => {
