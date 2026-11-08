@@ -1885,25 +1885,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				break;
 			case 'setEngine':
 				// Desktop-only (REMOTE_DENIED in src/remote/policy.ts): it can start a download and changes what runs the agent.
-				if (message.engine === 'builtin' || message.engine === 'claude-code') {
+				if ((message.engine === 'builtin' || message.engine === 'claude-code') && !this.engineInstalling) {
 					await this.chooseEngine(message.engine);
 				}
 				break;
 			case 'installEngine':
-				await vscode.commands.executeCommand('stormcoder.engine.installClaude');
+				if (!this.engineInstalling) {
+					await vscode.commands.executeCommand('stormcoder.engine.installClaude');
+				}
 				await this.postConfig();
 				break;
 			case 'setEngineFast': {
 				const text = typeof message.text === 'string' ? message.text.trim() : undefined;
 				if (text !== undefined && text.length <= 200 && (text === '' || parseTarget(text))) {
 					await vscode.workspace.getConfiguration('stormcoder').update('engine.fastModel', text, vscode.ConfigurationTarget.Global);
-					await this.postConfig();
+				}
+				// Always answered, accepted or not: the panel shows what the host kept, so it can say so truthfully.
+				await this.postConfig();
+				break;
+			}
+			case 'restartApp': {
+				// Restarting ends every run in flight; ask first when one is, as a click or a double-click should not cost work.
+				const busy = this.activeRequests.size > 0 || this.engineInstalling;
+				const go = !busy || await vscode.window.showWarningMessage(
+					this.engineInstalling ? 'The Claude Agent SDK is still downloading. Restart anyway?' : 'A chat is still running. Restarting stops it. Restart anyway?',
+					{ modal: true }, 'Restart',
+				) === 'Restart';
+				if (go) {
+					await vscode.commands.executeCommand('stormcoder.app.relaunch');
 				}
 				break;
 			}
-			case 'restartApp':
-				await vscode.commands.executeCommand('stormcoder.app.relaunch');
-				break;
 			case 'setReviewEnabled':
 				await vscode.workspace.getConfiguration('stormcoder').update(
 					'auto.enableReview', !!message.reviewEnabled, vscode.ConfigurationTarget.Global);
@@ -3319,8 +3331,20 @@ ${context.content}` }
 		void this.context.workspaceState.update(ENGINE_SESSIONS_KEY, Object.fromEntries(this.engineSessions));
 	}
 
+	/** Whether an SDK download is in progress; the panel disables its buttons meanwhile. */
+	private engineInstalling = false;
+	/** The last install problem, shown in the panel until the next attempt. */
+	private engineNotice = '';
+
+	/** Told by the install command when a download starts and ends, so the panel can show it. */
+	setEngineInstalling(installing: boolean, notice = ''): void {
+		this.engineInstalling = installing;
+		this.engineNotice = notice;
+		this.postConfig().catch(() => undefined);
+	}
+
 	/** What the Agent engine panel shows: the setting, what is running, and the SDK on disk. */
-	private engineConfig(): { selected: string; running: string; installed: string; loaded: string; fastModel: string } {
+	private engineConfig(): { selected: string; running: string; installed: string; loaded: string; fastModel: string; installing: boolean; notice: string } {
 		const status = this.engineHost.sdkStatus();
 		const fast = vscode.workspace.getConfiguration('stormcoder').get<unknown>('engine.fastModel');
 		return {
@@ -3329,6 +3353,8 @@ ${context.content}` }
 			installed: status.installed ?? '',
 			loaded: status.loaded ?? '',
 			fastModel: typeof fast === 'string' ? fast : '',
+			installing: this.engineInstalling,
+			notice: this.engineNotice,
 		};
 	}
 

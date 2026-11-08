@@ -645,6 +645,7 @@ button:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visib
 
 /* ---- Settings mini buttons / header actions ---- */
 .header-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.mini-button:disabled { opacity: 0.45; cursor: not-allowed; }
 .mini-button {
 	background: var(--vscode-button-secondaryBackground, rgba(127, 127, 127, 0.2));
 	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));

@@ -248,7 +248,8 @@ async function chooseEngine(view: ChatViewProvider): Promise<void> {
 	if (!picked) {
 		return;
 	}
-	if (picked.id === current) {
+	// Picking the engine that is already set is a no-op, unless its SDK has gone missing: then it installs it.
+	if (picked.id === current && (picked.id === 'builtin' || status.installed)) {
 		vscode.window.showInformationMessage(`Stormcoder already uses the ${picked.id === 'claude-code' ? 'Claude Code' : 'built-in'} engine.`);
 		return;
 	}
@@ -260,7 +261,15 @@ async function chooseEngine(view: ChatViewProvider): Promise<void> {
  * Anthropic's own terms, not part of Stormcoder) from the npm registry into the app's data folder,
  * after saying so. Returns whether an install is now in place.
  */
+let installInFlight: Promise<boolean> | undefined;
+
 async function installClaudeEngine(view: ChatViewProvider): Promise<boolean> {
+	// One install at a time: a second request (a double-click, the panel and the palette) joins the first.
+	installInFlight ??= doInstallClaudeEngine(view).finally(() => { installInFlight = undefined; });
+	return installInFlight;
+}
+
+async function doInstallClaudeEngine(view: ChatViewProvider): Promise<boolean> {
 	// Modal: a licence notice must wait for an answer, not fade away like a toast.
 	const go = await vscode.window.showInformationMessage(
 		'Install the Claude Agent SDK?',
@@ -272,6 +281,7 @@ async function installClaudeEngine(view: ChatViewProvider): Promise<boolean> {
 		return false;
 	}
 	const controller = new AbortController();
+	view.setEngineInstalling(true);
 	try {
 		const result = await vscode.window.withProgress(
 			{ location: vscode.ProgressLocation.Notification, title: 'Installing the Claude Agent SDK…', cancellable: true },
@@ -283,13 +293,16 @@ async function installClaudeEngine(view: ChatViewProvider): Promise<boolean> {
 		vscode.window.showInformationMessage(result.restartNeeded
 			? `Claude Agent SDK ${result.version} installed. Restart Stormcoder to start using it.`
 			: `Claude Agent SDK ${result.version} installed.`);
-		await view.refreshConfig(); // an open Settings panel shows the new version
+		view.setEngineInstalling(false); // an open Settings panel shows the new version
 		return true;
 	} catch (err) {
 		if (controller.signal.aborted) {
+			view.setEngineInstalling(false);
 			vscode.window.showInformationMessage('Install cancelled. Nothing was changed.');
 		} else {
-			vscode.window.showErrorMessage(`Could not install the Claude Agent SDK: ${err instanceof Error ? err.message : String(err)}`);
+			const reason = `Could not install the Claude Agent SDK: ${err instanceof Error ? err.message : String(err)}`;
+			view.setEngineInstalling(false, reason); // stays in the panel, where a toast would have faded
+			vscode.window.showErrorMessage(reason);
 		}
 		return false;
 	}

@@ -1831,7 +1831,11 @@
 		{ value: 'claude-code', label: 'Claude Code engine', desc: 'The Claude Code harness with any provider and model you pick. Needs the Claude Agent SDK, which Stormcoder can install for you.' },
 	];
 	/** What the host reports about the engine: the setting, what is running, and the SDK on disk. */
-	let engineConfig = { selected: 'builtin', running: 'builtin', installed: '', loaded: '', fastModel: '' };
+	let engineConfig = { selected: 'builtin', running: 'builtin', installed: '', loaded: '', fastModel: '', installing: false, notice: '' };
+	/** A fast-model value sent to the host and not yet confirmed back in a config message. */
+	let pendingFastModel = /** @type {string | null} */ (null);
+	/** Whether the notice line is currently showing a message the host sent (an install problem). */
+	let hostNoticeShown = false;
 
 	/** Renders the Agent-engine cards, SDK status and buttons (radio-style, one selected). */
 	function renderEngine() {
@@ -1849,7 +1853,9 @@
 				<div class="approval-head"><strong>${escapeHtml(opt.label)}</strong>
 					${tag ? `<span class="tag">${tag}</span>` : ''}</div>
 				<div class="approval-desc">${escapeHtml(opt.desc)}</div>`;
-			const choose = () => { if (!selected) { vscode.postMessage({ type: 'setEngine', engine: opt.value }); } };
+			// The selected card is inert, except the Claude Code one when its SDK has gone missing: that installs it.
+			const needsSdk = opt.value === 'claude-code' && !engineConfig.installed;
+			const choose = () => { if (!engineConfig.installing && (!selected || needsSdk)) { vscode.postMessage({ type: 'setEngine', engine: opt.value }); } };
 			card.addEventListener('click', choose);
 			card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(); } });
 			els.engineList.appendChild(card);
@@ -1859,8 +1865,32 @@
 			? `Claude Agent SDK ${engineConfig.installed} is installed.${engineConfig.loaded && engineConfig.loaded !== engineConfig.installed ? ' Restart to use this version.' : ''}`
 			: 'The Claude Agent SDK is not installed. It is a separate package under Anthropic\'s own terms; choosing the Claude Code engine offers to download it.';
 		const label = (ENGINE_OPTIONS.find(o => o.value === engineConfig.selected) || ENGINE_OPTIONS[0]).label;
-		if (els.engineStatus) { els.engineStatus.textContent = pending ? `${sdk} Restart Stormcoder to switch to the ${label}.` : sdk; }
-		if (els.engineInstall) { els.engineInstall.textContent = engineConfig.installed ? 'Update Claude Agent SDK' : 'Install Claude Agent SDK'; }
+		let status = pending ? `${sdk} Restart Stormcoder to switch to the ${label}.` : sdk;
+		if (engineConfig.selected === 'claude-code' && !engineConfig.installed) {
+			status = 'The Claude Code engine is selected but its SDK is not installed, so messages use the built-in agent until it is. Install it below.';
+		}
+		if (engineConfig.installing) { status = 'Downloading the Claude Agent SDK…'; }
+		if (els.engineStatus) { els.engineStatus.textContent = status; }
+		if (els.engineInstall) {
+			els.engineInstall.textContent = engineConfig.installed ? 'Update Claude Agent SDK' : 'Install Claude Agent SDK';
+			els.engineInstall.toggleAttribute('disabled', engineConfig.installing);
+		}
+		els.engineRestart?.toggleAttribute('disabled', false);
+		// What to tell the user under the field: an install problem, or what happened to the value just saved.
+		if (els.engineNotice) {
+			if (engineConfig.notice) {
+				els.engineNotice.textContent = engineConfig.notice;
+				hostNoticeShown = true;
+			} else if (hostNoticeShown) {
+				els.engineNotice.textContent = ''; // the problem it described is over
+				hostNoticeShown = false;
+			} else if (pendingFastModel !== null) {
+				els.engineNotice.textContent = engineConfig.fastModel === pendingFastModel
+					? (pendingFastModel ? 'Saved. The engine uses it from its next request.' : 'Saved. The engine uses the chat\'s own model for background requests.')
+					: 'That value was not accepted. Use the form provider:model, for example openai:gpt-4o-mini.';
+				pendingFastModel = null;
+			}
+		}
 		els.engineRestart?.classList.toggle('hidden', !pending);
 		if (els.engineFastInput && document.activeElement !== els.engineFastInput) { els.engineFastInput.value = engineConfig.fastModel; }
 	}
@@ -2878,7 +2908,9 @@
 			els.engineNotice.textContent = 'Use the form provider:model, for example openai:gpt-4o-mini.';
 			return;
 		}
-		els.engineNotice.textContent = text ? 'Saved. The engine uses it from its next request.' : 'Saved. The engine uses the chat\'s own model for background requests.';
+		// Not "saved" until the host says so: the next config message carries what it kept.
+		els.engineNotice.textContent = 'Saving…';
+		pendingFastModel = text;
 		vscode.postMessage({ type: 'setEngineFast', text });
 	});
 	els.providerSelect.addEventListener('change', () => {
@@ -3248,6 +3280,8 @@
 						installed: typeof e.installed === 'string' ? e.installed : '',
 						loaded: typeof e.loaded === 'string' ? e.loaded : '',
 						fastModel: typeof e.fastModel === 'string' ? e.fastModel : '',
+						installing: e.installing === true,
+						notice: typeof e.notice === 'string' ? e.notice : '',
 					};
 				}
 				if (typeof msg.systemPrompt === 'string') { generalConfig.systemPrompt = msg.systemPrompt; }

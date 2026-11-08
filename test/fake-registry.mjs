@@ -34,7 +34,7 @@ function tarball(files) {
 }
 
 /** Starts the registry. `version` is the only release it publishes. */
-export async function startFakeRegistry({ version = '0.3.17' } = {}) {
+export async function startFakeRegistry({ version = '0.3.17', failFirst = 0, slowMs = 0 } = {}) {
 	const platform = `${SDK}-${process.platform}-${process.arch}`;
 	const sdk = tarball({
 		'package.json': { content: JSON.stringify({ name: SDK, version, type: 'module', exports: { '.': { default: './sdk.mjs' } } }) },
@@ -43,8 +43,10 @@ export async function startFakeRegistry({ version = '0.3.17' } = {}) {
 	const bin = tarball({ 'package.json': { content: JSON.stringify({ name: platform, version }) }, claude: { content: Buffer.alloc(2048, 5), mode: 0o755 } });
 	const sri = buf => `sha512-${crypto.createHash('sha512').update(buf).digest('base64')}`;
 	const requests = [];
+	let failures = failFirst;
 	const server = http.createServer((req, res) => {
 		requests.push(req.url);
+		if (failures > 0 && req.url.startsWith('/@anthropic-ai%2F')) { failures--; res.writeHead(503); res.end('registry unavailable'); return; }
 		const base = `http://127.0.0.1:${server.address().port}`;
 		const json = body => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
 		if (req.url === `/${SDK.replace('/', '%2F')}`) {
@@ -54,7 +56,7 @@ export async function startFakeRegistry({ version = '0.3.17' } = {}) {
 		if (req.url === '/sdk.tgz' || req.url === '/bin.tgz') {
 			const body = req.url === '/sdk.tgz' ? sdk : bin;
 			res.writeHead(200, { 'content-length': body.length });
-			return res.end(body);
+			return slowMs ? setTimeout(() => res.end(body), slowMs) : res.end(body);
 		}
 		res.writeHead(404);
 		res.end();

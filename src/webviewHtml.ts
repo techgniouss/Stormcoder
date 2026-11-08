@@ -121,9 +121,9 @@ export const CHAT_APP_HTML = `
 			<div class="area" data-area="engine">
 						<div class="settings-header"><h2>Agent engine</h2></div>
 			<p class="hint">Who runs the agent. The <strong>built-in agent</strong> is Stormcoder's own loop, tools and Auto mode. The <strong>Claude Code engine</strong> runs the Claude Code harness for every chat, with any provider and model you pick in the model picker; a Claude model on the Anthropic API behaves and costs exactly as it does in Claude Code. The engine is chosen when Stormcoder starts, so a change applies after a restart.</p>
-			<div id="engineList"></div>
+			<div id="engineList" role="radiogroup" aria-label="Agent engine"></div>
 			<p class="hint" id="engineStatus" role="status"></p>
-			<div class="settings-row">
+			<div class="header-actions">
 				<button id="engineInstall" class="mini-button">Install Claude Agent SDK</button>
 				<button id="engineRestart" class="mini-button hidden">Restart now</button>
 			</div>
@@ -135,6 +135,7 @@ export const CHAT_APP_HTML = `
 					<button id="saveEngineFast" class="mini-button">Save</button>
 				</div>
 			</div>
+			<p class="hint">Second opinion: in <strong>Auto routing</strong>, pick a model for the <strong>Review</strong> role, for example <strong>Codex CLI</strong> (install it and run <code>codex login</code> first). With either engine it then reviews each Agent run that changed files, and <code>/review</code> goes straight to it. It reads your project but cannot change it.</p>
 			<p class="hint" id="engineNotice" role="status"></p>
 			</div>
 

@@ -83,6 +83,19 @@ try {
 	assert.equal(registry.requests.length, before, 'no second download');
 	assert.equal(await page.locator('#dialog:not(.hidden)').count(), 0);
 
+	// 5. The engine is selected but its SDK has gone missing: picking it again installs it, instead of
+	//    answering "already using it" and leaving every message on the built-in agent.
+	fs.rmSync(path.join(host.data, 'engines'), { recursive: true, force: true });
+	const downloads = registry.requests.filter(r => r === '/sdk.tgz').length;
+	await openEngineChooser();
+	await page.locator('#paletteList li', { hasText: 'Claude Code engine' }).click();
+	await page.locator('#dialog:not(.hidden)').waitFor({ timeout: 10000 });
+	await page.locator('#dialogActions button', { hasText: 'Install' }).click();
+	// Wait for the effect, not a toast (an earlier one may still be on screen).
+	for (let i = 0; i < 300 && !fs.existsSync(sdkPackage); i++) { await new Promise(r => setTimeout(r, 100)); }
+	assert.ok(fs.existsSync(sdkPackage), 'the SDK was installed again');
+	assert.equal(registry.requests.filter(r => r === '/sdk.tgz').length, downloads + 1);
+
 	assert.deepEqual(errors, [], `page errors: ${errors.join('; ')}`);
 	console.log('engine commands e2e: all assertions passed');
 } catch (err) {
