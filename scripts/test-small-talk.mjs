@@ -71,9 +71,13 @@ assert.doesNotMatch(source, /steerQueues\.delete\(sessionId\);\s*\n\s*const runn
 	'a starting loop keeps the steering typed into its own run');
 // A run's queue dies with the run, so whatever it accepted and never read has to go back
 // the same way a rejected steer does — otherwise the loss just moves to the end of the run.
-assert.strictEqual((source.match(/if \(!controller\.signal\.aborted\) \{\s*\n\s*this\.bounceUndelivered\(sessionId, runId, post\);/g) ?? []).length, 2,
-	'both send paths hand back steering their run never delivered — except after a Stop, '
-	+ 'where returning it would start a fresh run out of the press that ended this one');
+assert.strictEqual((source.match(/if \(!controller\.signal\.aborted\) \{\s*\n\s*this\.bounceUndelivered\(sessionId, runId, post\);/g) ?? []).length, 3,
+	'all three send paths (direct, Auto, and the Claude Code engine) hand back steering their run never delivered — '
+	+ 'except after a Stop, where returning it would start a fresh run out of the press that ended this one');
+// The Claude Code engine does not drain Stormcoder's steering queue, so it declares its run
+// not steerable (never inferred), and a correction typed into it is handed back, not dropped.
+assert.strictEqual((source.match(/this\.declareSteerable\(sessionId, runId, false, post\)/g) ?? []).length, 1,
+	'the Claude Code engine path explicitly declares its run as not steerable');
 assert.match(source, /bounceUndelivered[\s\S]{0,700}?post\(\{ type: 'steerRejected', text: entry\.text \}\)/,
 	'…through the same message the webview already knows how to undo');
 // Vacuous-pass guard: test-webview derives host-sent types from `post({ type: … })` calls,

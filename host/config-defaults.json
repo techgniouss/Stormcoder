@@ -50,6 +50,8 @@
 		"stormcoder.webGemini.enabled": false,
 		"stormcoder.claude-code-cli.model": "",
 		"stormcoder.claude-code-cli.cliPath": "",
+		"stormcoder.codex-cli.model": "",
+		"stormcoder.codex-cli.cliPath": "",
 		"stormcoder.custom.model": "llama3.1",
 		"stormcoder.custom.baseUrl": "http://localhost:11434/v1",
 		"stormcoder.custom.authUrl": "",
@@ -145,6 +147,13 @@
 		"stormcoder.auto.reviewModel": "",
 		"stormcoder.auto.enableReview": true,
 		"stormcoder.auto.decompose": false,
+		"stormcoder.engine": "builtin",
+		"stormcoder.engine.fastModel": "",
+		"stormcoder.engine.claudeCode.sdkPath": "",
+		"stormcoder.engine.claudeCode.cliPath": "",
+		"stormcoder.engine.claudeCode.auth": "gateway",
+		"stormcoder.engine.claudeCode.loadProjectSettings": true,
+		"stormcoder.engine.appendProjectMemory": false,
 		"stormcoder.persona.thinking": true,
 		"stormcoder.persona.environment": true,
 		"stormcoder.persona.compactPrompt": "auto",
@@ -174,6 +183,7 @@
 				"kiro",
 				"web_gemini",
 				"claude-code-cli",
+				"codex-cli",
 				"custom"
 			],
 			"enumDescriptions": [
@@ -196,6 +206,7 @@
 				"%config.provider.kiro%",
 				"%config.provider.web_gemini%",
 				"%config.provider.claude-code-cli%",
+				"%config.provider.codex-cli%",
 				"%config.provider.custom%"
 			],
 			"description": "%config.defaultProvider%"
@@ -403,6 +414,14 @@
 		"stormcoder.claude-code-cli.cliPath": {
 			"type": "string",
 			"description": "%config.claude-code-cli.cliPath%"
+		},
+		"stormcoder.codex-cli.model": {
+			"type": "string",
+			"description": "%config.codex-cli.model%"
+		},
+		"stormcoder.codex-cli.cliPath": {
+			"type": "string",
+			"description": "%config.codex-cli.cliPath%"
 		},
 		"stormcoder.custom.model": {
 			"type": "string",
@@ -662,6 +681,50 @@
 		"stormcoder.auto.decompose": {
 			"type": "boolean",
 			"description": "%config.auto.decompose%"
+		},
+		"stormcoder.engine": {
+			"type": "string",
+			"enum": [
+				"builtin",
+				"claude-code"
+			],
+			"enumDescriptions": [
+				"%config.engine.builtin%",
+				"%config.engine.claudeCode%"
+			],
+			"description": "%config.engine%"
+		},
+		"stormcoder.engine.fastModel": {
+			"type": "string",
+			"description": "%config.engine.fastModel%"
+		},
+		"stormcoder.engine.claudeCode.sdkPath": {
+			"type": "string",
+			"description": "%config.engine.claudeCode.sdkPath%"
+		},
+		"stormcoder.engine.claudeCode.cliPath": {
+			"type": "string",
+			"description": "%config.engine.claudeCode.cliPath%"
+		},
+		"stormcoder.engine.claudeCode.auth": {
+			"type": "string",
+			"enum": [
+				"gateway",
+				"own-login"
+			],
+			"enumDescriptions": [
+				"%config.engine.claudeCode.auth.gateway%",
+				"%config.engine.claudeCode.auth.ownLogin%"
+			],
+			"description": "%config.engine.claudeCode.auth%"
+		},
+		"stormcoder.engine.claudeCode.loadProjectSettings": {
+			"type": "boolean",
+			"description": "%config.engine.claudeCode.loadProjectSettings%"
+		},
+		"stormcoder.engine.appendProjectMemory": {
+			"type": "boolean",
+			"description": "%config.engine.appendProjectMemory%"
 		},
 		"stormcoder.persona.thinking": {
 			"type": "boolean",

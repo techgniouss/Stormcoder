@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as repo from '../src/git/repo';
 import { configureHost, HostEnvironment, readJsonFile, UiEvent, ViewId, writeJsonFile } from './env';
-import { cancelProgress, createContext, deliverToView, deliverUri, ExtensionContext, registeredCommands, reloadSettings, resetHost, runCommand, settingDefaults } from './vscode';
+import { cancelProgress, commands, createContext, deliverToView, deliverUri, ExtensionContext, registeredCommands, reloadSettings, resetHost, runCommand, settingDefaults } from './vscode';
 import COMMAND_LIST from './command-list.json';
 import type { UpdateService } from './updater';
 
@@ -204,6 +204,8 @@ export class Controller {
 		// Prompts the old engine was waiting on can never be answered meaningfully now.
 		this.resolvePending();
 		resetHost();
+		// Lets the engine ask for a restart (e.g. after the agent engine setting changes) without importing Electron.
+		commands.registerCommand('stormcoder.app.relaunch', () => this.opts.appCommand?.('app.relaunch', []));
 		this.viewHtml.clear();
 		this.context = createContext();
 		try {

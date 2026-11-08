@@ -323,4 +323,23 @@ function beforeEach() {
 	assert.ok(plan('o4-mini') < plan('o4'));
 }
 
+// 12. The Codex CLI reviewer: pinnable for the review role (it needs no key and no tools), never
+// chosen automatically, and never able to serve a role that needs tools.
+{
+	beforeEach();
+	const codex = { info: { id: 'codex-cli', label: 'Codex CLI', requiresApiKey: false, supportsTools: false, suggestedModels: ['default'], toolModelPatterns: [], visionModelPatterns: ['^\\x00$'] } };
+	const router = new RoleRouter(registryOf([anthropic, groq, codex], { keys: ['anthropic', 'groq', 'codex-cli'] }));
+	for (const role of ['plan', 'code', 'review']) {
+		const chosen = await router.resolveRoleCandidates(role);
+		assert.ok(chosen.every(a => a.providerId !== 'codex-cli'), `${role}: Auto never picks the Codex CLI on its own`);
+	}
+	settings = { 'auto.reviewModel': 'codex-cli:default', 'auto.codeModel': 'codex-cli:default' };
+	const review = await router.resolveRole('review');
+	assert.deepStrictEqual([review.providerId, review.model, review.source, review.ready], ['codex-cli', 'default', 'configured', true], 'a pinned Codex reviewer is ready without an API key');
+	const code = await router.resolveRole('code');
+	assert.equal(code.ready, false, 'pinned for implementation it is refused: it has no tools');
+	assert.match(code.problem, /not tool-capable/);
+	settings = {};
+}
+
 console.log('test-auto-router: all assertions passed');

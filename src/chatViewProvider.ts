@@ -16,7 +16,9 @@ import { contextTurn, estimateTokens, needsCompactPrompt, unfittableRequest, wit
 import { contextWindowFor, requestBudgets } from './agent/contextWindow';
 import { APPROVAL_POLICIES, ApprovalPolicy, applyApprovalFloor, Guardrails, loadGuardrails, parseApprovalPolicy, RunOrigin } from './agent/guardrails';
 import { ApprovalRequest, ApprovalResult, ToolApprover, UserQuestion, stopBackgroundCommands } from './agent/tools';
-import { AutoOrchestrator, describePinnedModelError, fallbackNote, isModelError, nextCandidate } from './auto/orchestrator';
+import { AutoOrchestrator, describePinnedModelError, fallbackNote, isModelError, nextCandidate, reviewSystem } from './auto/orchestrator';
+import { EngineHost, buildTranscriptSeed } from './engine/engineHost';
+import type { EngineCallbacks } from './engine/claudeEngine';
 import { AUTO_ROLES, AutoRole, RoleAssignment, RoleRouter } from './auto/router';
 import { WebAuthManager } from './auth';
 import { githubAccountLabel, tokenEmailLabel } from './accountLabels';
@@ -36,6 +38,7 @@ import { ModelCatalog } from './providers/modelCatalog';
 import { ChatImage, ChatMessage, ChatProvider, entrySupportsTools, isAbortError, modelSupportsVision, streamChatWithContinuation } from './providers/types';
 import { defaultChromeProfilePath } from './providers/webCookie/chromeCookies';
 import { AttachImageChunk, UploadAssembler, readPickedImages, sanitizeInlineImages } from './remote/attachments';
+import { workingTreeDiff } from './git/repo';
 import { QueueDrainGate } from './session/queueDrain';
 import { appendRules, COMPACT_RULES_CHARS, RulesProvider } from './rules';
 
@@ -60,6 +63,9 @@ export type InlineKind = 'explain' | 'fix' | 'doc' | 'optimize' | 'tests' | 'edi
 
 /** Sentinel provider id selecting the role-routed "Auto" pipeline instead of one provider. */
 const AUTO_PROVIDER = '__auto__';
+
+/** Workspace-state key for the engine session id of each chat (see `engineSessions`). */
+const ENGINE_SESSIONS_KEY = 'stormcoder.engineSessions';
 /**
  * Default agent step budget. Sized for real work — "find the bugs in this extension and
  * fix them" is dozens of reads, edits, builds and re-checks — rather than a quick Q&A.
@@ -579,6 +585,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		newId: () => 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
 	};
 
+	/**
+	 * Runs the Claude Code engine when `stormcoder.engine` selected it at start. Always constructed (it
+	 * only reads the setting), but it starts nothing, not even its local gateway, unless a turn uses it.
+	 */
+	private readonly engineHost: EngineHost;
+	/** The Claude Code engine's own session id for each chat, so a follow-up continues the same engine conversation. */
+	private readonly engineSessions: Map<string, string>;
+	/** Chats that have already been told which engine and model they run on. */
+	private readonly engineAnnounced = new Set<string>();
+	/** A review that found problems, to be put in front of the engine at the start of the chat's next turn. */
+	private readonly pendingReviews = new Map<string, string>();
+
 	constructor(
 		private readonly context: vscode.ExtensionContext,
 		private readonly registry: ProviderRegistry,
@@ -589,6 +607,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		this.skills = new SkillRegistry(context.extensionUri);
 		this.sessionOutput = vscode.window.createOutputChannel('Stormcoder: Sessions');
 		context.subscriptions.push(this.sessionOutput);
+		this.engineHost = new EngineHost({ context, registry, catalog: id => this.modelCache.get(id), log: line => this.sessionOutput.appendLine(line) });
+		this.engineSessions = new Map(Object.entries(context.workspaceState.get<Record<string, string>>(ENGINE_SESSIONS_KEY) ?? {}));
 		this.sessionMemento = {
 			get: (key, defaultValue) => context.workspaceState.get(key, defaultValue),
 			update: (key, value) => Promise.resolve(context.workspaceState.update(key, value)),
@@ -2728,6 +2748,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			this.appendUserTurn(sessionId, runId, message.text ?? '', images.length ? images : undefined, origin, message.fromEditor === true && origin === WEBVIEW_SINK_ID);
 		}
 
+		// With the Claude Code engine selected at start, every chat goes through it: Auto and the
+		// built-in loop are never reached, so a turn costs one model path, not two.
+		if (this.engineHost.enabled) {
+			await this.handleEngineSend(requestedMode, message, sessionId, runId, origin, post, guardrails, fail);
+			return;
+		}
+
 		if (message.provider === AUTO_PROVIDER) {
 			await this.handleAutoSend(requestedMode, message, sessionId, runId, origin);
 			return;
@@ -2917,6 +2944,231 @@ ${context.content}` }
 	 * that ends for any reason other than "finished" must say so — silence reads as the
 	 * chat having crashed mid-task.
 	 */
+	/**
+	 * One chat turn under `stormcoder.engine: claude-code`. The Claude Code harness runs the loop;
+	 * Stormcoder is its model gateway, its guardrails (every tool call passes `engine/toolBridge`)
+	 * and its UI. No `AgentRunner` or `AutoOrchestrator` is built and none of Stormcoder's own side
+	 * calls (compaction, memory proposals) are made, so a turn is one model path.
+	 */
+	private async handleEngineSend(
+		requestedMode: ChatMode, message: WebviewToHost, sessionId: string, runId: string, origin: string,
+		post: SessionPost, guardrails: Guardrails, fail: (text: string) => void,
+	): Promise<void> {
+		if (requestedMode === 'edit') {
+			fail('Edit mode works on the open editor and is not available with the Claude Code engine. Use Agent or Plan.');
+			return;
+		}
+		const mode: 'ask' | 'plan' | 'agent' = requestedMode === 'agent' || requestedMode === 'plan' ? requestedMode : 'ask';
+		const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		if (!folder) {
+			fail('Open a folder first: the Claude Code engine works inside a project folder.');
+			return;
+		}
+		const providerId = message.provider && message.provider !== AUTO_PROVIDER && this.registry.getProvider(message.provider)
+			? message.provider : this.registry.getDefaultProviderId();
+		const provider = this.registry.getProvider(providerId);
+		if (!provider) {
+			fail(`Unknown provider: ${providerId}`);
+			return;
+		}
+		let apiKey: string | undefined;
+		try {
+			apiKey = await this.registry.getApiKey(providerId);
+		} catch (err) {
+			fail(err instanceof Error ? err.message : String(err));
+			return;
+		}
+		if (provider.info.requiresApiKey && !apiKey) {
+			this.clearSteerable(sessionId, runId);
+			this.endSessionRun(sessionId);
+			post({ type: 'error', message: `No API key for ${provider.info.label}. Open the Providers panel (gear icon) to add a key or sign in.`, needsKey: true, provider: providerId });
+			post({ type: 'done' });
+			return;
+		}
+		const model = (message.model && message.model.trim()) || this.registry.getModel(providerId);
+		const resolved = this.engineHost.resolveRoute({ providerId, model });
+		if (!resolved.route) {
+			fail(resolved.problems.join(' '));
+			return;
+		}
+		const fromStore = this.sessionStore.getSession(sessionId) ? this.sessionStore.sendableMessages(sessionId) : undefined;
+		const history = this.sanitizeHistory(fromStore ?? message.messages ?? []);
+		const last = history.at(-1);
+		if (!last || last.role !== 'user') {
+			fail('There is nothing to send.');
+			return;
+		}
+		if (last.images?.length && !modelSupportsVision(provider.info, model)) {
+			fail(`The model "${model}" doesn't support image input. Remove the attached image(s) or pick a vision-capable model.`);
+			return;
+		}
+
+		this.trackSessionSend(sessionId, mode, providerId, model);
+		// The engine does not drain Stormcoder's steering queue, so a correction typed mid-run is not accepted.
+		this.declareSteerable(sessionId, runId, false, post);
+		this.activeRequests.get(sessionId)?.abort();
+		const controller = new AbortController();
+		this.activeRequests.set(sessionId, controller);
+
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
+		const resumeId = this.engineSessions.get(sessionId);
+		let finalText = '';
+		// A review runs only when this run changed the tree, so the tree is compared before and after;
+		// without a pinned reviewer (or a git repository) none of this costs anything.
+		const reviewPinned = mode === 'agent' && !!this.router.getConfigured('review') && this.router.isReviewEnabled();
+		const diffBefore = reviewPinned ? await workingTreeDiff(folder).catch(() => undefined) : undefined;
+		const callbacks: EngineCallbacks = {
+			onStepStart: () => post({ type: 'agentStepStart' }),
+			onToken: delta => post({ type: 'token', delta }),
+			onStepEnd: content => {
+				post({ type: 'agentStepEnd', content });
+				if (content.trim()) { finalText = content; this.recordAssistantTurn(sessionId, content); }
+			},
+			onToolStart: (call, parentCallId) => post({ type: 'toolStart', id: call.id, name: call.name, args: call.args, parentCallId }),
+			onToolEnd: (call, result, isError, parentCallId) => post({ type: 'toolEnd', id: call.id, name: call.name, result, isError, parentCallId }),
+			onNote: text => post({ type: 'info', message: text }),
+			onTodos: items => post({ type: 'todos', items }),
+			onUsage: u => this.sessionOutput.appendLine(`[engine ${sessionId}] ${u.path} ${u.providerId}:${u.model} in=${u.inputTokens} out=${u.outputTokens} cacheRead=${u.cacheReadTokens} cacheWrite=${u.cacheWriteTokens}${u.estimated ? ' (estimated)' : ''}`),
+		};
+		try {
+			post({ type: 'todos', items: [] });
+			if (!this.engineAnnounced.has(sessionId)) {
+				this.engineAnnounced.add(sessionId);
+				post({ type: 'info', message: `Claude Code engine · ${provider.info.label} · ${model}${resolved.warnings.length ? `\n${resolved.warnings.join('\n')}` : ''}` });
+			}
+			const context = await this.resolveContext(mode, message.context, 0, undefined);
+			// What the reviewer found last turn goes in front of the engine once, with the user's follow-up.
+			const review = this.pendingReviews.get(sessionId);
+			this.pendingReviews.delete(sessionId);
+			const request = review ? `A second reviewer examined your last changes and reported:\n\n${review}\n\nMy message now:\n${last.content}` : last.content;
+			const result = await this.engineHost.run({
+				sessionId,
+				prompt: context?.content ? `${context.content}\n\n${request}` : request,
+				images: last.images,
+				cwd: folder,
+				route: resolved.route,
+				mode,
+				guardrails,
+				approver: this.approverFor(sessionId, runId, controller.signal),
+				trusted: vscode.workspace.isTrusted,
+				signal: controller.signal,
+				resumeId,
+				transcriptSeed: resumeId ? undefined : buildTranscriptSeed(history.slice(0, -1)) || undefined,
+				appendPrompt: cfg.get<boolean>('engine.appendProjectMemory') === true ? (await this.memoryBlock(sessionId)) || undefined : undefined,
+				maxTurns: this.configuredMaxSteps(),
+				contextWindow: resolved.contextWindow,
+				title: last.content.replace(/\s+/g, ' ').trim().slice(0, 60) || undefined,
+			}, callbacks);
+			if (result.sessionId) {
+				this.rememberEngineSession(sessionId, result.sessionId);
+			} else if (resumeId && result.reason === 'error') {
+				// A session the engine no longer has would fail every later turn the same way.
+				this.rememberEngineSession(sessionId, undefined);
+			}
+			this.reportStop(post, result);
+			if (result.reason === 'done' && diffBefore !== undefined && !controller.signal.aborted) {
+				await this.reviewEngineRun(sessionId, folder, last.content, finalText, diffBefore, post, controller.signal);
+			}
+		} catch (err) {
+			if (!isAbortError(err)) {
+				post({ type: 'error', message: err instanceof Error ? err.message : String(err) });
+			}
+		} finally {
+			if (this.activeRequests.get(sessionId) === controller) {
+				this.activeRequests.delete(sessionId);
+				if (!controller.signal.aborted) {
+					this.bounceUndelivered(sessionId, runId, post);
+				}
+				this.steerQueues.delete(sessionId);
+			}
+			this.clearSteerable(sessionId, runId);
+			this.endSessionRun(sessionId);
+			this.announceCheckpoint(sessionId, runId, post);
+			post({ type: 'done' });
+		}
+	}
+
+	/**
+	 * An independent review of what an engine run changed, by the model pinned as the review model
+	 * (for example `codex-cli:default`). Only an explicit pin runs one: an inferred reviewer would be a
+	 * second model call the user never asked for. Nothing runs when the run left the working tree as
+	 * it found it (`diffBefore`), and a reviewer that cannot run is reported, never allowed to fail
+	 * the turn. The reviewer sees the whole diff against the last commit, which includes any
+	 * uncommitted work that was there before the run.
+	 */
+	private async reviewEngineRun(sessionId: string, folder: string, request: string, summary: string, diffBefore: string, post: SessionPost, signal: AbortSignal): Promise<void> {
+		const assignment = await this.router.resolveRole('review');
+		const provider = this.registry.getProvider(assignment.providerId);
+		if (!assignment.ready || !provider) {
+			post({ type: 'info', message: `Review skipped: ${assignment.problem ?? 'the review model is unavailable.'}` });
+			return;
+		}
+		let diff: string;
+		try {
+			diff = await workingTreeDiff(folder);
+		} catch {
+			return; // not a git repository: there is nothing reliable to review
+		}
+		if (!diff.trim() || diff === diffBefore) {
+			return; // this run changed nothing
+		}
+		post({
+			type: 'autoPhase', role: 'review', label: assignment.roleLabel,
+			provider: assignment.providerLabel, model: assignment.model, source: assignment.source, streaming: true,
+		});
+		let text = '';
+		try {
+			const budgets = this.budgetsFor(assignment.model, this.registry.getMaxTokens(), assignment.providerId);
+			await withProviderResilience(this.registry, assignment.providerId, assignment.model, apiKey => streamBudgeted(provider, {
+				messages: [
+					{ role: 'system', content: reviewSystem('You review code changes that another AI agent made in this project.') },
+					{
+						role: 'user',
+						content: `Original request:\n${request}\n\nThe agent's closing summary:\n${summary || '(none)'}\n\n`
+							+ `Changes made (git diff against the last commit):\n${diff}\n\n`
+							+ 'Review the changes against the request. Point out correctness bugs, missed steps and risks. '
+							+ 'Be concise and specific. If it is correct and complete, say so.',
+					},
+				],
+				model: assignment.model,
+				apiKey,
+				baseUrl: this.registry.getBaseUrl(assignment.providerId),
+				...budgets,
+				signal,
+				onToken: delta => { text += delta; post({ type: 'token', delta }); },
+				onNotice: notice => post({ type: 'info', message: notice }),
+			}), () => !text && !signal.aborted);
+		} catch (err) {
+			if (isAbortError(err)) {
+				throw err;
+			}
+			post({ type: 'error', message: `The review could not run: ${err instanceof Error ? err.message : String(err)}` });
+			return;
+		}
+		const verdict = stripThinking(text).trim();
+		if (verdict) {
+			this.recordAssistantTurn(sessionId, verdict);
+			if (/^\s*\**VERDICT:?\**\s*ISSUES/im.test(verdict)) {
+				this.pendingReviews.set(sessionId, verdict);
+			}
+		}
+	}
+
+	/** Remembers (or forgets, with `undefined`) the engine session a chat continues. */
+	private rememberEngineSession(sessionId: string, engineSessionId: string | undefined): void {
+		if (engineSessionId) {
+			this.engineSessions.set(sessionId, engineSessionId);
+		} else {
+			this.engineSessions.delete(sessionId);
+		}
+		void this.context.workspaceState.update(ENGINE_SESSIONS_KEY, Object.fromEntries(this.engineSessions));
+	}
+
+	/** Stops the engine's local gateway. Called when the app shuts the engine down. */
+	async disposeEngine(): Promise<void> {
+		await this.engineHost.dispose();
+	}
+
 	private reportStop(post: SessionPost, result: RunResult): void {
 		if (result.reason === 'done' || !result.detail) {
 			return;

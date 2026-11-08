@@ -1,0 +1,188 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Stormcoder contributors. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import * as path from 'path';
+import * as vscode from 'vscode';
+import type { ProviderRegistry } from '../providers/registry';
+import { ChatMessage, ModelEntry } from '../providers/types';
+import { checkTarget } from './capabilities';
+import { ClaudeEngine, EngineCallbacks, EngineResult, EngineTurn, SdkLocation, TESTED_SDK_SERIES, loadClaudeSdk } from './claudeEngine';
+import { AnthropicGateway } from './gateway';
+import { EngineTarget, SessionRoute } from './modelMap';
+
+/** Who runs the agent loop. */
+export type EngineId = 'builtin' | 'claude-code';
+
+/**
+ * Reads `stormcoder.engine`. Anything unrecognised is the built-in engine: a typo in settings must
+ * never route work to an agent the user did not choose.
+ */
+export function readEngineSetting(): EngineId {
+	return vscode.workspace.getConfiguration('stormcoder').get<string>('engine') === 'claude-code' ? 'claude-code' : 'builtin';
+}
+
+let engineAtStart: EngineId | undefined;
+
+/**
+ * The engine selected when the app started. Read once per process and then fixed: the extension is
+ * re-activated whenever the folder changes, and a setting edited meanwhile must not switch the
+ * engine under a running app. A restart picks the new value up.
+ */
+export function engineSelectedAtStart(): EngineId {
+	engineAtStart ??= readEngineSetting();
+	return engineAtStart;
+}
+
+/** A route for the engine, or why there is none. */
+export interface RouteResolution {
+	readonly route?: SessionRoute;
+	readonly problems: string[];
+	readonly warnings: string[];
+	/** The main model's context window. */
+	readonly contextWindow: number;
+}
+
+/** Parses a `provider:model` setting. */
+export function parseTarget(raw: string | undefined): EngineTarget | undefined {
+	const value = (raw ?? '').trim();
+	const split = value.indexOf(':');
+	if (split <= 0 || split === value.length - 1) {
+		return undefined;
+	}
+	return { providerId: value.slice(0, split).trim(), model: value.slice(split + 1).trim() };
+}
+
+/**
+ * The most recent messages of an earlier conversation as plain text, for a chat that began under
+ * the other engine and so has no engine session to resume. Built by excerpting, not by asking a
+ * model to summarise: seeding must never cost a model call.
+ */
+export function buildTranscriptSeed(history: readonly ChatMessage[], maxChars = 4_000, perMessage = 600): string {
+	const lines: string[] = [];
+	let used = 0;
+	for (let i = history.length - 1; i >= 0; i--) {
+		const m = history[i];
+		if ((m.role !== 'user' && m.role !== 'assistant') || !m.content.trim()) {
+			continue;
+		}
+		const text = m.content.trim();
+		const clipped = text.length > perMessage ? `${text.slice(0, perMessage)}…` : text;
+		const line = `${m.role === 'user' ? 'User' : 'Assistant'}: ${clipped}`;
+		if (used + line.length > maxChars && lines.length) {
+			break;
+		}
+		lines.unshift(line);
+		used += line.length;
+	}
+	return lines.join('\n');
+}
+
+/** Everything the host needs to know about the app around it. */
+export interface EngineHostOptions {
+	readonly context: vscode.ExtensionContext;
+	readonly registry: ProviderRegistry;
+	readonly catalog: (providerId: string) => ModelEntry[] | undefined;
+	readonly log: (line: string) => void;
+}
+
+/**
+ * Owns the Claude Code engine for the life of the app: reads which engine is selected (once, at
+ * start), runs the local gateway on first use, and resolves a chat's model choice into the route
+ * the gateway serves.
+ */
+export class EngineHost {
+	/** The engine selected when the app started. Changing the setting takes effect after a restart. */
+	readonly id: EngineId;
+	private gateway?: AnthropicGateway;
+	private starting?: Promise<AnthropicGateway>;
+	private readonly engine: ClaudeEngine;
+
+	constructor(private readonly options: EngineHostOptions) {
+		this.id = engineSelectedAtStart();
+		this.engine = new ClaudeEngine({
+			gateway: () => this.gateway,
+			load: async () => {
+				const { sdk, found } = await loadClaudeSdk(this.sdkLocation());
+				if (found.compat === 'untested') {
+					this.options.log(`Claude Agent SDK ${found.version} is outside the tested ${TESTED_SDK_SERIES}.x series; it may still work.`);
+				}
+				return sdk;
+			},
+		});
+	}
+
+	/** Whether the Claude Code engine is the one in use. */
+	get enabled(): boolean {
+		return this.id === 'claude-code';
+	}
+
+	/** Where the SDK may be installed. */
+	sdkLocation(): SdkLocation {
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
+		return {
+			sdkPath: cfg.get<string>('engine.claudeCode.sdkPath') ?? '',
+			userDataDir: path.dirname(this.options.context.globalStorageUri.fsPath),
+			appRoot: this.options.context.extensionPath,
+		};
+	}
+
+	/** Starts the gateway if it is not running. */
+	async ensureStarted(): Promise<AnthropicGateway> {
+		if (this.gateway?.listening) {
+			return this.gateway;
+		}
+		this.starting ??= (async () => {
+			const gateway = new AnthropicGateway({
+				registry: this.options.registry,
+				catalog: this.options.catalog,
+				log: line => this.options.log(`[gateway] ${line}`),
+			});
+			await gateway.start();
+			this.gateway = gateway;
+			return gateway;
+		})().finally(() => { this.starting = undefined; });
+		return this.starting;
+	}
+
+	/**
+	 * The route for a chat whose picker says `main`: the fast model comes from
+	 * `stormcoder.engine.fastModel`, or is the main model when that is empty. Both are checked
+	 * against what the harness needs, so a model that cannot serve it is refused here with a reason
+	 * and never fails halfway through a task.
+	 */
+	resolveRoute(main: EngineTarget): RouteResolution {
+		const configuredFast = parseTarget(vscode.workspace.getConfiguration('stormcoder').get<string>('engine.fastModel'));
+		const fast = configuredFast ?? main;
+		const mainCheck = checkTarget(main, this.options.registry.getProvider(main.providerId), this.options.catalog(main.providerId));
+		const problems = [...mainCheck.problems];
+		const warnings = [...mainCheck.warnings];
+		if (fast !== main) {
+			const fastCheck = checkTarget(fast, this.options.registry.getProvider(fast.providerId), this.options.catalog(fast.providerId));
+			problems.push(...fastCheck.problems.map(p => `Fast model: ${p}`));
+		}
+		return { route: problems.length ? undefined : { main, fast }, problems, warnings, contextWindow: mainCheck.contextWindow };
+	}
+
+	/** Runs one chat turn through the harness. */
+	async run(turn: Omit<EngineTurn, 'auth' | 'cliPath' | 'loadProjectSettings'>, callbacks: EngineCallbacks): Promise<EngineResult> {
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
+		const auth = cfg.get<string>('engine.claudeCode.auth') === 'own-login' ? 'own-login' : 'gateway';
+		if (auth === 'gateway') {
+			await this.ensureStarted();
+		}
+		return this.engine.run({
+			...turn,
+			auth,
+			cliPath: cfg.get<string>('engine.claudeCode.cliPath')?.trim() || undefined,
+			loadProjectSettings: cfg.get<boolean>('engine.claudeCode.loadProjectSettings') !== false,
+		}, callbacks);
+	}
+
+	/** Stops the gateway. */
+	async dispose(): Promise<void> {
+		await this.gateway?.stop();
+		this.gateway = undefined;
+	}
+}

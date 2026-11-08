@@ -286,6 +286,7 @@ if (!app.requestSingleInstanceLock()) {
 					case 'app.zoomOut': return window?.webContents.setZoomLevel(window.webContents.getZoomLevel() - 0.5);
 					case 'app.zoomReset': return window?.webContents.setZoomLevel(0);
 					case 'app.quit': return app.quit();
+					case 'app.relaunch': app.relaunch(); return app.quit();
 					default: return undefined;
 				}
 			},

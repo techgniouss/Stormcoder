@@ -71,8 +71,10 @@ export interface RoleAssignment {
 // against a consumer chat UI, off by default behind its own setting) — all barred from
 // automatic selection; a user who wants one pins it explicitly per role. claude-code-cli
 // joins `custom` for the same reason `custom` is here: it's a local binary that may not be
-// installed, so Auto must not gamble on it being reachable on the user's behalf.
-const NOT_AUTO_INFERRED = new Set(['custom', 'antigravity', 'copilot', 'grok', 'kiro', 'web_gemini', 'claude-code-cli']);
+// installed, so Auto must not gamble on it being reachable on the user's behalf. codex-cli is
+// the same: a local binary, and one that spends the user's ChatGPT/Codex quota, so it is only
+// ever used when pinned (for example as the review model).
+const NOT_AUTO_INFERRED = new Set(['custom', 'antigravity', 'copilot', 'grok', 'kiro', 'web_gemini', 'claude-code-cli', 'codex-cli']);
 
 /**
  * Models never selected *on the user's behalf*, however well they would serve the role.

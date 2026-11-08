@@ -215,7 +215,7 @@ function installHint(binary: string, detail?: string): string {
  * readable transcript — there is no `messages` array on this wire, so this is the only way to
  * give the CLI prior turns at all (see the class doc).
  */
-function buildPrompt(messages: ChatMessage[]): string {
+export function buildPrompt(messages: ChatMessage[]): string {
 	const system = messages.filter(m => m.role === 'system' && m.content.trim()).map(m => m.content.trim());
 	const turns = messages.filter(m => m.role !== 'system' && m.content.trim());
 	const parts: string[] = [];

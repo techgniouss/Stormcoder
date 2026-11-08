@@ -77,6 +77,21 @@ function isOAuthToken(apiKey: string): boolean {
 	return apiKey.startsWith('sk-ant-oat');
 }
 
+/**
+ * The auth and version headers for a request to Anthropic's Messages API with `apiKey`, with
+ * `betas` merged into `anthropic-beta`. One place for how a credential is sent, shared by this
+ * provider and the engine gateway's pass-through, so the two can never disagree about it.
+ */
+export function anthropicAuthHeaders(apiKey: string, betas: readonly string[] = []): Record<string, string> {
+	const oauth = isOAuthToken(apiKey);
+	const beta = [...new Set([...(oauth ? [OAUTH_BETA] : []), ...betas])];
+	return {
+		...(oauth ? { 'Authorization': `Bearer ${apiKey}` } : { 'x-api-key': apiKey }),
+		'anthropic-version': ANTHROPIC_VERSION,
+		...(beta.length ? { 'anthropic-beta': beta.join(',') } : {}),
+	};
+}
+
 /** A request body's thinking choices; see {@link AnthropicProvider.buildBody}. */
 interface ThinkingPlan {
 	/** The `thinking` parameter, or undefined to omit it. */
@@ -151,14 +166,7 @@ export class AnthropicProvider implements ChatProvider {
 	}
 
 	private headers(apiKey: string, betas: string[] = []): Record<string, string> {
-		const oauth = isOAuthToken(apiKey);
-		const beta = [...(oauth ? [OAUTH_BETA] : []), ...betas];
-		return {
-			'Content-Type': 'application/json',
-			...(oauth ? { 'Authorization': `Bearer ${apiKey}` } : { 'x-api-key': apiKey }),
-			'anthropic-version': ANTHROPIC_VERSION,
-			...(beta.length ? { 'anthropic-beta': beta.join(',') } : {}),
-		};
+		return { 'Content-Type': 'application/json', ...anthropicAuthHeaders(apiKey, betas) };
 	}
 
 	/** The thinking this request asks for, or none. See {@link ThinkingStyle}. */

@@ -741,3 +741,60 @@ export async function stagedDiff(cwd: string): Promise<string> {
 	const root = await requireRoot(cwd);
 	return ok(['diff', '--cached', '--no-color', '--no-ext-diff', '--no-textconv'], root);
 }
+
+/** Limits for {@link workingTreeDiff}. */
+export interface WorkingTreeDiffLimits {
+	/** Longest result, in characters; the rest is replaced by a marker. */
+	readonly maxChars: number;
+	/** Most new (untracked) files included. */
+	readonly maxNewFiles: number;
+	/** Longest new file included whole, in bytes. */
+	readonly maxNewFileBytes: number;
+}
+
+const DEFAULT_DIFF_LIMITS: WorkingTreeDiffLimits = { maxChars: 60_000, maxNewFiles: 20, maxNewFileBytes: 20_000 };
+
+/**
+ * Everything the working tree changed since the last commit, as text for a reviewer: staged and
+ * unstaged edits, plus the new files git does not yet track (shown as all-added). Read-only: the
+ * index is not touched. Bounded, so a generated file cannot flood a model request.
+ */
+export async function workingTreeDiff(cwd: string, limits: WorkingTreeDiffLimits = DEFAULT_DIFF_LIMITS): Promise<string> {
+	const root = await requireRoot(cwd);
+	const flags = ['--no-color', '--no-ext-diff', '--no-textconv'];
+	let tracked: string;
+	try {
+		tracked = await ok(['diff', 'HEAD', ...flags], root);
+	} catch {
+		// A repository with no commit yet has no HEAD: staged and unstaged changes are separate then.
+		tracked = (await ok(['diff', '--cached', ...flags], root)) + (await ok(['diff', ...flags], root));
+	}
+	const parts = [tracked];
+	const fresh = (await ok(['ls-files', '--others', '--exclude-standard'], root)).split('\n').filter(Boolean);
+	for (const rel of fresh.slice(0, limits.maxNewFiles)) {
+		const file = path.join(root, rel);
+		if (path.relative(root, file).startsWith('..')) {
+			continue;
+		}
+		try {
+			const stat = await fs.promises.stat(file);
+			if (!stat.isFile() || stat.size > limits.maxNewFileBytes) {
+				parts.push(`new file ${rel} (${stat.size} bytes, not shown)\n`);
+				continue;
+			}
+			const text = await fs.promises.readFile(file, 'utf8');
+			if (text.includes('\u0000')) {
+				parts.push(`new binary file ${rel} (not shown)\n`);
+				continue;
+			}
+			parts.push(`diff --git a/${rel} b/${rel}\nnew file\n--- /dev/null\n+++ b/${rel}\n${text.split('\n').map(line => `+${line}`).join('\n')}\n`);
+		} catch {
+			// vanished or unreadable between listing and reading: nothing to review
+		}
+	}
+	if (fresh.length > limits.maxNewFiles) {
+		parts.push(`… and ${fresh.length - limits.maxNewFiles} more new file(s)\n`);
+	}
+	const all = parts.join('\n');
+	return all.length > limits.maxChars ? `${all.slice(0, limits.maxChars)}\n… [diff truncated, ${all.length} characters in total]\n` : all;
+}

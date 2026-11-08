@@ -9,6 +9,7 @@ import * as vscode from 'vscode';
 import { WebAuthManager } from './auth';
 import { RoleRouter } from './auto/router';
 import { ChatViewProvider, InlineKind } from './chatViewProvider';
+import { engineSelectedAtStart, readEngineSetting } from './engine/engineHost';
 import { cancelDraftCommitMessage, draftCommitMessage, generateCommitMessage } from './git/commitMessage';
 import { McpManager, isMissingFile, promptingConsent, rememberProjectConsent } from './mcp/manager';
 import { loadEnvFile } from './oauth';
@@ -38,6 +39,9 @@ function applyStreamIdleTimeout(): void {
  */
 let activeViewProvider: ChatViewProvider | undefined;
 
+/** Whether the "restart to switch engine" prompt is already on screen. */
+let restartOffered = false;
+
 export function activate(context: vscode.ExtensionContext): void {
 	loadEnvFile(context.extensionPath);
 	// An installed app's own folder is read-only, so a user's .env lives in the user data folder.
@@ -57,6 +61,25 @@ export function activate(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(mcp);
 	const remoteService = new RemoteService(context, viewProvider);
 	context.subscriptions.push(remoteService);
+	// The engine is chosen once, at start. Offer a restart when the setting is changed to something
+	// else, instead of silently ignoring the edit or switching under a running app.
+	context.subscriptions.push(
+		{ dispose: () => { void viewProvider.disposeEngine(); } },
+		vscode.workspace.onDidChangeConfiguration(e => {
+			if (e.affectsConfiguration('stormcoder.engine') && readEngineSetting() !== engineSelectedAtStart() && !restartOffered) {
+				restartOffered = true;
+				void vscode.window.showInformationMessage(
+					`Stormcoder will use the ${readEngineSetting() === 'claude-code' ? 'Claude Code' : 'built-in'} engine after a restart.`,
+					'Restart now',
+				).then(choice => {
+					restartOffered = false;
+					if (choice === 'Restart now') {
+						void vscode.commands.executeCommand('stormcoder.app.relaunch');
+					}
+				});
+			}
+		}),
+	);
 
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, viewProvider, {

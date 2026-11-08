@@ -862,7 +862,8 @@ function codeSystem(base: string, compact = false, thinking?: boolean): string {
 		+ 'using your tools to make and verify the changes. When finished, briefly summarize what you changed.';
 }
 
-function reviewSystem(base: string): string {
+/** The reviewer's instructions, ending in the `VERDICT:` line the callers read. */
+export function reviewSystem(base: string): string {
 	return `${base}\n\nYou are the REVIEWER in an automated plan→implement→review pipeline. You did NOT ` +
 		`write this code. Critically review the implementation against the original request and plan: ` +
 		`correctness, missed steps, bugs and risks. Be concise and specific. If it is correct and complete, ` +
