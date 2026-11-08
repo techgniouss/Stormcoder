@@ -120,6 +120,11 @@ export const REMOTE_DENIED: readonly string[] = [
 	'signIn',
 	'setRole',
 	'setApproval',
+	// Engine choice: it can start a download and decides what runs the agent, and a restart ends the session.
+	'setEngine',
+	'installEngine',
+	'setEngineFast',
+	'restartApp',
 	'setReviewEnabled',
 	'setCloudflareAccountId',
 	'setBaseUrl',

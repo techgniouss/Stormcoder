@@ -159,6 +159,7 @@ Features are decided per **upstream**, per request, in `src/engine/capabilities.
   sub-agents; `agent.commandTimeoutMs` clamps a command's timeout (through the hook's rewritten
   input); `agent.sandbox` becomes the harness's own fail-closed OS sandbox, and a request to leave
   it is refused; `Glob`/`Grep` are judged by their patterns as well as their paths.
+- **The panel's messages are desktop-only:** `setEngine`, `installEngine`, `setEngineFast` and `restartApp` are in `REMOTE_DENIED`, and the engine block is stripped from the config a paired phone receives, so a phone can neither switch the engine, start a download, nor restart the app.
 - **Never set:** `allowDangerouslySkipPermissions`, `bypassPermissions`, plugins, `user` settings.
 - **MCP:** `strictMcpConfig: true`; only servers Stormcoder itself started (trusted folders).
 
@@ -235,6 +236,7 @@ request). Switching engines mid-conversation therefore keeps the gist, not the f
 | Engine host: boot-once selection, routes, gateway lifecycle, preflight, start-failure circuit breaker | `src/engine/engineHost.ts` | `scripts/test-engine-host.mjs` |
 | SDK installer: verified download, streaming tar extraction, atomic swap | `src/engine/installer.ts` | `scripts/test-engine-installer.mjs` (22 tests, every failure leaves the old install intact); the extractor was also compared byte for byte with system `tar` on two real npm packages |
 | Routing seam, fallback, restart prompt, post-run review, `/review` | `src/chatViewProvider.ts`, `src/extension.ts`, `host/controller.ts`, `electron/main.ts` | `test/engine-e2e.mjs` |
+| Settings > Agent engine panel (option cards, SDK status, install, restart, fast model) | `src/webviewHtml.ts`, `media/main.js`, `shell/frame.js`, `src/chatViewProvider.ts` | `test/engine-panel-e2e.mjs`, through the real UI; the desktop-only classification and the phone redaction are in `scripts/test-remote-policy.mjs` and `test-remote-redaction.mjs` |
 | Palette commands: choose engine, install SDK | `src/extension.ts` | `test/engine-commands-e2e.mjs`, through the real UI |
 | Codex read-only reviewer | `src/providers/codexCli.ts` | `scripts/test-codex-cli.mjs`, router assertions in `scripts/test-auto-router.mjs` |
 | Per-file working-tree diff for reviews | `src/git/repo.ts` | `scripts/test-engine-review.mjs` against real git repositories |
@@ -295,8 +297,6 @@ degrade to the built-in agent, not take the app down:
 
 ### Known limits
 
-- No Settings-panel row for the engine; the **Choose Agent Engine** command (palette) and
-  `settings.json` are the ways in. A panel row is a UI change and needs the taste-skill pass.
 - With the engine on: no Auto (an explicit Auto selection runs on the chat's own model, and the chat
   says so), no mid-run steering, no background commands (`run_in_background` is refused), no MCP
   servers from Stormcoder's list, no Stormcoder skills.
@@ -310,9 +310,11 @@ degrade to the built-in agent, not take the app down:
 
 ## 12. Using it
 
-1. Run **Stormcoder: Choose Agent Engine (Built-in or Claude Code)** from the command palette and pick
-   the Claude Code engine. It offers to install the SDK first (or run **Install Claude Code Engine**
-   on its own). Restart when asked.
+1. Open **Settings > Agent engine** and pick the Claude Code engine (or run **Stormcoder: Choose Agent
+   Engine** from the command palette). It offers to install the SDK first, after a notice naming
+   Anthropic's terms; **Install Claude Agent SDK** on the same page does just the download. The page
+   shows which engine is running, which is selected for next start, and the installed SDK version.
+   Restart when asked (the page has a **Restart now** button).
 2. Pick any provider and model in the model picker. For the harness's small background requests set
    `stormcoder.engine.fastModel` to a cheap `provider:model`.
 3. Optional second opinion: install the Codex CLI, run `codex login`, and set

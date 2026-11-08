@@ -316,6 +316,10 @@ export function redactForRemote(message: Record<string, unknown> & { type: strin
 	if (message.type === 'config' && 'providers' in clone) {
 		clone.providers = redactProviders(clone.providers);
 	}
+	if (message.type === 'config') {
+		// Which engine runs the agent, its SDK version and the fast model are the desktop's business.
+		delete clone.engine;
+	}
 	// The net under everything above: every string of every message, at any depth.
 	return scrubDeep(clone) as Record<string, unknown> & { type: string };
 }

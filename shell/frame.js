@@ -6,7 +6,7 @@
 	const settingsWindow = document.body.classList.contains('settings-window');
 	const AREAS = [
 		['providers', 'Providers'], ['general', 'General'], ['permissions', 'Agent permissions'], ['memory', 'Memory'],
-		['skills', 'Skills'], ['mcp', 'MCP servers'], ['auto', 'Auto routing'], ['remote', 'Remote control'],
+		['skills', 'Skills'], ['mcp', 'MCP servers'], ['engine', 'Agent engine'], ['auto', 'Auto routing'], ['remote', 'Remote control'],
 	];
 	/** 16px outline icons, one per settings area. */
 	const AREA_ICONS = {
@@ -16,6 +16,7 @@
 		memory: '<path d="M3 4.5c0-1.1 2.2-2 5-2s5 .9 5 2-2.2 2-5 2-5-.9-5-2z"/><path d="M3 4.5v3.5c0 1.1 2.2 2 5 2s5-.9 5-2V4.5M3 8v3.5c0 1.1 2.2 2 5 2s5-.9 5-2V8"/>',
 		skills: '<path d="M3.5 2.5h7l2 2v9h-9z"/><path d="M5.5 7h5M5.5 9.5h5"/>',
 		mcp: '<path d="M6 2.5v3M10 2.5v3M4.5 5.5h7v2.5a3.5 3.5 0 0 1-7 0zM8 11.5v2"/>',
+		engine: '<rect x="4.5" y="4.5" width="7" height="7" rx="1.4"/><path d="M6.5 1.8v2.7M9.5 1.8v2.7M6.5 11.5v2.7M9.5 11.5v2.7M1.8 6.5h2.7M1.8 9.5h2.7M11.5 6.5h2.7M11.5 9.5h2.7"/>',
 		auto: '<path d="M2.5 8h3l2-4 2 8 2-4h2"/>',
 		remote: '<rect x="5" y="1.8" width="6" height="12.4" rx="1.4"/><path d="M7.2 12h1.6"/>',
 	};

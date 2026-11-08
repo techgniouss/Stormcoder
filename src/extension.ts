@@ -96,7 +96,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand('stormcoder.openSettings', () => viewProvider.openSettingsWindow()),
 		vscode.commands.registerCommand('stormcoder.selectProvider', () => selectProvider(registry, viewProvider)),
 		vscode.commands.registerCommand('stormcoder.engine.choose', () => chooseEngine(viewProvider).catch(reportEngineCommandFailure)),
-		vscode.commands.registerCommand('stormcoder.engine.installClaude', () => installClaudeEngine(viewProvider).then(() => undefined, reportEngineCommandFailure)),
+		vscode.commands.registerCommand('stormcoder.engine.installClaude', () => installClaudeEngine(viewProvider).catch(err => { reportEngineCommandFailure(err); return false; })),
 		vscode.commands.registerCommand('stormcoder.configureProvider', (presetId?: string) =>
 			configureProvider(registry, viewProvider, presetId)),
 		vscode.commands.registerCommand('stormcoder.signIn', (presetId?: string) =>
@@ -248,14 +248,11 @@ async function chooseEngine(view: ChatViewProvider): Promise<void> {
 	if (!picked) {
 		return;
 	}
-	if (picked.id === 'claude-code' && !status.installed && !await installClaudeEngine(view)) {
-		return;
-	}
 	if (picked.id === current) {
 		vscode.window.showInformationMessage(`Stormcoder already uses the ${picked.id === 'claude-code' ? 'Claude Code' : 'built-in'} engine.`);
 		return;
 	}
-	await vscode.workspace.getConfiguration('stormcoder').update('engine', picked.id, vscode.ConfigurationTarget.Global);
+	await view.chooseEngine(picked.id);
 }
 
 /**
@@ -286,6 +283,7 @@ async function installClaudeEngine(view: ChatViewProvider): Promise<boolean> {
 		vscode.window.showInformationMessage(result.restartNeeded
 			? `Claude Agent SDK ${result.version} installed. Restart Stormcoder to start using it.`
 			: `Claude Agent SDK ${result.version} installed.`);
+		await view.refreshConfig(); // an open Settings panel shows the new version
 		return true;
 	} catch (err) {
 		if (controller.signal.aborted) {

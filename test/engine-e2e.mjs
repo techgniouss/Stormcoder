@@ -193,7 +193,8 @@ try {
 	// 1. A turn that uses a tool: two model requests, and nothing else.
 	await send('please read the file');
 	await chat.getByText('Tool said: hi there').first().waitFor({ timeout: 30000 });
-	await chat.getByText('Claude Code engine').first().waitFor({ timeout: 5000 });
+	// The banner reads "Claude Code engine · provider · model"; the Settings panel in the same document also says "Claude Code engine".
+	await chat.getByText(/Claude Code engine · /).first().waitFor({ timeout: 5000 });
 	assert.equal(mock.seen.length, 2, `a tool turn is exactly two model requests, saw ${mock.seen.length}`);
 
 	// It was the harness's request, not Stormcoder's: its system prompt and its tools.

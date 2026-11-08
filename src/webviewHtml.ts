@@ -118,6 +118,26 @@ export const CHAT_APP_HTML = `
 			<div id="mcpList" class="hint">Loading…</div>
 			</div>
 
+			<div class="area" data-area="engine">
+						<div class="settings-header"><h2>Agent engine</h2></div>
+			<p class="hint">Who runs the agent. The <strong>built-in agent</strong> is Stormcoder's own loop, tools and Auto mode. The <strong>Claude Code engine</strong> runs the Claude Code harness for every chat, with any provider and model you pick in the model picker; a Claude model on the Anthropic API behaves and costs exactly as it does in Claude Code. The engine is chosen when Stormcoder starts, so a change applies after a restart.</p>
+			<div id="engineList"></div>
+			<p class="hint" id="engineStatus" role="status"></p>
+			<div class="settings-row">
+				<button id="engineInstall" class="mini-button">Install Claude Agent SDK</button>
+				<button id="engineRestart" class="mini-button hidden">Restart now</button>
+			</div>
+			<div class="general-settings">
+				<label class="field-label" for="engineFastInput">Fast model for the engine's background requests</label>
+				<p class="hint">As <code>provider:model</code>, for example <code>openai:gpt-4o-mini</code>. Empty uses the chat's own model. A cheap one keeps the engine's housekeeping inexpensive.</p>
+				<div class="settings-row">
+					<input id="engineFastInput" type="text" class="settings-textarea" placeholder="provider:model" maxlength="200" />
+					<button id="saveEngineFast" class="mini-button">Save</button>
+				</div>
+			</div>
+			<p class="hint" id="engineNotice" role="status"></p>
+			</div>
+
 			<div class="area" data-area="auto">
 						<div class="settings-header"><h2>Auto routing</h2></div>
 			<p class="hint">When the provider is set to <strong>Auto</strong>, each phase runs on its own model: <strong>Ask</strong> and <strong>Plan</strong> use the planning model, inline edits use the implementation model, and <strong>Agent</strong> runs the full <em>plan → implement → review</em> pipeline. Leave a role on <em>Auto-select</em> to pick the best model from the keys you've configured.</p>

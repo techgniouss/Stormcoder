@@ -17,7 +17,7 @@ import { contextWindowFor, requestBudgets } from './agent/contextWindow';
 import { APPROVAL_POLICIES, ApprovalPolicy, applyApprovalFloor, Guardrails, loadGuardrails, parseApprovalPolicy, RunOrigin } from './agent/guardrails';
 import { ApprovalRequest, ApprovalResult, ToolApprover, UserQuestion, stopBackgroundCommands } from './agent/tools';
 import { AutoOrchestrator, describePinnedModelError, fallbackNote, isModelError, nextCandidate, reviewSystem } from './auto/orchestrator';
-import { EngineHost, buildTranscriptSeed } from './engine/engineHost';
+import { EngineHost, buildTranscriptSeed, parseTarget, readEngineSetting } from './engine/engineHost';
 import type { EngineCallbacks } from './engine/claudeEngine';
 import { AUTO_ROLES, AutoRole, RoleAssignment, RoleRouter } from './auto/router';
 import { WebAuthManager } from './auth';
@@ -236,6 +236,8 @@ interface WebviewToHost {
 	content?: string;
 	role?: string;
 	reviewEnabled?: boolean;
+	/** `setEngine` only: which agent engine to use. */
+	engine?: string;
 	memoryEnabled?: boolean;
 	memoryRecentRuns?: number;
 	memoryAutoPropose?: boolean;
@@ -1881,6 +1883,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 						'guardrails.approval', message.approval, vscode.ConfigurationTarget.Global);
 				}
 				break;
+			case 'setEngine':
+				// Desktop-only (REMOTE_DENIED in src/remote/policy.ts): it can start a download and changes what runs the agent.
+				if (message.engine === 'builtin' || message.engine === 'claude-code') {
+					await this.chooseEngine(message.engine);
+				}
+				break;
+			case 'installEngine':
+				await vscode.commands.executeCommand('stormcoder.engine.installClaude');
+				await this.postConfig();
+				break;
+			case 'setEngineFast': {
+				const text = typeof message.text === 'string' ? message.text.trim() : undefined;
+				if (text !== undefined && text.length <= 200 && (text === '' || parseTarget(text))) {
+					await vscode.workspace.getConfiguration('stormcoder').update('engine.fastModel', text, vscode.ConfigurationTarget.Global);
+					await this.postConfig();
+				}
+				break;
+			}
+			case 'restartApp':
+				await vscode.commands.executeCommand('stormcoder.app.relaunch');
+				break;
 			case 'setReviewEnabled':
 				await vscode.workspace.getConfiguration('stormcoder').update(
 					'auto.enableReview', !!message.reviewEnabled, vscode.ConfigurationTarget.Global);
@@ -3296,6 +3319,37 @@ ${context.content}` }
 		void this.context.workspaceState.update(ENGINE_SESSIONS_KEY, Object.fromEntries(this.engineSessions));
 	}
 
+	/** What the Agent engine panel shows: the setting, what is running, and the SDK on disk. */
+	private engineConfig(): { selected: string; running: string; installed: string; loaded: string; fastModel: string } {
+		const status = this.engineHost.sdkStatus();
+		const fast = vscode.workspace.getConfiguration('stormcoder').get<unknown>('engine.fastModel');
+		return {
+			selected: readEngineSetting(),
+			running: this.engineHost.id,
+			installed: status.installed ?? '',
+			loaded: status.loaded ?? '',
+			fastModel: typeof fast === 'string' ? fast : '',
+		};
+	}
+
+	/**
+	 * Saves the engine the user picked, in the panel or the palette. Choosing the Claude Code engine
+	 * without the SDK first goes through the install command (which asks, with Anthropic's terms, and
+	 * shows progress); the setting is saved only if that worked, so the choice can never leave the app
+	 * pointing at an engine that cannot start. A restart applies it.
+	 */
+	async chooseEngine(id: 'builtin' | 'claude-code'): Promise<void> {
+		if (id === 'claude-code' && !this.engineHost.sdkStatus().installed) {
+			const installed = await vscode.commands.executeCommand<boolean>('stormcoder.engine.installClaude');
+			if (!installed) {
+				await this.postConfig();
+				return;
+			}
+		}
+		await vscode.workspace.getConfiguration('stormcoder').update('engine', id, vscode.ConfigurationTarget.Global);
+		await this.postConfig();
+	}
+
 	/** The Claude Agent SDK installed on disk and the one this process loaded. */
 	engineStatus(): { installed?: string; loaded?: string } {
 		return this.engineHost.sdkStatus();
@@ -4594,6 +4648,7 @@ ${context.content}` }
 			selectedProvider: this.registry.getDefaultProviderId(),
 			auto: { roles, reviewEnabled: this.router.isReviewEnabled(), decompose: this.router.isDecompose() },
 			approval: parseApprovalPolicy(cfg.get<string>('guardrails.approval')),
+			engine: this.engineConfig(),
 			systemPrompt: this.registry.getSystemPrompt(),
 			maxTokens: this.registry.getMaxTokens(),
 			rules: cfg.get<string>('rules') ?? '',

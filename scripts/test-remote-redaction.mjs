@@ -146,4 +146,11 @@ assert.equal(
 	assert.ok(!redactForRemote({ type: 'approvalRequest', id: 'a3', sessionId: 's', kind: 'command', title: 't', detail: 'd', preview: 'curl -H "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123" x' }).preview.includes('abcdefghijklmnopqrstuvwxyz0123'));
 }
 
+// Which engine runs the agent, its SDK version and the fast model are the desktop's business.
+{
+	const sent = redactForRemote({ type: 'config', providers: [], approval: 'auto-edits', engine: { selected: 'claude-code', running: 'builtin', installed: '0.3.17', loaded: '', fastModel: 'openai:gpt-4o-mini' } });
+	assert.equal(sent.engine, undefined, 'a phone is not told about the engine');
+	assert.equal(sent.approval, 'auto-edits', 'the rest of the config still arrives');
+}
+
 console.log('test-remote-redaction: all assertions passed');
