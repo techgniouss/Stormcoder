@@ -1804,19 +1804,21 @@
 	}
 
 	/** Renders MCP server status lines in the settings panel. */
-	function renderMcpList(status, toolCount) {
+	function renderMcpList(status, toolCount, engineServers) {
 		if (!els.mcpList) { return; }
 		els.mcpList.innerHTML = '';
 		const noServers = !status || !status.length || (status.length === 1 && /no mcp servers/i.test(status[0]));
-		if (!toolCount && noServers) {
+		if (!toolCount && !engineServers && noServers) {
 			els.mcpList.appendChild(emptyCard('mcp', 'No MCP servers yet', 'Add a server to give the agent databases, browsers and APIs. Tools appear as mcp__server__tool.'));
 			return;
 		}
 		const summary = document.createElement('div');
 		summary.className = 'mcp-summary';
-		summary.textContent = toolCount > 0
-			? `${toolCount} MCP tool${toolCount === 1 ? '' : 's'} available to the agent.`
-			: 'No MCP tools available yet.';
+		summary.textContent = engineServers > 0
+			? `${engineServers} MCP server${engineServers === 1 ? '' : 's'} will be connected by the Claude Code engine in Agent chats.`
+			: toolCount > 0
+				? `${toolCount} MCP tool${toolCount === 1 ? '' : 's'} available to the agent.`
+				: 'No MCP tools available yet.';
 		els.mcpList.appendChild(summary);
 		for (const line of status || []) {
 			const row = document.createElement('div');
@@ -3582,7 +3584,7 @@
 				break;
 			}
 			case 'mcp':
-				renderMcpList(msg.status, msg.toolCount || 0);
+				renderMcpList(msg.status, msg.toolCount || 0, msg.engineServers || 0);
 				break;
 			case 'checkpoint': {
 				const s = sessionFor(msg);

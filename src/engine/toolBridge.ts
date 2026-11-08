@@ -235,6 +235,10 @@ async function decide(toolName: string, input: Record<string, unknown>, ctx: Bri
 		}, 'fetch');
 	}
 
+	if (toolName.startsWith('mcp__')) {
+		return decideMcp(toolName, input, ctx);
+	}
+
 	if (!READ_TOOLS.has(toolName) && !WRITE_TOOLS.has(toolName) && toolName !== 'Bash') {
 		return deny(`The tool "${toolName}" is not available in Stormcoder's Claude Code engine.`);
 	}
@@ -329,6 +333,38 @@ async function decide(toolName: string, input: Record<string, unknown>, ctx: Bri
 		preview: previewWrite(toolName, input),
 		previewLanguage: toolName === 'Write' ? '' : 'diff',
 	}, 'change');
+}
+
+/**
+ * A tool of an MCP server the harness connected. The same rules as the built-in loop's MCP tools:
+ * only in a trusted folder and an Agent chat (an unannotated tool may change anything, and the
+ * harness does not tell us which are read-only), and each call is asked about unless the approval
+ * policy is "yolo". The server list itself was vetted and consented to before the run started.
+ */
+async function decideMcp(toolName: string, input: Record<string, unknown>, ctx: BridgeContext): Promise<ToolVerdict> {
+	if (!ctx.trusted) {
+		return deny('This workspace is not trusted, so MCP tools are unavailable. Trust the folder, then retry.');
+	}
+	if (ctx.readOnly) {
+		return deny('This chat is read-only (Ask or Plan), so MCP tools are not allowed. Switch to Agent mode to use them.');
+	}
+	if (autoApproves(ctx.guardrails)) {
+		return { behavior: 'allow' };
+	}
+	let preview = '';
+	try {
+		preview = (JSON.stringify(input) ?? '').slice(0, 800);
+	} catch {
+		preview = '';
+	}
+	return ask(ctx.approver, {
+		kind: 'mcp',
+		signature: toolName,
+		title: `Run the MCP tool "${toolName}"?`,
+		detail: 'Provided by a connected MCP server.',
+		preview,
+		previewLanguage: 'json',
+	}, 'MCP tool call');
 }
 
 /** One line saying what a write will do. */

@@ -30,7 +30,7 @@ export interface McpToolset {
  * mutually exclusive, and `url` wins if both are given, since naming a URL is the more
  * specific statement.
  */
-interface McpServerConfig {
+export interface McpServerConfig {
 	command?: string;
 	args?: string[];
 	env?: Record<string, string>;
@@ -231,6 +231,39 @@ export async function rememberProjectConsent(memento: vscode.Memento, id: string
 	await memento.update(consentKey(id, config), true);
 }
 
+
+/**
+ * The checks every configured server passes before anything starts it, whoever starts it: a plain
+ * object, not disabled, well-typed, and only in a trusted workspace (a remote `url` counts too, since
+ * a project's own config would aim the agent's tool calls at an endpoint it chose). `skip` is the line
+ * to show the user (empty for a server that is simply switched off).
+ */
+function screenServer(id: string, raw: unknown): { cfg: McpServerConfig; skip?: undefined } | { cfg?: undefined; skip: string } {
+	if (!isPlainObject(raw)) {
+		return { skip: `${id}: skipped (the config must be an object, not ${raw === null ? 'null' : Array.isArray(raw) ? 'an array' : typeof raw}).` };
+	}
+	const cfg = raw as McpServerConfig;
+	if (cfg.disabled) {
+		return { skip: '' };
+	}
+	const invalid = validateServer(cfg);
+	if (invalid) {
+		return { skip: `${id}: skipped (${invalid}).` };
+	}
+	if (!vscode.workspace.isTrusted) {
+		return { skip: `${id}: skipped (workspace not trusted).` };
+	}
+	return { cfg };
+}
+
+/** A server vetted for the Claude Code engine to start itself, with its values already expanded. */
+export interface EngineMcpServer {
+	readonly id: string;
+	/** The harness's own `mcpServers` entry. */
+	readonly config: { type: 'stdio'; command: string; args: string[]; env: Record<string, string> } | { type: 'http'; url: string; headers: Record<string, string> };
+	readonly fromProject: boolean;
+}
+
 export class McpManager implements McpToolset, vscode.Disposable {
 	/**
 	 * @param projectConsent Asked before starting any server defined by the workspace's own
@@ -296,26 +329,14 @@ export class McpManager implements McpToolset, vscode.Disposable {
 				if (this.generation !== generation) {
 					return; // superseded by a reconnect
 				}
-				if (!isPlainObject(raw)) {
-					this.note(generation, `${id}: skipped (the config must be an object, not ${raw === null ? 'null' : Array.isArray(raw) ? 'an array' : typeof raw}).`);
+				const screened = screenServer(id, raw);
+				if (screened.skip !== undefined) {
+					if (screened.skip) {
+						this.note(generation, screened.skip);
+					}
 					continue;
 				}
-				const cfg = raw as McpServerConfig;
-				if (cfg.disabled) {
-					continue;
-				}
-				const invalid = validateServer(cfg);
-				if (invalid) {
-					this.note(generation, `${id}: skipped (${invalid}).`);
-					continue;
-				}
-				// The trust gate covers remote servers too, not only spawned ones: a `url` in a
-				// project's own mcp.json points the agent's tool calls — and whatever ends up in
-				// their arguments — at an endpoint the workspace chose.
-				if (!vscode.workspace.isTrusted) {
-					this.note(generation, `${id}: skipped (workspace not trusted).`);
-					continue;
-				}
+				const cfg = screened.cfg;
 				const projectFile = fromProject.get(id);
 				if (projectFile && !await this.projectConsent(id, cfg, projectFile)) {
 					this.note(generation, `${id}: not started (defined by ${projectFile}; not allowed).`);
@@ -392,6 +413,55 @@ export class McpManager implements McpToolset, vscode.Disposable {
 		} finally {
 			this.connecting.delete(client);
 		}
+	}
+
+	/**
+	 * The servers the Claude Code engine should start, vetted exactly like the ones this manager
+	 * starts — trust, shape, and the user's consent for a project's own — but not started: the
+	 * harness connects to them itself, so a server runs in one place only. Never throws.
+	 */
+	async resolveForEngine(): Promise<{ servers: EngineMcpServer[]; status: string[] }> {
+		const servers: EngineMcpServer[] = [];
+		const status: string[] = [];
+		let loaded: Awaited<ReturnType<McpManager['loadConfig']>>;
+		try {
+			loaded = await this.loadConfig();
+		} catch (err) {
+			return { servers, status: [`MCP servers were not loaded (${err instanceof Error ? err.message : String(err)}).`] };
+		}
+		status.push(...loaded.problems);
+		for (const [id, raw] of loaded.servers) {
+			try {
+				const screened = screenServer(id, raw);
+				if (screened.skip !== undefined) {
+					if (screened.skip) {
+						status.push(screened.skip);
+					}
+					continue;
+				}
+				const cfg = screened.cfg;
+				const projectFile = loaded.fromProject.get(id);
+				if (projectFile && !await this.projectConsent(id, cfg, projectFile)) {
+					status.push(`${id}: not started (defined by ${projectFile}; not allowed).`);
+					continue;
+				}
+				const expand = (value: unknown): string => projectFile ? String(value) : expandEnv(String(value));
+				const mapValues = (map: Record<string, unknown> | undefined): Record<string, string> =>
+					Object.fromEntries(Object.entries(map ?? {}).map(([k, v]) => [k, expand(v)]));
+				if (cfg.url) {
+					servers.push({ id, fromProject: !!projectFile, config: { type: 'http', url: cfg.url, headers: mapValues(cfg.headers) } });
+				} else if (cfg.cwd) {
+					// The harness gives a server no working directory of its own choosing; running it
+					// somewhere else than asked could be worse than not running it.
+					status.push(`${id}: skipped (the Claude Code engine cannot set a server's working directory; remove "cwd" or wrap the command).`);
+				} else {
+					servers.push({ id, fromProject: !!projectFile, config: { type: 'stdio', command: cfg.command!, args: cfg.args ?? [], env: mapValues(cfg.env) } });
+				}
+			} catch (err) {
+				status.push(`${id}: failed — ${err instanceof Error ? err.message : String(err)}`);
+			}
+		}
+		return { servers, status };
 	}
 
 	tools(): ToolSpec[] {

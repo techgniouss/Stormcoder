@@ -52,6 +52,7 @@ export function query({ prompt, options }) {
 		prompt: text, resume: options.resume, title: options.title, permissionMode: options.permissionMode,
 		settingSources: options.settingSources, tools: options.tools, env: options.env, systemPrompt: options.systemPrompt,
 		cwd: options.cwd, hookOnFailure: options.hooks.PreToolUse[0].onFailure,
+		mcpServers: options.mcpServers, strictMcpConfig: options.strictMcpConfig, plugins: options.plugins, skills: options.skills,
 	}) + '\\n');
 	return {
 		close() {},
@@ -60,7 +61,7 @@ export function query({ prompt, options }) {
 			// A saved conversation the harness no longer has fails before it says anything.
 			if (options.resume && fs.existsSync(${JSON.stringify(staleFlag)})) { throw new Error('No conversation found with session ID: ' + options.resume); }
 			const sessionId = options.resume ?? 'FAKE-SESSION-' + nextSession();
-			yield { type: 'system', subtype: 'init', session_id: sessionId };
+			yield { type: 'system', subtype: 'init', session_id: sessionId, mcp_servers: Object.keys(options.mcpServers ?? {}).map(name => ({ name, status: name === 'broken' ? 'failed' : 'connected' })) };
 			const { ANTHROPIC_BASE_URL: base, ANTHROPIC_AUTH_TOKEN: token, ANTHROPIC_MODEL: model } = options.env;
 			const messages = [{ role: 'user', content: text }];
 			let last = '';
@@ -152,6 +153,11 @@ const mock = await startMock(req => {
 	return 'A plain answer.';
 });
 
+// A server Stormcoder's own MCP client would start; it leaves a mark if anyone runs it.
+const markerFile = path.join(sdkDir, 'mcp-started');
+const markerScript = path.join(sdkDir, 'mcp-marker.mjs');
+fs.writeFileSync(markerScript, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(markerFile)}, 'started\\n'); setTimeout(() => {}, 60000);\n`);
+
 // The parent environment holds a provider key; it must never reach the harness.
 const host = await startHost({
 	mockPort: mock.port,
@@ -162,8 +168,16 @@ const host = await startHost({
 		'stormcoder.memory.autoPropose': true,
 		// An explicit reviewer: the only way a second model is ever called after an engine run.
 		'stormcoder.auto.reviewModel': 'custom:mock-model',
+		// Two MCP servers: the harness must be given both and Stormcoder must start neither.
+		'stormcoder.mcp.servers': {
+			marker: { command: process.execPath, args: [markerScript] },
+			broken: { command: 'no-such-mcp-binary' },
+		},
 	},
-	files: { 'hello.txt': 'hi there\n' },
+	files: {
+		'hello.txt': 'hi there\n',
+		'.stormcoder/skills/proj-skill.md': '---\nname: Proj Skill\ndescription: A skill the project ships\n---\nDo the project thing.\n',
+	},
 	env: { OPENAI_API_KEY: 'sk-parent-secret' },
 });
 
@@ -217,6 +231,21 @@ try {
 	assert.equal(turn1.title, 'please read the file', 'a title is supplied so the harness spends no model call on one');
 	assert.equal(turn1.resume, undefined);
 	assert.ok(!JSON.stringify(mock.seen).includes(turn1.env.ANTHROPIC_AUTH_TOKEN), 'the gateway token is never forwarded to a provider');
+
+	// MCP servers and skills go to the harness, and only to the harness.
+	assert.deepEqual(Object.keys(turn1.mcpServers).sort(), ['broken', 'marker']);
+	assert.equal(turn1.mcpServers.marker.type, 'stdio');
+	assert.deepEqual(turn1.mcpServers.marker.args, [markerScript]);
+	assert.equal(turn1.strictMcpConfig, true);
+	assert.equal(turn1.skills, 'all');
+	assert.equal(turn1.plugins.length, 1);
+	const pluginDir = turn1.plugins[0].path;
+	assert.ok(!fs.existsSync(path.join(pluginDir, 'skills', 'caveman')), 'a bundled skill that is switched off is not offered');
+	assert.match(fs.readFileSync(path.join(pluginDir, 'skills', 'proj-skill', 'SKILL.md'), 'utf8'), /Do the project thing/);
+	assert.ok(!JSON.stringify(first.messages).includes('Do the project thing'), 'no skill text is pasted into the prompt');
+	await chat.getByText(/MCP server "broken" could not connect/).first().waitFor({ timeout: 5000 });
+	await new Promise(r => setTimeout(r, 500));
+	assert.ok(!fs.existsSync(markerFile), 'Stormcoder\'s own MCP client never started a server the harness owns');
 
 	// No side calls, even with the settings that trigger them under the built-in engine.
 	await new Promise(r => setTimeout(r, 1500));

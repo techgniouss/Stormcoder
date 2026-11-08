@@ -160,8 +160,19 @@ Features are decided per **upstream**, per request, in `src/engine/capabilities.
   input); `agent.sandbox` becomes the harness's own fail-closed OS sandbox, and a request to leave
   it is refused; `Glob`/`Grep` are judged by their patterns as well as their paths.
 - **The panel's messages are desktop-only:** `setEngine`, `installEngine`, `setEngineFast` and `restartApp` are in `REMOTE_DENIED`, and the engine block is stripped from the config a paired phone receives, so a phone can neither switch the engine, start a download, nor restart the app.
-- **Never set:** `allowDangerouslySkipPermissions`, `bypassPermissions`, plugins, `user` settings.
-- **MCP:** `strictMcpConfig: true`; only servers Stormcoder itself started (trusted folders).
+- **Never set:** `allowDangerouslySkipPermissions`, `bypassPermissions`, `user` settings, or any plugin other than the one Stormcoder writes itself (below).
+- **MCP:** `strictMcpConfig: true`, so the harness may use only the servers Stormcoder passes in `mcpServers` and never discovers its own. See section 6a.
+
+### 6a. MCP servers and skills in the engine
+
+Each is loaded **by the harness alone**: the engine path never starts Stormcoder's own MCP clients and never pastes skill text into a prompt, so nothing runs or costs twice. (When the engine cannot start and the built-in agent serves the message, the built-in agent loads them itself, and the harness never ran.)
+
+- **MCP.** `McpManager.resolveForEngine()` reads the same sources as the built-in agent (the `stormcoder.mcp.servers` setting, then `.stormcoder/mcp.json`, `.openvs/mcp.json`, `.vscode/mcp.json`) and applies the same vetting: well-formed config, trusted folder, the user's consent for a server a *project* defines (remembered against a hash of its config), `${env:NAME}` expanded only in the user's own settings. It starts nothing. The result goes to the SDK as `mcpServers` (`stdio` or `http`). Only an Agent chat in a trusted folder is given servers: that is the only place their tools may run. A server with a `cwd` is skipped with a note, because the harness cannot set a server's working directory.
+- **MCP policy.** A tool named `mcp__*` passes the same bridge as every other tool: the user's `stormcoder.hooks` first, then denied in a read-only or untrusted chat, then an approval card (kind `mcp`, signature = the tool name, so "always allow" works) unless the approval policy is `yolo`. This matches the built-in loop. The harness does not tell the hook whether a tool is read-only, so there is no read-only fast path.
+- **MCP status.** The harness reports each server's state at start; a server that `failed` or `needs-auth` is named in the chat once. The Settings MCP list shows the servers the engine will load (it does not start them) and why any were left out.
+- **Skills.** Stormcoder's skills are written as `SKILL.md` files in a small local plugin (`<userData>/engines/skills-plugin/<digest>/`, written atomically, one folder per distinct set, the newest few kept) and passed as `plugins` with `skills: 'all'`. This is how Claude Code loads skills itself: the model sees each skill's one-line description and opens the body through the `Skill` tool only when it applies, so an unused skill costs a line, not thousands of tokens. The plugin holds skills only (no hooks, commands or MCP; `skipMcpDiscovery`). Offered: skills the user wrote (settings, or `.stormcoder/skills`; project ones only in a trusted folder) always, and the bundled ones (Caveman, Impeccable, ...) only while switched on, as in the built-in agent. A skill switched on in Stormcoder adds one line to the harness's prompt asking it to open that skill first. A project's own `.claude/skills` loads natively when `engine.claudeCode.loadProjectSettings` is on (settings source `project`).
+- **Tool names.** Providers other than Anthropic refuse a tool name longer than 64 characters or with a dot, and one refused name fails the whole request. `mcp__server__tool` names often are. The gateway shortens such a name (a hash keeps two apart) on the way out and restores it on the way back; names that already fit are untouched, and a Claude model on the Anthropic API is forwarded as is.
+- **Known behaviour.** The harness starts its MCP servers for each turn, as `claude -p` does. The SDK passes `mcpServers` on the harness's command line, so a header or environment value written in a server's config can be seen by other users of the same machine in the process list; keep tokens in `${env:NAME}` references only if that matters on a shared machine, and note the expanded value is still what is passed. MCP resources and prompts are not offered, only tools.
 
 ## 7. Decisions and constraints for the owner
 
@@ -278,6 +289,14 @@ degrade to the built-in agent, not take the app down:
 
 ### What is not verified, and why
 
+- **MCP and skills have not run against the real harness.** The options follow the SDK's types
+  (`mcpServers`, `plugins`, `skills`) and the stand-in harness receives them, but three things need a
+  real run: (1) the harness starts MCP servers without waiting by default, so on a one-turn process the
+  first request may be built before a slow server has connected; (2) with the gateway's local address as
+  the base URL the harness may switch off its tool-search deferral for MCP tools, which would put every
+  MCP tool definition in each request (more tokens than Claude Code direct for a large server set;
+  `ENABLE_TOOL_SEARCH` is the knob to check); (3) that a plugin skill shows as `stormcoder:<name>` and
+  opens through the `Skill` tool. Check with a real key and a small MCP server.
 - **No run against the real `claude` binary or real provider APIs.** The stand-in follows the SDK
   types read from `@anthropic-ai/claude-agent-sdk@0.3.319`, but the real harness may differ in ways
   those types do not show (message ordering, hook timing, how it reacts to a stream that opens late,
@@ -298,8 +317,8 @@ degrade to the built-in agent, not take the app down:
 ### Known limits
 
 - With the engine on: no Auto (an explicit Auto selection runs on the chat's own model, and the chat
-  says so), no mid-run steering, no background commands (`run_in_background` is refused), no MCP
-  servers from Stormcoder's list, no Stormcoder skills.
+  says so), no mid-run steering, no background commands (`run_in_background` is refused). MCP servers and
+  skills work (section 6a); not offered: MCP resources and prompts, and an MCP server with a `cwd`.
 - The translated path emits tool calls when a provider step completes, so a large file write is not
   shown arriving; text streams normally.
 - Claude models reached through a translating provider (OpenRouter, a custom gateway) lose

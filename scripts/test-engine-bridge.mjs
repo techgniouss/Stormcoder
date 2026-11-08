@@ -182,8 +182,8 @@ await test('the remote approval floor still bites: a floored policy asks where y
 	assert.equal(a.asked.length, 1);
 });
 
-await test('the allow-list: unknown tools and MCP tools are denied', async () => {
-	for (const name of ['Monitor', 'CronCreate', 'PushNotification', 'mcp__server__tool', 'BashOutput', 'KillShell', 'SomethingNew']) {
+await test('the allow-list: unknown tools are denied (MCP tools are judged by their own rule, see test-engine-extras)', async () => {
+	for (const name of ['Monitor', 'CronCreate', 'PushNotification', 'BashOutput', 'KillShell', 'SomethingNew']) {
 		const v = await decideToolUse(name, {}, ctx({ guardrails: policy('yolo') }));
 		assert.equal(v.behavior, 'deny', name);
 		assert.match(v.message, /not available/);

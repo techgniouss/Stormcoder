@@ -171,6 +171,10 @@ export interface EngineTurn {
 	readonly loadProjectSettings: boolean;
 	readonly auth: 'gateway' | 'own-login';
 	readonly cliPath?: string;
+	/** MCP servers for the harness to connect to itself (already vetted); absent for none. */
+	readonly mcpServers?: Record<string, unknown>;
+	/** A local plugin folder holding Stormcoder's skills as `SKILL.md` files, for the harness to load natively. */
+	readonly skillsPlugin?: string;
 	/** A short chat title; given to the harness so it does not spend a model call inventing one. */
 	readonly title?: string;
 }
@@ -184,6 +188,8 @@ export interface EngineCallbacks {
 	onToolEnd(call: ToolCall, result: string, isError: boolean, parentCallId?: string): void;
 	onNote(text: string): void;
 	onTodos?(items: TodoItem[]): void;
+	/** The harness's report of each MCP server's connection state, sent once when it starts. */
+	onMcpStatus?(servers: readonly { name: string; status: string }[]): void;
 	/** Real token usage for one request, from the gateway. */
 	onUsage?(usage: GatewayUsage): void;
 }
@@ -311,7 +317,12 @@ export function buildQueryOptions(
 		// Stated, never defaulted: see the function comment.
 		permissionMode: turn.mode === 'plan' ? 'plan' : 'default',
 		settingSources: turn.trusted && turn.loadProjectSettings ? ['project'] : [],
+		// Only the servers Stormcoder vetted and passed below; never ones the harness would discover itself.
 		strictMcpConfig: true,
+		...(turn.mcpServers && Object.keys(turn.mcpServers).length ? { mcpServers: turn.mcpServers } : {}),
+		// Stormcoder's skills, as a plugin the harness loads like any other. `skills: 'all'` states what the
+		// harness would do anyway, so a later default change cannot hide them.
+		...(turn.skillsPlugin ? { plugins: [{ type: 'local', path: turn.skillsPlugin, skipMcpDiscovery: true }], skills: 'all' } : {}),
 		tools: engineTools(upstream),
 		disallowedTools: upstream === 'anthropic' ? [] : [...ANTHROPIC_ONLY_TOOLS],
 		includePartialMessages: true,
@@ -454,6 +465,10 @@ export class MessageMapper {
 	private system(message: SdkMessage): void {
 		if (message.subtype === 'init' && typeof message.session_id === 'string') {
 			this.sessionId = message.session_id;
+			const servers = Array.isArray(message.mcp_servers) ? message.mcp_servers as { name?: unknown; status?: unknown }[] : [];
+			if (servers.length) {
+				this.cb.onMcpStatus?.(servers.filter(s => typeof s?.name === 'string').map(s => ({ name: String(s.name), status: String(s.status ?? 'unknown') })));
+			}
 		} else if (message.subtype === 'compact_boundary') {
 			this.cb.onNote('Earlier context was compacted to make room.');
 		} else if (message.subtype === 'api_retry') {

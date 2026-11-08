@@ -516,12 +516,12 @@ export class AnthropicGateway {
 			}
 			begin();
 			for (const call of step.toolCalls) {
-				safeWrite(res, frames.toolUse(call));
+				safeWrite(res, frames.toolUse({ ...call, name: internal.names.original(call.name) }));
 			}
 			safeWrite(res, frames.finish(stopReasonFor(finish, step.toolCalls.length > 0), usage.outputTokens));
 			res.end();
 		} else {
-			this.respond(res, 200, buildMessage(id, parsed.model, { ...step, finishReason: finish }, usage));
+			this.respond(res, 200, buildMessage(id, parsed.model, { ...step, toolCalls: step.toolCalls.map(call => ({ ...call, name: internal.names.original(call.name) })), finishReason: finish }, usage));
 		}
 		session.onUsage?.({
 			sessionId: session.id, providerId: target.providerId, model: target.model, path: 'translated', estimated: usage.estimated,

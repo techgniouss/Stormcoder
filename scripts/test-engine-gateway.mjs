@@ -368,6 +368,22 @@ await test('translated: Anthropic messages become provider messages, tools and t
 	assert.ok(notices.some(n => /hosted tool "web_search"/.test(n)), 'the user is told a tool was left out');
 });
 
+await test('translated: a long or dotted MCP tool name reaches the provider legal and comes back as the harness named it', async () => {
+	const long = `mcp__${'srv'.repeat(12)}__${'do_something_useful'.repeat(2)}`;
+	agentBehavior = async req => ({ content: '', toolCalls: [{ id: 'toolu_7', name: req.tools[0].name, args: { q: 1 } }], finishReason: 'tool_calls' });
+	const r = await call('/v1/messages', {
+		body: {
+			model: MAIN_ALIAS, max_tokens: 100, stream: false,
+			tools: [{ name: long, description: 'd', input_schema: { type: 'object', properties: {} } }],
+			messages: [{ role: 'user', content: 'go' }],
+		},
+	});
+	assert.equal(r.status, 200);
+	assert.match(lastAgentRequest.tools[0].name, /^[a-zA-Z0-9_-]{1,64}$/);
+	assert.notEqual(lastAgentRequest.tools[0].name, long);
+	assert.equal(r.json.content[0].name, long, 'the harness sees its own name');
+});
+
 await test('translated: a dropped item is reported once per session, not on every request', async () => {
 	notices.length = 0;
 	const once = gateway.registerSession({ id: 'dedupe', route, onNotice: t => notices.push(t) });

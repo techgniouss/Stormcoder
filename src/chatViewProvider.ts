@@ -23,7 +23,9 @@ import { AUTO_ROLES, AutoRole, RoleAssignment, RoleRouter } from './auto/router'
 import { WebAuthManager } from './auth';
 import { githubAccountLabel, tokenEmailLabel } from './accountLabels';
 import { importKiroCredential, signInWithDeviceFlow } from './deviceSignIn';
+import * as path from 'path';
 import { McpManager } from './mcp/manager';
+import { activeSkillsPrompt, selectEngineSkills, writeSkillsPlugin } from './engine/engineSkills';
 import { supportsNativeSignIn } from './oauth';
 import { buildEnvContext } from './persona/envContext';
 import { modeDoctrine, personaBase } from './persona/prompts';
@@ -632,6 +634,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	private readonly engineSessions: Map<string, string>;
 	/** Chats that have already been told which engine and model they run on. */
 	private readonly engineAnnounced = new Set<string>();
+	/** The MCP servers the harness failed to connect to, as last reported to each chat (so a repeat is not repeated). */
+	private readonly engineMcpNoted = new Map<string, string>();
+	/** Why servers were left out of the last engine turn (consent refused, bad config), for the settings panel. */
+	private engineMcpIssues: string[] = [];
 	/** A review that found problems, to be put in front of the engine at the start of the chat's next turn. */
 	private readonly pendingReviews = new Map<string, string>();
 	/** Chats already told that Auto does not apply while the Claude Code engine is selected. */
@@ -3096,6 +3102,7 @@ ${context.content}` }
 				onToolEnd: (call, result, isError, parentCallId) => post({ type: 'toolEnd', id: call.id, name: call.name, result, isError, parentCallId }),
 				onNote: text => post({ type: 'info', message: text }),
 				onTodos: items => post({ type: 'todos', items }),
+				onMcpStatus: servers => this.reportEngineMcp(sessionId, servers, post),
 				onUsage: u => this.sessionOutput.appendLine(`[engine ${sessionId}] ${u.path} ${u.providerId}:${u.model} in=${u.inputTokens} out=${u.outputTokens} cacheRead=${u.cacheReadTokens} cacheWrite=${u.cacheWriteTokens}${u.estimated ? ' (estimated)' : ''}`),
 			};
 			const context = await this.resolveContext(mode, message.context, 0, undefined);
@@ -3103,7 +3110,11 @@ ${context.content}` }
 			const review = this.pendingReviews.get(sessionId);
 			this.pendingReviews.delete(sessionId);
 			const request = review ? `A second reviewer examined your last changes and reported:\n\n${review}\n\nMy message now:\n${last.content}` : last.content;
-			const appendPrompt = cfg.get<boolean>('engine.appendProjectMemory') === true ? (await this.memoryBlock(sessionId)) || undefined : undefined;
+			const memory = cfg.get<boolean>('engine.appendProjectMemory') === true ? (await this.memoryBlock(sessionId)) || undefined : undefined;
+			// MCP servers and skills are loaded by the harness alone: Stormcoder's own MCP clients are never started
+			// for this turn, and no skill text is pasted into the prompt.
+			const extras = await this.engineExtras(mode);
+			const appendPrompt = [memory, extras.skillNote].filter(Boolean).join('\n\n') || undefined;
 			const startTurn = (resume: string | undefined) => this.engineHost.run({
 				sessionId,
 				prompt: context?.content ? `${context.content}\n\n${request}` : request,
@@ -3118,6 +3129,8 @@ ${context.content}` }
 				resumeId: resume,
 				transcriptSeed: resume ? undefined : buildTranscriptSeed(history.slice(0, -1)) || undefined,
 				appendPrompt,
+				mcpServers: extras.mcpServers,
+				skillsPlugin: extras.skillsPlugin,
 				maxTurns: this.configuredMaxSteps(),
 				maxRunMs: this.configuredMaxRunMs(),
 				contextWindow: resolved.contextWindow,
@@ -3228,6 +3241,56 @@ ${context.content}` }
 			return undefined;
 		}
 		return { mode, folder, provider, providerId, model, resolved: { ...resolved, route: resolved.route }, history, last };
+	}
+
+
+	/**
+	 * What the Claude Code engine loads besides its own tools: Stormcoder's MCP servers (vetted and
+	 * consented to here, connected by the harness) and its skills (written as a plugin the harness
+	 * loads). MCP servers are offered only to an Agent chat in a trusted folder, the only place their
+	 * tools may run. Never throws: a failure here means the turn runs without that extra.
+	 */
+	private async engineExtras(mode: 'ask' | 'plan' | 'agent'): Promise<{ mcpServers?: Record<string, unknown>; skillsPlugin?: string; skillNote?: string }> {
+		const out: { mcpServers?: Record<string, unknown>; skillsPlugin?: string; skillNote?: string } = {};
+		const trusted = vscode.workspace.isTrusted;
+		try {
+			if (mode === 'agent' && trusted) {
+				const resolved = await this.mcp.resolveForEngine();
+				this.engineMcpIssues = resolved.status;
+				if (resolved.servers.length) {
+					out.mcpServers = Object.fromEntries(resolved.servers.map(server => [server.id, server.config]));
+				}
+			}
+		} catch (err) {
+			this.sessionOutput.appendLine(`[engine] MCP servers not loaded: ${err instanceof Error ? err.message : String(err)}`);
+		}
+		try {
+			const offered = selectEngineSkills(await this.skills.list(), trusted, this.activeSkillIds());
+			const root = path.join(path.dirname(this.engineHost.installDir()), 'skills-plugin');
+			out.skillsPlugin = await writeSkillsPlugin(root, offered);
+			if (out.skillsPlugin) {
+				out.skillNote = activeSkillsPrompt(this.activeSkillIds(), offered);
+			}
+		} catch (err) {
+			this.sessionOutput.appendLine(`[engine] skills not loaded: ${err instanceof Error ? err.message : String(err)}`);
+		}
+		return out;
+	}
+
+	/** Tells the chat, once per distinct problem, about a server the harness could not connect to. */
+	private reportEngineMcp(sessionId: string, servers: readonly { name: string; status: string }[], post: SessionPost): void {
+		const broken = servers.filter(s => s.status === 'failed' || s.status === 'needs-auth');
+		const key = broken.map(s => `${s.name}:${s.status}`).join(',');
+		if (!key || this.engineMcpNoted.get(sessionId) === key) {
+			return;
+		}
+		this.engineMcpNoted.set(sessionId, key);
+		post({
+			type: 'info',
+			message: broken.map(s => s.status === 'needs-auth'
+				? `MCP server "${s.name}" needs you to sign in; its tools are unavailable.`
+				: `MCP server "${s.name}" could not connect; its tools are unavailable.`).join('\n'),
+		});
 	}
 
 	/** Tells a chat, once, that its messages are being served by the built-in agent because the engine is unavailable. */
@@ -4660,6 +4723,25 @@ ${context.content}` }
 
 	/** Sends the connected MCP servers' status + tool count to the settings panel. */
 	private async postMcpStatus(): Promise<void> {
+		if (this.engineHost.enabled) {
+			// The harness connects to the servers itself; starting Stormcoder's own copies here would run each twice.
+			let servers: Awaited<ReturnType<McpManager['resolveForEngine']>>['servers'] = [];
+			let issues: string[] = this.engineMcpIssues;
+			try {
+				const resolved = await this.mcp.resolveForEngine();
+				servers = resolved.servers;
+				issues = resolved.status;
+			} catch {
+				// Show what the last turn found.
+			}
+			this.post({
+				type: 'mcp',
+				status: [...servers.map(s => `${s.id}: loaded by the Claude Code engine over ${s.config.type === 'http' ? 'HTTP' : 'stdio'} when a chat starts.`), ...issues],
+				toolCount: 0,
+				engineServers: servers.length,
+			});
+			return;
+		}
 		await this.mcp.ensureStarted();
 		this.post({ type: 'mcp', status: this.mcp.getStatus(), toolCount: this.mcp.tools().length });
 	}

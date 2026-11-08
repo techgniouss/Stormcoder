@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { createHash } from 'crypto';
 import { estimateTokens } from '../agent/context';
 import { CLOSE_MARK, OPEN_MARK } from '../persona/thinking';
 import { MALFORMED_ARGS } from '../providers/toolCalls';
@@ -56,6 +57,42 @@ export interface InternalRequest {
 	readonly tools: ToolSpec[];
 	/** Human-readable notes about content that could not be carried over (hosted tools, URL images, ...). */
 	readonly dropped: string[];
+	/** Maps tool names to ones every provider accepts and back (see {@link ToolNames}). */
+	readonly names: ToolNames;
+}
+
+/**
+ * Tool names every provider API accepts: `^[a-zA-Z0-9_-]{1,64}$`. The harness names an MCP tool
+ * `mcp__<server>__<tool>`, which is easily longer than 64 characters or carries a dot, and one
+ * refused name fails the whole request, not just that tool. A name that does not fit is replaced by a
+ * stable shortened one (a hash keeps two long names apart) and mapped back before the harness sees
+ * the model's call. Names that already fit are never touched.
+ */
+export class ToolNames {
+	private readonly toWire = new Map<string, string>();
+	private readonly toOriginal = new Map<string, string>();
+
+	/** The name to send a provider for `name`. */
+	wire(name: string): string {
+		const known = this.toWire.get(name);
+		if (known !== undefined) {
+			return known;
+		}
+		let wire = name;
+		if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) {
+			const digest = createHash('sha256').update(name).digest('hex').slice(0, 8);
+			const clean = name.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 64 - 9) || 'tool';
+			wire = `${clean}_${digest}`;
+		}
+		this.toWire.set(name, wire);
+		this.toOriginal.set(wire, name);
+		return wire;
+	}
+
+	/** The harness's name for a name the model used, which is the same one when nothing was renamed. */
+	original(wire: string): string {
+		return this.toOriginal.get(wire) ?? wire;
+	}
 }
 
 /** Options for {@link toInternal}. */
@@ -94,6 +131,7 @@ function imageOf(block: AnthropicBlock): ChatImage | undefined {
 export function toInternal(request: AnthropicRequest, options: ToInternalOptions): InternalRequest {
 	const dropped: string[] = [];
 	const messages: ChatMessage[] = [];
+	const names = new ToolNames();
 	const system = textOf(request.system as string | readonly AnthropicBlock[] | undefined);
 	if (system) {
 		messages.push({ role: 'system', content: system });
@@ -126,7 +164,7 @@ export function toInternal(request: AnthropicRequest, options: ToInternalOptions
 				case 'tool_use':
 					toolCalls.push({
 						id: String(block.id),
-						name: String(block.name),
+						name: names.wire(String(block.name)),
 						args: (block.input && typeof block.input === 'object' ? block.input : {}) as Record<string, unknown>,
 					});
 					break;
@@ -169,9 +207,9 @@ export function toInternal(request: AnthropicRequest, options: ToInternalOptions
 			dropped.push(`the hosted tool "${tool.name}"`);
 			continue;
 		}
-		tools.push({ name: tool.name, description: tool.description ?? '', parameters: tool.input_schema });
+		tools.push({ name: names.wire(tool.name), description: tool.description ?? '', parameters: tool.input_schema });
 	}
-	return { messages, tools, dropped };
+	return { messages, tools, dropped, names };
 }
 
 /** The Anthropic `stop_reason` for a provider's normalized finish reason. */
