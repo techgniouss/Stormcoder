@@ -86,6 +86,16 @@
         "icon": "$(key)"
       },
       {
+        "command": "stormcoder.engine.choose",
+        "title": "%commands.engine.choose%",
+        "category": "Stormcoder"
+      },
+      {
+        "command": "stormcoder.engine.installClaude",
+        "title": "%commands.engine.installClaude%",
+        "category": "Stormcoder"
+      },
+      {
         "command": "stormcoder.openSettings",
         "title": "%commands.openSettings%",
         "category": "Stormcoder",
@@ -283,6 +293,12 @@
         },
         {
           "command": "stormcoder.configureProvider"
+        },
+        {
+          "command": "stormcoder.engine.choose"
+        },
+        {
+          "command": "stormcoder.engine.installClaude"
         },
         {
           "command": "stormcoder.signIn"
@@ -1079,6 +1095,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "%config.engine.claudeCode.cliPath%"
+        },
+        "stormcoder.engine.registry": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "%config.engine.registry%"
         },
         "stormcoder.engine.claudeCode.auth": {
           "type": "string",

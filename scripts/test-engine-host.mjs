@@ -164,4 +164,58 @@ await test('the gateway starts once, on demand, and stops on dispose', async () 
 	await h.dispose();
 });
 
+await test('preflight: ok when the SDK is on disk and the gateway can start, otherwise a one-line reason and nothing changed', async () => {
+	const fs = await import('node:fs');
+	const os = await import('node:os');
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-'));
+	const pkg = path.join(dir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
+	fs.mkdirSync(pkg, { recursive: true });
+	try {
+		settings['engine.claudeCode.sdkPath'] = dir;
+		const h = new EngineHost(options());
+		const missing = await h.preflight();
+		assert.equal(missing.ok, false);
+		assert.match(missing.reason, /needs the Claude Agent SDK/);
+		assert.ok(!missing.reason.includes('\n'), 'a single line, safe to show in a chat note');
+		assert.equal(h.gatewayRunning, false, 'a failed preflight starts nothing');
+
+		fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@anthropic-ai/claude-agent-sdk', version: '0.3.1', type: 'module', exports: { '.': { default: './sdk.mjs' } } }));
+		fs.writeFileSync(path.join(pkg, 'sdk.mjs'), 'export function query() {}\n');
+		assert.deepEqual(await h.preflight(), { ok: true });
+		assert.equal(h.gatewayRunning, true);
+		await h.dispose();
+
+		settings['engine.claudeCode.auth'] = 'own-login';
+		assert.deepEqual(await h.preflight(), { ok: true });
+		assert.equal(h.gatewayRunning, false, 'the engine\'s own login needs no gateway');
+
+		// A different install (ES modules are cached by path, so a rewritten file would not be re-read).
+		const other = fs.mkdtempSync(path.join(os.tmpdir(), 'pf2-'));
+		try {
+			const pkg2 = path.join(other, 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
+			fs.mkdirSync(pkg2, { recursive: true });
+			fs.writeFileSync(path.join(pkg2, 'package.json'), JSON.stringify({ name: '@anthropic-ai/claude-agent-sdk', version: '0.3.1', type: 'module', exports: { '.': { default: './sdk.mjs' } } }));
+			fs.writeFileSync(path.join(pkg2, 'sdk.mjs'), 'export const nothing = 1;\n');
+			settings['engine.claudeCode.sdkPath'] = other;
+			const broken = await new EngineHost(options()).preflight();
+			assert.equal(broken.ok, false);
+			assert.match(broken.reason, /does not export query/);
+		} finally {
+			fs.rmSync(other, { recursive: true, force: true });
+		}
+	} finally {
+		delete settings['engine.claudeCode.sdkPath'];
+		delete settings['engine.claudeCode.auth'];
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+await test('settings that a hand edit made nonsense are treated as unset', () => {
+	settings['engine.claudeCode.sdkPath'] = 42;
+	assert.equal(new EngineHost(options()).sdkLocation().sdkPath, '');
+	settings['engine.claudeCode.sdkPath'] = { path: '/x' };
+	assert.equal(new EngineHost(options()).sdkLocation().sdkPath, '');
+	delete settings['engine.claudeCode.sdkPath'];
+});
+
 console.log(`engine host: ${passed} tests, all assertions passed`);

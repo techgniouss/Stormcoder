@@ -8,6 +8,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { FileWrite } from '../agent/checkpoint';
 import { Guardrails, autoApproves, autoApprovesWrites, checkCommand, checkPath } from '../agent/guardrails';
+import { runHooks } from '../agent/hooks';
 import { ApprovalRequest, ToolApprover, isPrivateHost, normalizeToolCall } from '../agent/tools';
 import { ToolCall } from '../providers/types';
 import { ANTHROPIC_ONLY_TOOLS, UpstreamKind } from './capabilities';
@@ -26,8 +27,14 @@ import { ANTHROPIC_ONLY_TOOLS, UpstreamKind } from './capabilities';
 
 /** The bridge's answer for one tool call. */
 export type ToolVerdict =
-	| { readonly behavior: 'allow' }
+	| { readonly behavior: 'allow'; /** A replacement for the tool's input (a clamped timeout, say). */ readonly updatedInput?: Record<string, unknown> }
 	| { readonly behavior: 'deny'; readonly message: string };
+
+/** Facts about one call that are not in its input. */
+export interface CallMeta {
+	/** The call was made from inside a sub-agent (the harness reports an `agent_id`). */
+	readonly fromSubagent?: boolean;
+}
 
 /** What the bridge needs to know about the run it is guarding. */
 export interface BridgeContext {
@@ -43,13 +50,22 @@ export interface BridgeContext {
 	readonly readOnly: boolean;
 	/** Which kind of model serves the run; hosted-tool support depends on it. */
 	readonly upstream: UpstreamKind;
+	/** Cancels a running user hook when the run is stopped. */
+	readonly signal?: AbortSignal;
+	/** Where a hook's warning goes (a note in the chat). */
+	readonly note?: (text: string) => void;
+	/** Per-run counters, so limits such as the sub-agent cap hold across the run's many calls. */
+	readonly state?: { subagents: number };
 }
 
 /** Tools that touch nothing outside the harness's own bookkeeping. */
 const HARNESS_ONLY_TOOLS = new Set([
-	'TodoWrite', 'Agent', 'Task', 'ExitPlanMode', 'EnterPlanMode', 'ToolSearch', 'Skill',
+	'TodoWrite', 'ExitPlanMode', 'EnterPlanMode', 'ToolSearch', 'Skill',
 	'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate',
 ]);
+
+/** The harness's Bash timeout when a call names none (milliseconds). */
+const DEFAULT_BASH_TIMEOUT_MS = 120_000;
 
 /** Read tools that take a path. */
 const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'NotebookRead']);
@@ -106,19 +122,70 @@ async function ask(approver: ToolApprover, request: ApprovalRequest, action: str
  * `toolName` and `input` are exactly what the harness is about to run. Never throws: an internal
  * failure is a denial, so a bug here can only block work, never skip a check.
  */
-export async function decideToolUse(toolName: string, input: Record<string, unknown>, ctx: BridgeContext): Promise<ToolVerdict> {
+export async function decideToolUse(toolName: string, input: Record<string, unknown>, ctx: BridgeContext, meta: CallMeta = {}): Promise<ToolVerdict> {
 	try {
-		return await decide(toolName, input, ctx);
+		// The user's own PreToolUse hooks come first, as in the built-in loop: one that objects ends the
+		// call before anything is asked or run.
+		const vetoed = await preHooks(toolName, input, ctx);
+		if (vetoed) {
+			return deny(vetoed);
+		}
+		return await decide(toolName, input, ctx, meta);
 	} catch (err) {
 		return deny(`Stormcoder could not check "${toolName}" (${err instanceof Error ? err.message : String(err)}), so it was blocked.`);
 	}
 }
 
-async function decide(toolName: string, input: Record<string, unknown>, ctx: BridgeContext): Promise<ToolVerdict> {
+/** Runs `stormcoder.hooks` PreToolUse for a call; a string means a hook vetoed it. */
+async function preHooks(toolName: string, input: Record<string, unknown>, ctx: BridgeContext): Promise<string | undefined> {
+	const hooks = ctx.guardrails.hooks;
+	if (!hooks?.length || !ctx.root) {
+		return undefined;
+	}
+	const call = toStormcoderCall('hook', toolName, input);
+	const out = await runHooks(hooks, 'PreToolUse', { tool: call.name, args: call.args }, ctx.root, ctx.signal);
+	out.warnings.forEach(w => ctx.note?.(w));
+	return out.feedback === undefined ? undefined : `Blocked by a PreToolUse hook — do not retry unchanged. ${out.feedback}`;
+}
+
+/**
+ * Runs `stormcoder.hooks` PostToolUse after a call; whatever feedback they give is for the model.
+ * Never throws: a broken hook must not break the run.
+ */
+export async function postHooks(toolName: string, input: Record<string, unknown>, response: unknown, isError: boolean, ctx: BridgeContext): Promise<string | undefined> {
+	try {
+		const hooks = ctx.guardrails.hooks;
+		if (!hooks?.length || !ctx.root) {
+			return undefined;
+		}
+		const call = toStormcoderCall('hook', toolName, input);
+		const text = typeof response === 'string' ? response : JSON.stringify(response ?? '');
+		const out = await runHooks(hooks, 'PostToolUse', { tool: call.name, args: call.args, result: text.slice(0, 4_000), isError }, ctx.root, ctx.signal);
+		out.warnings.forEach(w => ctx.note?.(w));
+		return out.feedback === undefined ? undefined : `[PostToolUse hook]\n${out.feedback}`;
+	} catch {
+		return undefined;
+	}
+}
+
+async function decide(toolName: string, input: Record<string, unknown>, ctx: BridgeContext, meta: CallMeta): Promise<ToolVerdict> {
 	const g = ctx.guardrails;
 	if (toolName === 'ExitPlanMode' && ctx.readOnly) {
 		// In a read-only chat the plan is the reply itself; "exiting" plan mode would invite writes.
 		return deny('Write your plan as your final reply instead. The user starts the work in Agent mode.');
+	}
+	if (toolName === 'Agent' || toolName === 'Task') {
+		if (meta.fromSubagent && g.maxSubagentDepth <= 1) {
+			return deny('Sub-agents may not start further sub-agents here (stormcoder.agent.maxSubagentDepth). Do the work yourself or report back.');
+		}
+		const state = ctx.state;
+		if (state && state.subagents >= g.maxSubagents) {
+			return deny(`This run has already started ${g.maxSubagents} sub-agents, the limit (stormcoder.agent.maxSubagents). Continue without starting more.`);
+		}
+		if (state) {
+			state.subagents++;
+		}
+		return { behavior: 'allow' };
 	}
 	if (HARNESS_ONLY_TOOLS.has(toolName)) {
 		return { behavior: 'allow' };
@@ -195,21 +262,28 @@ async function decide(toolName: string, input: Record<string, unknown>, ctx: Bri
 		if (input.run_in_background === true) {
 			return deny('Background commands are not available in this engine yet. Run the command in the foreground.');
 		}
+		if (input.dangerouslyDisableSandbox === true && g.sandbox && g.sandbox !== 'off') {
+			return deny('Running outside the sandbox is not allowed: stormcoder.agent.sandbox is on.');
+		}
 		const guard = checkCommand(command, g);
 		if (!guard.ok) {
 			return deny(guard.reason ?? 'Command blocked.');
 		}
+		// The harness's own timeout may be longer than the one the user set for commands.
+		const requested = typeof input.timeout === 'number' && input.timeout > 0 ? input.timeout : DEFAULT_BASH_TIMEOUT_MS;
+		const updatedInput = requested > g.commandTimeoutMs ? { ...input, timeout: g.commandTimeoutMs } : undefined;
 		if (autoApproves(g)) {
-			return { behavior: 'allow' };
+			return { behavior: 'allow', updatedInput };
 		}
-		return ask(ctx.approver, {
+		const answer = await ask(ctx.approver, {
 			kind: 'command',
 			signature: `${commandSignature(command)}@${root}`,
 			title: 'Run a command?',
-			detail: `In ${root} (timeout ${Math.round(g.commandTimeoutMs / 1000)}s).`,
+			detail: `In ${root} (timeout ${Math.round(Math.min(requested, g.commandTimeoutMs) / 1000)}s).`,
 			preview: command,
 			previewLanguage: 'shell',
 		}, 'command');
+		return answer.behavior === 'allow' ? { behavior: 'allow', updatedInput } : answer;
 	}
 
 	// Write, Edit, MultiEdit, NotebookEdit.

@@ -283,5 +283,88 @@ await test('FileTracker feeds Undo: before and after of an edit, a new file, and
 	assert.equal(a.writes.length, 2);
 });
 
+// --- parity with the built-in loop: user hooks, sub-agent caps, timeouts, sandbox --------------------
+
+const { postHooks } = await import(new URL('../out/engine/toolBridge.js', import.meta.url));
+const nodeHook = script => `"${process.execPath}" -e "${script.replace(/"/g, '\\"')}"`;
+/** A hook that reads the event from stdin and exits 2 (a veto) for the named tool. */
+const vetoHook = (event, tool, message) => ({
+	event, command: nodeHook(`let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const j=JSON.parse(d);if(j.tool==='${tool}'){console.log('${message}');process.exit(2)}})`),
+});
+
+await test('user PreToolUse hooks run for harness calls, see Stormcoder tool names, and can veto', async () => {
+	const g = { ...policy('yolo'), hooks: [vetoHook('PreToolUse', 'run_command', 'no shell today')] };
+	const vetoed = await decideToolUse('Bash', { command: 'ls' }, ctx({ guardrails: g }));
+	assert.equal(vetoed.behavior, 'deny');
+	assert.match(vetoed.message, /Blocked by a PreToolUse hook/);
+	assert.match(vetoed.message, /no shell today/);
+	assert.equal((await decideToolUse('Read', { file_path: 'a.ts' }, ctx({ guardrails: g }))).behavior, 'allow', 'a hook that does not object lets the call through');
+});
+
+await test('a hook runs before approval, so a vetoed call never asks the user', async () => {
+	const a = approver();
+	const g = { ...policy('always'), hooks: [vetoHook('PreToolUse', 'run_command', 'stop')] };
+	await decideToolUse('Bash', { command: 'ls' }, ctx({ guardrails: g, approver: a }));
+	assert.equal(a.asked.length, 0);
+});
+
+await test('a broken hook never blocks and warns; hooks need a trusted folder only through runHooks', async () => {
+	const notes = [];
+	const g = { ...policy('yolo'), hooks: [{ event: 'PreToolUse', command: nodeHook('process.exit(7)') }] };
+	const v = await decideToolUse('Bash', { command: 'ls' }, ctx({ guardrails: g, note: t => notes.push(t) }));
+	assert.equal(v.behavior, 'allow');
+	assert.equal(notes.length, 1);
+	assert.match(notes[0], /exited with code 7/);
+});
+
+await test('PostToolUse hooks give the model feedback, and never throw', async () => {
+	const g = { ...policy('yolo'), hooks: [{ event: 'PostToolUse', command: nodeHook("console.log('lint failed');process.exit(2)") }] };
+	const feedback = await postHooks('Edit', { file_path: 'a.ts' }, 'done', false, ctx({ guardrails: g }));
+	assert.match(feedback, /\[PostToolUse hook\]\nlint failed/);
+	assert.equal(await postHooks('Edit', {}, 'x', false, ctx()), undefined, 'no hooks, no feedback');
+	assert.equal(await postHooks('Edit', {}, 'x', false, { ...ctx(), guardrails: undefined }), undefined, 'a failure inside is swallowed');
+});
+
+await test('the sub-agent cap and depth limit from the guardrails hold across a run', async () => {
+	const g = { ...policy('yolo'), maxSubagents: 2, maxSubagentDepth: 2 };
+	const c = ctx({ guardrails: g, state: { subagents: 0 } });
+	assert.equal((await decideToolUse('Agent', {}, c)).behavior, 'allow');
+	assert.equal((await decideToolUse('Task', {}, c)).behavior, 'allow');
+	const third = await decideToolUse('Agent', {}, c);
+	assert.equal(third.behavior, 'deny');
+	assert.match(third.message, /limit \(stormcoder\.agent\.maxSubagents\)/);
+
+	const shallow = ctx({ guardrails: { ...policy('yolo'), maxSubagents: 9, maxSubagentDepth: 1 }, state: { subagents: 0 } });
+	assert.equal((await decideToolUse('Agent', {}, shallow)).behavior, 'allow', 'the main agent may start one');
+	const nested = await decideToolUse('Agent', {}, shallow, { fromSubagent: true });
+	assert.equal(nested.behavior, 'deny', 'a sub-agent may not start another when the depth limit is 1');
+	assert.match(nested.message, /maxSubagentDepth/);
+	assert.equal((await decideToolUse('Agent', {}, ctx({ guardrails: { ...policy('yolo'), maxSubagentDepth: 2 }, state: { subagents: 0 } }), { fromSubagent: true })).behavior, 'allow');
+});
+
+await test('a command timeout longer than the user allows is clamped; a shorter one is left alone', async () => {
+	const g = { ...policy('yolo'), commandTimeoutMs: 30_000 };
+	const clamped = await decideToolUse('Bash', { command: 'ls', timeout: 600_000, description: 'd' }, ctx({ guardrails: g }));
+	assert.equal(clamped.behavior, 'allow');
+	assert.deepEqual(clamped.updatedInput, { command: 'ls', timeout: 30_000, description: 'd' });
+	assert.equal((await decideToolUse('Bash', { command: 'ls', timeout: 10_000 }, ctx({ guardrails: g }))).updatedInput, undefined);
+	const byDefault = await decideToolUse('Bash', { command: 'ls' }, ctx({ guardrails: g }));
+	assert.equal(byDefault.updatedInput.timeout, 30_000, 'the harness default (2 minutes) is also over a 30 second limit');
+	assert.equal((await decideToolUse('Bash', { command: 'ls' }, ctx({ guardrails: { ...policy('yolo'), commandTimeoutMs: 300_000 } }))).updatedInput, undefined);
+	const asked = approver();
+	const answer = await decideToolUse('Bash', { command: 'ls', timeout: 600_000 }, ctx({ guardrails: { ...policy('always'), commandTimeoutMs: 20_000 }, approver: asked }));
+	assert.equal(answer.updatedInput.timeout, 20_000, 'the clamp survives an approval');
+	assert.match(asked.asked[0].detail, /timeout 20s/);
+});
+
+await test('asking to leave the sandbox is refused while the sandbox is on', async () => {
+	const on = ctx({ guardrails: { ...policy('yolo'), sandbox: 'workspace' } });
+	const v = await decideToolUse('Bash', { command: 'ls', dangerouslyDisableSandbox: true }, on);
+	assert.equal(v.behavior, 'deny');
+	assert.match(v.message, /sandbox/);
+	assert.equal((await decideToolUse('Bash', { command: 'ls' }, on)).behavior, 'allow');
+	assert.equal((await decideToolUse('Bash', { command: 'ls', dangerouslyDisableSandbox: true }, ctx({ guardrails: { ...policy('yolo'), sandbox: 'off' } }))).behavior, 'allow', 'with no sandbox configured there is nothing to leave');
+});
+
 fs.rmSync(root, { recursive: true, force: true });
 console.log(`engine bridge: ${passed} tests, all assertions passed`);

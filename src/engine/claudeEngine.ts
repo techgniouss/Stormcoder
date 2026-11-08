@@ -15,7 +15,8 @@ import { ChatImage, ToolCall, isAbortError } from '../providers/types';
 import { ANTHROPIC_ONLY_TOOLS, UpstreamKind, compactionEnv, upstreamKind } from './capabilities';
 import type { AnthropicGateway, GatewayUsage } from './gateway';
 import { SessionRoute, engineModelEnv } from './modelMap';
-import { FileTracker, decideToolUse, toStormcoderCall } from './toolBridge';
+import { TESTED_SDK_SERIES } from './sdkVersion';
+import { FileTracker, decideToolUse, postHooks, toStormcoderCall } from './toolBridge';
 
 /**
  * Drives the Claude Code harness (the Claude Agent SDK) for one chat turn, and translates what it
@@ -56,8 +57,7 @@ export interface SdkLocation {
 	readonly appRoot?: string;
 }
 
-/** The SDK versions this integration was written and tested against (`major.minor`). */
-export const TESTED_SDK_SERIES = '0.3';
+export { TESTED_SDK_SERIES };
 
 const SDK_PACKAGE = '@anthropic-ai/claude-agent-sdk';
 
@@ -162,6 +162,8 @@ export interface EngineTurn {
 	/** Stormcoder's memory block, appended to the harness prompt. Off by default: it costs tokens every turn. */
 	readonly appendPrompt?: string;
 	readonly maxTurns?: number;
+	/** Wall-clock ceiling for the turn in ms; 0 or absent for none. The built-in agent has the same limit. */
+	readonly maxRunMs?: number;
 	/** The main model's context window, so the harness compacts at the right size. */
 	readonly contextWindow: number;
 	readonly loadProjectSettings: boolean;
@@ -234,7 +236,29 @@ export function engineTools(upstream: UpstreamKind): string[] {
 }
 
 /** The structural hook types we hand the SDK. */
-interface PreToolInput { readonly tool_name: string; readonly tool_input?: unknown; readonly tool_use_id?: string }
+interface PreToolInput { readonly tool_name: string; readonly tool_input?: unknown; readonly tool_use_id?: string; readonly agent_id?: string }
+interface PostToolInput { readonly tool_name?: string; readonly tool_input?: unknown; readonly tool_response?: unknown; readonly tool_use_id?: string; readonly error?: unknown }
+
+/**
+ * The harness's own OS sandbox for its shell, from `stormcoder.agent.sandbox`: the same promise the
+ * built-in loop makes (writes confined to the workspace; with `workspace-offline`, no network),
+ * enforced by the harness because Stormcoder does not run its commands. Fails closed: if the sandbox
+ * cannot start the harness stops, rather than running commands unprotected. Nothing when the setting
+ * is off.
+ */
+export function sandboxSettings(g: Pick<Guardrails, 'sandbox' | 'sandboxWritablePaths'>): Record<string, unknown> | undefined {
+	if (!g.sandbox || g.sandbox === 'off') {
+		return undefined;
+	}
+	return {
+		enabled: true,
+		failIfUnavailable: true,
+		allowUnsandboxedCommands: false,
+		autoAllowBashIfSandboxed: false,
+		...(g.sandbox === 'workspace-offline' ? { network: { allowedDomains: [], strictAllowlist: true } } : {}),
+		...(g.sandboxWritablePaths?.length ? { filesystem: { allowWrite: [...g.sandboxWritablePaths] } } : {}),
+	};
+}
 
 /**
  * The options for one `query()` call.
@@ -246,31 +270,32 @@ interface PreToolInput { readonly tool_name: string; readonly tool_input?: unkno
  */
 export function buildQueryOptions(
 	turn: EngineTurn,
-	deps: { env: Record<string, string>; abort: AbortController; tracker: FileTracker; stderr: (data: string) => void },
+	deps: { env: Record<string, string>; abort: AbortController; tracker: FileTracker; stderr: (data: string) => void; note?: (text: string) => void },
 ): Record<string, unknown> {
 	const upstream = upstreamKind(turn.route.main);
 	const readOnly = turn.mode !== 'agent' || !turn.trusted;
 	const ctx = {
 		guardrails: turn.guardrails, approver: turn.approver, root: turn.cwd,
 		trusted: turn.trusted, readOnly, upstream,
+		signal: deps.abort.signal, note: deps.note, state: { subagents: 0 },
 	};
+	const asObject = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' ? value as Record<string, unknown> : {});
 	const preToolUse = async (input: PreToolInput, toolUseId?: string): Promise<Record<string, unknown>> => {
-		const toolInput = (input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {}) as Record<string, unknown>;
-		const verdict = await decideToolUse(input.tool_name, toolInput, ctx);
+		const toolInput = asObject(input.tool_input);
+		const verdict = await decideToolUse(input.tool_name, toolInput, ctx, { fromSubagent: !!input.agent_id });
 		if (verdict.behavior === 'deny') {
 			return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: verdict.message } };
 		}
 		await deps.tracker.before(toolUseId ?? input.tool_use_id ?? '', input.tool_name, toolInput);
-		return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } };
+		return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', ...(verdict.updatedInput ? { updatedInput: verdict.updatedInput } : {}) } };
 	};
-	const postToolUse = async (input: { tool_use_id?: string }, toolUseId?: string): Promise<Record<string, unknown>> => {
+	const afterToolUse = (event: 'PostToolUse' | 'PostToolUseFailure') => async (input: PostToolInput, toolUseId?: string): Promise<Record<string, unknown>> => {
 		await deps.tracker.after(toolUseId ?? input.tool_use_id ?? '');
-		return {};
+		const feedback = await postHooks(input.tool_name ?? '', asObject(input.tool_input), event === 'PostToolUse' ? input.tool_response : input.error, event === 'PostToolUseFailure', ctx);
+		return feedback ? { hookSpecificOutput: { hookEventName: event, additionalContext: feedback } } : {};
 	};
-	const failedToolUse = async (input: { tool_use_id?: string }, toolUseId?: string): Promise<Record<string, unknown>> => {
-		await deps.tracker.after(toolUseId ?? input.tool_use_id ?? '');
-		return {};
-	};
+	const postToolUse = afterToolUse('PostToolUse');
+	const failedToolUse = afterToolUse('PostToolUseFailure');
 
 	const options: Record<string, unknown> = {
 		cwd: turn.cwd,
@@ -287,6 +312,7 @@ export function buildQueryOptions(
 		agentProgressSummaries: false,
 		systemPrompt: { type: 'preset', preset: 'claude_code', snapshot: true, ...(turn.appendPrompt ? { append: turn.appendPrompt } : {}) },
 		settings: {
+			...(sandboxSettings(turn.guardrails) ? { sandbox: sandboxSettings(turn.guardrails) } : {}),
 			autoMemoryEnabled: false,
 			autoDreamEnabled: false,
 			promptSuggestionEnabled: false,
@@ -553,9 +579,19 @@ export class ClaudeEngine {
 		const tracker = new FileTracker(turn.cwd, turn.approver);
 		const mapper = new MessageMapper(cb);
 		let query: SdkQuery | undefined;
+		let timedOut = false;
+		const timer = turn.maxRunMs && turn.maxRunMs > 0 ? setTimeout(() => {
+			timedOut = true;
+			abort.abort();
+			void query?.interrupt().catch(() => undefined);
+		}, turn.maxRunMs) : undefined;
+		const limitResult = (): EngineResult => ({
+			reason: 'limit', sessionId: mapper.sessionId, costUsd: mapper.costUsd,
+			detail: `The Claude Code engine was stopped after ${Math.round((turn.maxRunMs ?? 0) / 60_000)} minutes (stormcoder.agent.maxRunMinutes). Send "continue" to carry on.`,
+		});
 		try {
 			const env = buildEngineEnv(this.deps.env ?? process.env, turn, gatewaySession && gateway ? { baseUrl: gateway.baseUrl, token: gatewaySession.token } : undefined);
-			const options = buildQueryOptions(turn, { env, abort, tracker, stderr: data => { stderr = (stderr + data).slice(-2_000); } });
+			const options = buildQueryOptions(turn, { env, abort, tracker, stderr: data => { stderr = (stderr + data).slice(-2_000); }, note: text => cb.onNote(text) });
 			query = sdk.query({ prompt: buildPrompt(turn), options });
 			for await (const message of query) {
 				mapper.handle(message);
@@ -563,18 +599,25 @@ export class ClaudeEngine {
 			mapper.flush();
 		} catch (err) {
 			mapper.flush();
+			if (timedOut && !turn.signal.aborted) {
+				return limitResult();
+			}
 			if (turn.signal.aborted || isAbortError(err)) {
 				throw new DOMException('Aborted', 'AbortError');
 			}
 			const detail = `${err instanceof Error ? err.message : String(err)}${stderr.trim() ? `\n${stderr.trim()}` : ''}`;
 			return { reason: 'error', detail, failure: err instanceof Error ? err : new Error(detail), sessionId: mapper.sessionId, costUsd: mapper.costUsd };
 		} finally {
+			if (timer) { clearTimeout(timer); }
 			turn.signal.removeEventListener('abort', onAbort);
 			gatewaySession?.dispose();
 			try { query?.close(); } catch { /* already closed */ }
 		}
 		if (turn.signal.aborted) {
 			throw new DOMException('Aborted', 'AbortError');
+		}
+		if (timedOut) {
+			return limitResult();
 		}
 		return mapper.result ?? { reason: 'error', detail: 'The Claude Code engine ended without a result.', sessionId: mapper.sessionId, costUsd: mapper.costUsd };
 	}

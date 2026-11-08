@@ -5,6 +5,16 @@
 		"group": "Command"
 	},
 	{
+		"id": "stormcoder.engine.choose",
+		"title": "Choose Agent Engine (Built-in or Claude Code)",
+		"group": "Command"
+	},
+	{
+		"id": "stormcoder.engine.installClaude",
+		"title": "Install Claude Code Engine",
+		"group": "Command"
+	},
+	{
 		"id": "stormcoder.signIn",
 		"title": "Sign in to Provider (Web)",
 		"group": "Command"

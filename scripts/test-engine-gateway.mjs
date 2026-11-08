@@ -644,6 +644,46 @@ await test('UsageTap reads split streaming frames and a JSON body', () => {
 	assert.deepEqual(broken.result(), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 });
 
+await test('UsageTap drops an enormous line without a newline instead of buffering it forever', () => {
+	const tap = new UsageTap(true);
+	tap.push(new TextEncoder().encode('data: ' + 'x'.repeat(2 * 1024 * 1024)));
+	tap.push(new TextEncoder().encode('\n' + streamBody));
+	assert.equal(tap.result().output, 77, 'it recovers and reads the next frames');
+});
+
+await test('a client that stops reading and then leaves does not strand the upstream or the gateway', async () => {
+	let upstreamClosed = false;
+	const flood = http.createServer((req, res) => {
+		res.writeHead(200, { 'content-type': 'text/event-stream' });
+		const chunk = 'data: ' + 'y'.repeat(60_000) + '\n\n';
+		const timer = setInterval(() => { if (!res.destroyed) { res.write(chunk); } }, 1);
+		res.on('close', () => { upstreamClosed = true; clearInterval(timer); });
+	});
+	await new Promise(r => flood.listen(0, '127.0.0.1', r));
+	const g = new AnthropicGateway({ registry: { ...registry, getBaseUrl: () => `http://127.0.0.1:${flood.address().port}/v1` } });
+	await g.start();
+	const s = g.registerSession({ id: 'bp', route: claudeRoute });
+	await new Promise(resolve => {
+		const body = JSON.stringify({ model: 'claude-sonnet-x', stream: true, messages: [{ role: 'user', content: 'x' }] });
+		const req = http.request({ host: '127.0.0.1', port: Number(new URL(g.baseUrl).port), path: '/v1/messages', method: 'POST', headers: { authorization: `Bearer ${s.token}`, 'content-length': Buffer.byteLength(body) } }, res => {
+			res.pause(); // never reads: the gateway's write buffer fills and it must wait for a drain
+			setTimeout(() => { req.destroy(); resolve(); }, 300);
+		});
+		req.on('error', () => { });
+		req.end(body);
+	});
+	for (let i = 0; i < 100 && !upstreamClosed; i++) { await new Promise(r => setTimeout(r, 20)); }
+	assert.ok(upstreamClosed, 'the upstream stream is torn down once the client is gone');
+	const other = await new Promise((resolve, reject) => {
+		const req = http.request({ host: '127.0.0.1', port: Number(new URL(g.baseUrl).port), path: '/v1/models', method: 'GET', headers: { authorization: `Bearer ${s.token}` } }, r => { r.resume(); resolve(r.statusCode); });
+		req.on('error', reject);
+		req.end();
+	});
+	assert.equal(other, 200, 'and the gateway still serves other requests');
+	await g.stop();
+	flood.close();
+});
+
 await test('stopping closes the server', async () => {
 	await gateway.stop();
 	assert.equal(gateway.listening, false);

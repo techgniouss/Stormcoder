@@ -64,7 +64,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	// The engine is chosen once, at start. Offer a restart when the setting is changed to something
 	// else, instead of silently ignoring the edit or switching under a running app.
 	context.subscriptions.push(
-		{ dispose: () => { void viewProvider.disposeEngine(); } },
+		{ dispose: () => { viewProvider.disposeEngine().catch(() => undefined); } },
 		vscode.workspace.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration('stormcoder.engine') && readEngineSetting() !== engineSelectedAtStart() && !restartOffered) {
 				restartOffered = true;
@@ -94,6 +94,8 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand('stormcoder.newChat', () => viewProvider.newChat()),
 		vscode.commands.registerCommand('stormcoder.openSettings', () => viewProvider.openSettingsWindow()),
 		vscode.commands.registerCommand('stormcoder.selectProvider', () => selectProvider(registry, viewProvider)),
+		vscode.commands.registerCommand('stormcoder.engine.choose', () => chooseEngine(viewProvider)),
+		vscode.commands.registerCommand('stormcoder.engine.installClaude', () => installClaudeEngine(viewProvider)),
 		vscode.commands.registerCommand('stormcoder.configureProvider', (presetId?: string) =>
 			configureProvider(registry, viewProvider, presetId)),
 		vscode.commands.registerCommand('stormcoder.signIn', (presetId?: string) =>
@@ -204,6 +206,89 @@ async function pickProvider(registry: ProviderRegistry, placeHolder: string): Pr
 		{ placeHolder, matchOnDetail: true },
 	);
 	return picked?.id;
+}
+
+/** Where Anthropic states the terms the Claude Agent SDK is provided under. */
+const CLAUDE_SDK_TERMS_URL = 'https://code.claude.com/docs/en/legal-and-compliance';
+
+/** One choice in the "Choose Agent Engine" list. */
+interface EngineChoice extends vscode.QuickPickItem {
+	readonly id: 'builtin' | 'claude-code';
+}
+
+/**
+ * `stormcoder.engine.choose`: picks who runs the agent loop. Choosing the Claude Code engine installs
+ * the SDK first when it is missing; the setting is saved only once that works, so the choice can never
+ * leave the app pointing at an engine that cannot start. A restart applies it (the setting listener
+ * offers one).
+ */
+async function chooseEngine(view: ChatViewProvider): Promise<void> {
+	const status = view.engineStatus();
+	const current = readEngineSetting();
+	const picked = await vscode.window.showQuickPick<EngineChoice>([
+		{
+			id: 'builtin',
+			label: 'Built-in agent',
+			description: current === 'builtin' ? 'current' : '',
+			detail: 'Stormcoder\'s own agent loop, tools and Auto mode.',
+		},
+		{
+			id: 'claude-code',
+			label: 'Claude Code engine',
+			description: current === 'claude-code' ? 'current' : '',
+			detail: `The Claude Code harness with any model you pick. ${status.installed ? `Claude Agent SDK ${status.installed} is installed.` : 'Needs the Claude Agent SDK, which is installed for you.'}`,
+		},
+	], { title: 'Choose the agent engine', placeHolder: 'The change applies after a restart' });
+	if (!picked) {
+		return;
+	}
+	if (picked.id === 'claude-code' && !status.installed && !await installClaudeEngine(view)) {
+		return;
+	}
+	if (picked.id === current) {
+		vscode.window.showInformationMessage(`Stormcoder already uses the ${picked.id === 'claude-code' ? 'Claude Code' : 'built-in'} engine.`);
+		return;
+	}
+	await vscode.workspace.getConfiguration('stormcoder').update('engine', picked.id, vscode.ConfigurationTarget.Global);
+}
+
+/**
+ * `stormcoder.engine.installClaude`: downloads the Claude Agent SDK (a separate package under
+ * Anthropic's own terms, not part of Stormcoder) from the npm registry into the app's data folder,
+ * after saying so. Returns whether an install is now in place.
+ */
+async function installClaudeEngine(view: ChatViewProvider): Promise<boolean> {
+	// Modal: a licence notice must wait for an answer, not fade away like a toast.
+	const go = await vscode.window.showInformationMessage(
+		'Install the Claude Agent SDK?',
+		{ modal: true, detail: `This downloads the Claude Agent SDK, a separate package provided by Anthropic under its own terms (${CLAUDE_SDK_TERMS_URL}), `
+			+ 'from the npm registry into Stormcoder\'s data folder. It is not part of Stormcoder.' },
+		'Install',
+	);
+	if (go !== 'Install') {
+		return false;
+	}
+	const controller = new AbortController();
+	try {
+		const result = await vscode.window.withProgress(
+			{ location: vscode.ProgressLocation.Notification, title: 'Installing the Claude Agent SDK…', cancellable: true },
+			(progress, token) => {
+				token.onCancellationRequested(() => controller.abort());
+				return view.installEngineSdk(message => progress.report({ message }), controller.signal);
+			},
+		);
+		vscode.window.showInformationMessage(result.restartNeeded
+			? `Claude Agent SDK ${result.version} installed. Restart Stormcoder to start using it.`
+			: `Claude Agent SDK ${result.version} installed.`);
+		return true;
+	} catch (err) {
+		if (controller.signal.aborted) {
+			vscode.window.showInformationMessage('Install cancelled. Nothing was changed.');
+		} else {
+			vscode.window.showErrorMessage(`Could not install the Claude Agent SDK: ${err instanceof Error ? err.message : String(err)}`);
+		}
+		return false;
+	}
 }
 
 async function selectProvider(registry: ProviderRegistry, view: ChatViewProvider): Promise<void> {

@@ -25,7 +25,7 @@ Module._load = function (request, parent, isMain) {
 };
 
 const engineMod = await import(new URL('../out/engine/claudeEngine.js', import.meta.url));
-const { ClaudeEngine, MessageMapper, buildEngineEnv, buildQueryOptions, buildPrompt, engineTools, findSdk, sdkCandidates, loadClaudeSdk, sdkMissingMessage, todosOf, TESTED_SDK_SERIES } = engineMod;
+const { ClaudeEngine, MessageMapper, buildEngineEnv, buildQueryOptions, buildPrompt, engineTools, findSdk, sdkCandidates, loadClaudeSdk, sdkMissingMessage, sandboxSettings, todosOf, TESTED_SDK_SERIES } = engineMod;
 const { FileTracker } = await import(new URL('../out/engine/toolBridge.js', import.meta.url));
 const { loadGuardrails } = await import(new URL('../out/agent/guardrails.js', import.meta.url));
 const { MAIN_ALIAS, FAST_ALIAS } = await import(new URL('../out/engine/modelMap.js', import.meta.url));
@@ -450,6 +450,108 @@ await test('run: an already-aborted turn never starts a model request', async ()
 	controller.abort();
 	const { sdk } = fakeSdk(okScript);
 	await assert.rejects(new ClaudeEngine({ gateway: () => fakeGateway(), load: async () => sdk, env: {} }).run(turn({ signal: controller.signal }), recorder().cb), err => err.name === 'AbortError');
+});
+
+// --- parity: sandbox, rewritten input, hook feedback, run limit ---------------------------------
+
+await test('the OS sandbox setting becomes the harness sandbox, failing closed; off sets nothing', () => {
+	assert.equal(sandboxSettings({ sandbox: 'off' }), undefined);
+	assert.equal(sandboxSettings({}), undefined);
+	const workspace = sandboxSettings({ sandbox: 'workspace', sandboxWritablePaths: ['/cache'] });
+	assert.equal(workspace.enabled, true);
+	assert.equal(workspace.failIfUnavailable, true, 'no silent fall back to running unprotected');
+	assert.equal(workspace.allowUnsandboxedCommands, false);
+	assert.deepEqual(workspace.filesystem, { allowWrite: ['/cache'] });
+	assert.equal(workspace.network, undefined);
+	const offline = sandboxSettings({ sandbox: 'workspace-offline' });
+	assert.deepEqual(offline.network, { allowedDomains: [], strictAllowlist: true });
+	assert.equal(offline.filesystem, undefined);
+
+	const g = { ...loadGuardrails(), sandbox: 'workspace-offline' };
+	assert.equal(options(turn({ guardrails: g })).settings.sandbox.enabled, true);
+	assert.equal(options(turn()).settings.sandbox, undefined);
+});
+
+await test('the hook hands the harness a clamped timeout, and tells the bridge a call came from a sub-agent', async () => {
+	const t = turn({ guardrails: { ...loadGuardrails(), approval: 'yolo', commandTimeoutMs: 15_000, maxSubagentDepth: 1 } });
+	const pre = options(t).hooks.PreToolUse[0].hooks[0];
+	const out = await pre({ tool_name: 'Bash', tool_input: { command: 'ls', timeout: 600_000 }, tool_use_id: 'x' });
+	assert.equal(out.hookSpecificOutput.permissionDecision, 'allow');
+	assert.deepEqual(out.hookSpecificOutput.updatedInput, { command: 'ls', timeout: 15_000 });
+	assert.equal((await pre({ tool_name: 'Read', tool_input: { file_path: 'x.ts' }, tool_use_id: 'y' })).hookSpecificOutput.updatedInput, undefined);
+	assert.equal((await pre({ tool_name: 'Agent', tool_input: {}, tool_use_id: 'a' })).hookSpecificOutput.permissionDecision, 'allow');
+	const nested = await pre({ tool_name: 'Agent', tool_input: {}, tool_use_id: 'b', agent_id: 'sub-1' });
+	assert.equal(nested.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+await test('user PostToolUse hook feedback reaches the model, and hook warnings reach the user', async () => {
+	const notes = [];
+	const hook = script => `"${process.execPath}" -e "${script}"`;
+	const g = {
+		...loadGuardrails(), approval: 'yolo',
+		hooks: [
+			{ event: 'PostToolUse', command: hook("console.log('tests are red');process.exit(2)") },
+			{ event: 'PreToolUse', command: hook('process.exit(9)') },
+		],
+	};
+	const o = options(turn({ guardrails: g }), { note: t => notes.push(t) });
+	await o.hooks.PreToolUse[0].hooks[0]({ tool_name: 'Read', tool_input: { file_path: 'x.ts' }, tool_use_id: 'r' });
+	assert.equal(notes.length, 1);
+	assert.match(notes[0], /exited with code 9/);
+	const post = await o.hooks.PostToolUse[0].hooks[0]({ tool_name: 'Edit', tool_input: { file_path: 'x.ts' }, tool_response: 'ok', tool_use_id: 'e' }, 'e');
+	assert.equal(post.hookSpecificOutput.hookEventName, 'PostToolUse');
+	assert.match(post.hookSpecificOutput.additionalContext, /tests are red/);
+	const failed = await o.hooks.PostToolUseFailure[0].hooks[0]({ tool_name: 'Edit', tool_input: {}, error: 'boom', tool_use_id: 'f' }, 'f');
+	assert.equal(failed.hookSpecificOutput.hookEventName, 'PostToolUseFailure');
+});
+
+await test('run: a turn that outlasts the wall-clock limit is stopped and reported as a limit, not an error', async () => {
+	const gateway = fakeGateway();
+	let interrupted = false;
+	const sdk = {
+		query(params) {
+			return {
+				close: () => { },
+				interrupt: async () => { interrupted = true; },
+				async *[Symbol.asyncIterator]() {
+					yield { type: 'system', subtype: 'init', session_id: 'LIM' };
+					await new Promise(resolve => params.options.abortController.signal.addEventListener('abort', resolve));
+					throw new Error('Claude Code process aborted by user');
+				},
+			};
+		},
+	};
+	const started = Date.now();
+	const result = await new ClaudeEngine({ gateway: () => gateway, load: async () => sdk, env: {} }).run(turn({ maxRunMs: 60 }), recorder().cb);
+	assert.equal(result.reason, 'limit');
+	assert.match(result.detail, /stopped after \d+ minutes/);
+	assert.equal(result.sessionId, 'LIM', 'the session can be continued');
+	assert.ok(interrupted, 'the harness is asked to stop');
+	assert.ok(Date.now() - started < 3000);
+	assert.equal(gateway.state.disposed, 1);
+});
+
+await test('run: the user pressing Stop wins over the wall-clock limit', async () => {
+	const controller = new AbortController();
+	const sdk = {
+		query(params) {
+			return {
+				close: () => { }, interrupt: async () => { },
+				async *[Symbol.asyncIterator]() {
+					setTimeout(() => controller.abort(), 20);
+					await new Promise(resolve => params.options.abortController.signal.addEventListener('abort', resolve));
+					yield { type: 'system', subtype: 'init', session_id: 'S' };
+				},
+			};
+		},
+	};
+	await assert.rejects(new ClaudeEngine({ gateway: () => fakeGateway(), load: async () => sdk, env: {} }).run(turn({ signal: controller.signal, maxRunMs: 5_000 }), recorder().cb), err => err.name === 'AbortError');
+});
+
+await test('run: a finished turn leaves no timer running', async () => {
+	const { sdk } = fakeSdk(okScript);
+	await new ClaudeEngine({ gateway: () => fakeGateway(), load: async () => sdk, env: {} }).run(turn({ maxRunMs: 3_600_000 }), recorder().cb);
+	// An hour-long timer left behind would keep the process alive; the test exiting promptly is the proof.
 });
 
 // --- finding and loading the SDK -----------------------------------------------------------------

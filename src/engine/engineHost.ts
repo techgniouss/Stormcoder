@@ -8,8 +8,9 @@ import * as vscode from 'vscode';
 import type { ProviderRegistry } from '../providers/registry';
 import { ChatMessage, ModelEntry } from '../providers/types';
 import { checkTarget } from './capabilities';
-import { ClaudeEngine, EngineCallbacks, EngineResult, EngineTurn, SdkLocation, TESTED_SDK_SERIES, loadClaudeSdk } from './claudeEngine';
+import { ClaudeEngine, EngineCallbacks, EngineResult, EngineTurn, SdkLocation, TESTED_SDK_SERIES, findSdk, loadClaudeSdk } from './claudeEngine';
 import { AnthropicGateway } from './gateway';
+import { installClaudeSdk } from './installer';
 import { EngineTarget, SessionRoute } from './modelMap';
 
 /** Who runs the agent loop. */
@@ -33,6 +34,11 @@ let engineAtStart: EngineId | undefined;
 export function engineSelectedAtStart(): EngineId {
 	engineAtStart ??= readEngineSetting();
 	return engineAtStart;
+}
+
+/** How the engine reaches its model: through Stormcoder's gateway (default) or the user's own Claude Code login. */
+function readAuth(): 'gateway' | 'own-login' {
+	return vscode.workspace.getConfiguration('stormcoder').get<string>('engine.claudeCode.auth') === 'own-login' ? 'own-login' : 'gateway';
 }
 
 /** A route for the engine, or why there is none. */
@@ -98,6 +104,8 @@ export class EngineHost {
 	private gateway?: AnthropicGateway;
 	private starting?: Promise<AnthropicGateway>;
 	private readonly engine: ClaudeEngine;
+	/** The SDK version this process has loaded. A module is cached for the life of the process, so a newer one needs a restart. */
+	private loadedVersion: string | undefined;
 
 	constructor(private readonly options: EngineHostOptions) {
 		this.id = engineSelectedAtStart();
@@ -105,12 +113,39 @@ export class EngineHost {
 			gateway: () => this.gateway,
 			load: async () => {
 				const { sdk, found } = await loadClaudeSdk(this.sdkLocation());
+				this.loadedVersion = found.version;
 				if (found.compat === 'untested') {
 					this.options.log(`Claude Agent SDK ${found.version} is outside the tested ${TESTED_SDK_SERIES}.x series; it may still work.`);
 				}
 				return sdk;
 			},
 		});
+	}
+
+	/** The folder the in-app installer puts the SDK in. */
+	installDir(): string {
+		return path.join(path.dirname(this.options.context.globalStorageUri.fsPath), 'engines', 'claude');
+	}
+
+	/** What is installed, and what this process is running. */
+	sdkStatus(): { installed?: string; loaded?: string } {
+		return { installed: findSdk(this.sdkLocation())?.version, loaded: this.loadedVersion };
+	}
+
+	/**
+	 * Downloads the SDK into {@link installDir}. `restartNeeded` is true when this process already
+	 * loaded a different version, which it keeps until it restarts.
+	 */
+	async installSdk(onProgress: (message: string) => void, signal: AbortSignal): Promise<{ version: string; restartNeeded: boolean }> {
+		const configured = vscode.workspace.getConfiguration('stormcoder').get<unknown>('engine.registry');
+		const registry = typeof configured === 'string' && configured.trim() ? configured.trim() : undefined;
+		const result = await installClaudeSdk({ dir: this.installDir(), registry, onProgress, signal });
+		return { version: result.version, restartNeeded: this.loadedVersion !== undefined && this.loadedVersion !== result.version };
+	}
+
+	/** Whether the local gateway is currently listening. */
+	get gatewayRunning(): boolean {
+		return !!this.gateway?.listening;
 	}
 
 	/** Whether the Claude Code engine is the one in use. */
@@ -121,11 +156,30 @@ export class EngineHost {
 	/** Where the SDK may be installed. */
 	sdkLocation(): SdkLocation {
 		const cfg = vscode.workspace.getConfiguration('stormcoder');
+		const sdkPath = cfg.get<unknown>('engine.claudeCode.sdkPath');
 		return {
-			sdkPath: cfg.get<string>('engine.claudeCode.sdkPath') ?? '',
+			// A hand-edited settings file can hold anything; only a string is a path.
+			sdkPath: typeof sdkPath === 'string' ? sdkPath : '',
 			userDataDir: path.dirname(this.options.context.globalStorageUri.fsPath),
 			appRoot: this.options.context.extensionPath,
 		};
+	}
+
+	/**
+	 * Whether the engine can run a turn right now: the SDK is on disk and loads, and (unless the engine
+	 * uses its own login) the gateway is up. Nothing is changed by a failure, so the caller can hand the
+	 * message to the built-in agent instead.
+	 */
+	async preflight(): Promise<{ ok: true } | { ok: false; reason: string }> {
+		try {
+			this.loadedVersion = (await loadClaudeSdk(this.sdkLocation())).found.version;
+			if (readAuth() === 'gateway') {
+				await this.ensureStarted();
+			}
+			return { ok: true };
+		} catch (err) {
+			return { ok: false, reason: (err instanceof Error ? err.message : String(err)).split('\n')[0] };
+		}
 	}
 
 	/** Starts the gateway if it is not running. */
@@ -168,14 +222,14 @@ export class EngineHost {
 	/** Runs one chat turn through the harness. */
 	async run(turn: Omit<EngineTurn, 'auth' | 'cliPath' | 'loadProjectSettings'>, callbacks: EngineCallbacks): Promise<EngineResult> {
 		const cfg = vscode.workspace.getConfiguration('stormcoder');
-		const auth = cfg.get<string>('engine.claudeCode.auth') === 'own-login' ? 'own-login' : 'gateway';
+		const auth = readAuth();
 		if (auth === 'gateway') {
 			await this.ensureStarted();
 		}
 		return this.engine.run({
 			...turn,
 			auth,
-			cliPath: cfg.get<string>('engine.claudeCode.cliPath')?.trim() || undefined,
+			cliPath: (() => { const raw = cfg.get<unknown>('engine.claudeCode.cliPath'); return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined; })(),
 			loadProjectSettings: cfg.get<boolean>('engine.claudeCode.loadProjectSettings') !== false,
 		}, callbacks);
 	}

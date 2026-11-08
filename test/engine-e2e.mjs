@@ -126,6 +126,7 @@ export function query({ prompt, options }) {
 const mock = await startMock(req => {
 	// The independent reviewer (Stormcoder's own request, not the harness's).
 	if (String(req.messages[0]?.content).includes('You are the REVIEWER')) {
+		if (String(req.messages[1]?.content).includes('Review my uncommitted changes')) { return 'Slash review done.\nVERDICT: PASS'; }
 		return 'The change adds notes.txt as asked.\nVERDICT: ISSUES\n- No test covers it.';
 	}
 	const lastMessage = req.messages.at(-1);
@@ -229,6 +230,8 @@ try {
 
 	// 4. A run that changes files is reviewed once, by the pinned reviewer, and only that run.
 	assert.equal(mock.seen.length, 5, 'no review ran for the turns that changed nothing, though a reviewer is pinned');
+	// Uncommitted work that was already there; the run below does not touch it.
+	fs.writeFileSync(path.join(host.project, 'hello.txt'), 'hi there\nDIRTY BEFORE RUN\n');
 	await send('please create notes');
 	await chat.getByText('Tool said: wrote notes.txt').first().waitFor({ timeout: 30000 });
 	await chat.getByText('No test covers it.').first().waitFor({ timeout: 30000 });
@@ -239,6 +242,7 @@ try {
 	assert.match(String(reviewRequest.messages[1].content), /\+remember the milk/, 'the reviewer is given the actual change');
 	assert.match(String(reviewRequest.messages[1].content), /create notes/, 'and the request it answered');
 	assert.equal(reviewRequest.tools, undefined, 'the reviewer has no tools');
+	assert.ok(!String(reviewRequest.messages[1].content).includes('DIRTY BEFORE RUN'), 'work that was there before the run is not charged to it');
 
 	// 5. A follow-up changes nothing: no second review, and the findings reach the engine once.
 	await send('thanks, add a test');
@@ -249,6 +253,16 @@ try {
 	await send('and one more thing');
 	await chat.getByText('A plain answer.').nth(2).waitFor({ timeout: 30000 });
 	assert.ok(!calls().at(-1).prompt.includes('second reviewer'), 'the findings are passed on once, not every turn');
+	assert.equal(mock.seen.length, 10);
+
+	// 6. /review goes straight to the pinned reviewer, over everything uncommitted; the harness is not asked.
+	const harnessCalls = calls().length;
+	await send('/review');
+	await chat.getByText('Slash review done.').first().waitFor({ timeout: 30000 });
+	assert.equal(mock.seen.length, 11, '/review is exactly one request, to the reviewer');
+	assert.equal(calls().length, harnessCalls, 'the harness did not run');
+	assert.match(String(mock.seen.at(-1).messages[1].content), /DIRTY BEFORE RUN/, '/review covers all uncommitted work');
+	assert.match(String(mock.seen.at(-1).messages[1].content), /remember the milk/);
 
 	// The gateway served everything on its translated path; nothing else was reached.
 	assert.deepEqual(errors, [], `page errors: ${errors.join('; ')}`);
@@ -262,5 +276,46 @@ try {
 	host.stop();
 	mock.close();
 	fs.rmSync(sdkRoot, { recursive: true, force: true });
+}
+
+// --- the engine is selected but cannot start: the app keeps working on the built-in agent ----------
+
+if (!failed) {
+	const mock2 = await startMock(req => (req.tools?.length ? 'Built-in agent answered.' : 'Built-in agent answered.'));
+	const host2 = await startHost({
+		mockPort: mock2.port,
+		settings: { 'stormcoder.engine': 'claude-code', 'stormcoder.engine.claudeCode.sdkPath': path.join(os.tmpdir(), 'no-such-sdk-folder') },
+	});
+	const browser2 = await launchChromium();
+	try {
+		const page = await browser2.newPage({ viewport: { width: 1280, height: 800 } });
+		const errors = [];
+		page.on('pageerror', e => errors.push(e.message));
+		await page.goto(host2.url);
+		const chat = page.frameLocator('#view-chat');
+		await chat.locator('#input').waitFor();
+		await chat.locator('.seg-btn[data-value=agent]').click();
+		await chat.locator('#input').fill('hello there');
+		await chat.locator('#input').press('Enter');
+		await chat.getByText('Built-in agent answered.').first().waitFor({ timeout: 30000 });
+		await chat.getByText(/Claude Code engine is not available/).first().waitFor({ timeout: 5000 });
+		assert.ok(String(mock2.seen[0].messages[0].content).length > 200, 'the built-in agent\'s own prompt was used');
+		assert.ok(!String(mock2.seen[0].messages[0].content).includes('FAKE HARNESS'));
+		// The note is shown once per chat, not on every message.
+		await chat.locator('#input').fill('and again');
+		await chat.locator('#input').press('Enter');
+		await chat.getByText('Built-in agent answered.').nth(1).waitFor({ timeout: 30000 });
+		assert.equal(await chat.getByText(/Claude Code engine is not available/).count(), 1);
+		assert.deepEqual(errors, [], `page errors: ${errors.join('; ')}`);
+		console.log('engine e2e (fallback): all assertions passed');
+	} catch (err) {
+		failed = true;
+		console.error(err);
+		console.error('--- host log ---\n' + host2.log().slice(-3000));
+	} finally {
+		await browser2.close();
+		host2.stop();
+		mock2.close();
+	}
 }
 process.exit(failed ? 1 : 0);

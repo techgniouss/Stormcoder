@@ -21,6 +21,9 @@ export const CODEX_DEFAULT_MODEL = 'default';
 /** Grace period after SIGTERM before an aborted child is force-killed. */
 const KILL_GRACE_MS = 3000;
 
+/** Longest a review may run. A reviewer that reads a large repository for this long is stuck, not thorough. */
+export const CODEX_MAX_MS = 15 * 60_000;
+
 /** How much of the CLI's output an error message may quote. */
 const TAIL_CHARS = 500;
 
@@ -55,6 +58,9 @@ const READ_ONLY_NOTE = 'You are running in a read-only sandbox, in the project f
  * {@link ClaudeCodeCliProvider} makes.
  */
 export class CodexCliProvider implements ChatProvider {
+	/** @param maxMs how long one review may run before it is stopped. */
+	constructor(private readonly maxMs: number = CODEX_MAX_MS) { }
+
 	readonly info: ProviderInfo = {
 		id: 'codex-cli',
 		label: 'Codex CLI (local, read-only)',
@@ -103,6 +109,7 @@ export class CodexCliProvider implements ChatProvider {
 				}
 
 				let aborted = false;
+				let timedOut = false;
 				let settled = false;
 				let killTimer: ReturnType<typeof setTimeout> | undefined;
 				let stderr = '';
@@ -115,6 +122,7 @@ export class CodexCliProvider implements ChatProvider {
 					if (settled) { return; }
 					settled = true;
 					request.signal.removeEventListener('abort', onAbort);
+					clearTimeout(deadline);
 					if (killTimer) { clearTimeout(killTimer); }
 					fn();
 				};
@@ -128,6 +136,11 @@ export class CodexCliProvider implements ChatProvider {
 					killTimer = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS);
 				};
 				request.signal.addEventListener('abort', onAbort, { once: true });
+				const deadline = setTimeout(() => {
+					timedOut = true;
+					onAbort();
+				}, this.maxMs);
+				deadline.unref();
 
 				const handle = (line: string): void => {
 					const trimmed = line.trim();
@@ -174,6 +187,10 @@ export class CodexCliProvider implements ChatProvider {
 				child.on('close', code => {
 					settle(() => {
 						handle(pending);
+						if (timedOut && !request.signal.aborted) {
+							reject(new Error(`Codex CLI was stopped after ${Math.round(this.maxMs / 60_000)} minutes without finishing the review.`));
+							return;
+						}
 						if (aborted) {
 							reject(new DOMException('Aborted', 'AbortError'));
 							return;

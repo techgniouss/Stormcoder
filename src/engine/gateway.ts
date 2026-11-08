@@ -5,7 +5,6 @@
 
 import * as crypto from 'crypto';
 import * as http from 'http';
-import { once } from 'events';
 import type { AddressInfo } from 'net';
 import { anthropicAuthHeaders } from '../providers/anthropic';
 import type { ProviderRegistry } from '../providers/registry';
@@ -147,7 +146,15 @@ export class AnthropicGateway {
 		if (this.server?.listening) {
 			return;
 		}
-		const server = http.createServer((req, res) => { void this.handle(req, res); });
+		const server = http.createServer((req, res) => {
+			// A client that vanishes mid-request surfaces as an 'error' event; with no listener Node would throw.
+			req.on('error', () => undefined);
+			res.on('error', () => undefined);
+			this.handle(req, res).catch(() => {
+				try { res.destroy(); } catch { /* already gone */ }
+			});
+		});
+		server.on('error', err => { this.deps.log?.(`gateway server error: ${err.message}`); });
 		server.requestTimeout = 120_000;
 		this.server = server;
 		await new Promise<void>((resolve, reject) => {
@@ -236,9 +243,20 @@ export class AnthropicGateway {
 	}
 
 	private respond(res: http.ServerResponse, status: number, body: Record<string, unknown>): void {
-		const text = JSON.stringify(body);
-		res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text) });
-		res.end(text);
+		if (res.destroyed || res.writableEnded) {
+			return;
+		}
+		try {
+			if (res.headersSent) {
+				res.end();
+				return;
+			}
+			const text = JSON.stringify(body);
+			res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text) });
+			res.end(text);
+		} catch {
+			try { res.destroy(); } catch { /* already gone */ }
+		}
 	}
 
 	private async messages(req: http.IncomingMessage, res: http.ServerResponse, session: ActiveSession, url: URL, upstreamPath: string): Promise<void> {
@@ -358,9 +376,12 @@ export class AnthropicGateway {
 		const tap = new UsageTap((headers['content-type'] ?? '').includes('event-stream'));
 		try {
 			for await (const chunk of upstream.body as unknown as AsyncIterable<Uint8Array>) {
+				if (res.destroyed) {
+					break;
+				}
 				tap.push(chunk);
 				if (!res.write(chunk)) {
-					await once(res, 'drain');
+					await drained(res);
 				}
 			}
 		} catch (err) {
@@ -411,12 +432,13 @@ export class AnthropicGateway {
 		const frames = new MessageStream(id, parsed.model);
 		let ping: ReturnType<typeof setInterval> | undefined;
 		const begin = (): void => {
-			if (!stream || res.headersSent) { return; }
+			if (!stream || res.headersSent || res.destroyed || res.writableEnded) { return; }
 			res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
-			res.write(frames.start(estimatedInput));
-			ping = setInterval(() => res.write(MessageStream.ping()), this.deps.pingMs ?? PING_MS);
+			safeWrite(res, frames.start(estimatedInput));
+			ping = setInterval(() => safeWrite(res, MessageStream.ping()), this.deps.pingMs ?? PING_MS);
 			ping.unref();
 		};
+		res.on('close', () => { if (ping) { clearInterval(ping); } });
 
 		const early = setTimeout(begin, this.deps.earlyStartMs ?? EARLY_START_MS);
 		early.unref();
@@ -425,7 +447,7 @@ export class AnthropicGateway {
 			step = await withProviderResilience(registry, target.providerId, target.model, apiKey => this.runStep(provider, {
 				messages: internal.messages, tools, model: target.model, apiKey, baseUrl: registry.getBaseUrl(target.providerId),
 				maxTokens, signal: abort.signal,
-				onToken: delta => { if (stream && delta) { begin(); res.write(frames.text(delta)); } },
+				onToken: delta => { if (stream && delta) { begin(); safeWrite(res, frames.text(delta)); } },
 			}), () => !frames.hasStarted);
 		} catch (err) {
 			clearTimeout(early);
@@ -438,7 +460,7 @@ export class AnthropicGateway {
 			const message = err instanceof Error ? err.message : String(err);
 			const status = statusForFailure(message);
 			if (frames.hasStarted) {
-				res.write(sse('error', errorBody(status, message)));
+				safeWrite(res, sse('error', errorBody(status, message)));
 				res.end();
 			} else {
 				this.respond(res, status, errorBody(status, message));
@@ -453,9 +475,9 @@ export class AnthropicGateway {
 		if (stream) {
 			begin();
 			for (const call of step.toolCalls) {
-				res.write(frames.toolUse(call));
+				safeWrite(res, frames.toolUse(call));
 			}
-			res.write(frames.finish(stopReasonFor(finish, step.toolCalls.length > 0), usage.outputTokens));
+			safeWrite(res, frames.finish(stopReasonFor(finish, step.toolCalls.length > 0), usage.outputTokens));
 			res.end();
 		} else {
 			this.respond(res, 200, buildMessage(id, parsed.model, { ...step, finishReason: finish }, usage));
@@ -480,6 +502,26 @@ export class AnthropicGateway {
 		let content = '';
 		const result = await provider.streamChat({ ...request, onToken: delta => { content += delta; request.onToken(delta); } });
 		return { content, toolCalls: [], truncated: result?.truncated, finishReason: result?.finishReason };
+	}
+}
+
+/** Resolves when `res` can take more data, or has been closed (a client that left never drains). */
+function drained(res: http.ServerResponse): Promise<void> {
+	return new Promise(resolve => {
+		const done = (): void => {
+			res.off('drain', done);
+			res.off('close', done);
+			resolve();
+		};
+		res.once('drain', done);
+		res.once('close', done);
+	});
+}
+
+/** Writes to a response that may already be gone; a write to a dead socket is silently dropped. */
+function safeWrite(res: http.ServerResponse, chunk: string): void {
+	if (!res.destroyed && !res.writableEnded) {
+		try { res.write(chunk); } catch { /* the client left */ }
 	}
 }
 
@@ -548,6 +590,8 @@ export class UsageTap {
 	private readonly decoder = new TextDecoder();
 	/** Past this a JSON reply is no longer retained for parsing. */
 	private static readonly MAX_JSON_BYTES = 8 * 1024 * 1024;
+	/** Past this, a streamed line with no newline is dropped. */
+	private static readonly MAX_LINE_CHARS = 1024 * 1024;
 
 	constructor(private readonly streaming: boolean) { }
 
@@ -559,6 +603,9 @@ export class UsageTap {
 			return;
 		}
 		this.buffer += text;
+		if (this.buffer.length > UsageTap.MAX_LINE_CHARS && !this.buffer.includes('\n')) {
+			this.buffer = ''; // one enormous line carries no usage worth the memory
+		}
 		let newline = this.buffer.indexOf('\n');
 		while (newline >= 0) {
 			this.line(this.buffer.slice(0, newline));

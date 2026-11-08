@@ -244,6 +244,25 @@ await test('Stop kills the process politely, then hard, and reports an abort', a
 	await assert.rejects(new CodexCliProvider().streamChat(request({ signal: pre.signal })), err => err.name === 'AbortError');
 });
 
+await test('a review that never finishes is stopped, with a message that says why', async () => {
+	const child = new FakeChild();
+	spawnImpl = () => child;
+	const p = new CodexCliProvider(40).streamChat(request());
+	await new Promise(r => setTimeout(r, 80));
+	assert.deepEqual(child.killSignals, ['SIGTERM'], 'the process is told to stop');
+	child.emit('close', null, 'SIGTERM');
+	await assert.rejects(p, err => /was stopped after \d+ minutes without finishing/.test(err.message) && err.name !== 'AbortError');
+});
+
+await test('a normal finish clears the time cap', async () => {
+	const child = new FakeChild();
+	spawnImpl = () => child;
+	const p = new CodexCliProvider(3_600_000).streamChat(request());
+	child.stdout.emit('data', answer('ok'));
+	child.emit('close', 0, null);
+	await p;
+});
+
 await test('the model list is just the CLI default', async () => {
 	assert.deepEqual(await new CodexCliProvider().listModels(), [{ id: 'default' }]);
 });

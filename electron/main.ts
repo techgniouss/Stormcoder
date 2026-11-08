@@ -286,7 +286,12 @@ if (!app.requestSingleInstanceLock()) {
 					case 'app.zoomOut': return window?.webContents.setZoomLevel(window.webContents.getZoomLevel() - 0.5);
 					case 'app.zoomReset': return window?.webContents.setZoomLevel(0);
 					case 'app.quit': return app.quit();
-					case 'app.relaunch': app.relaunch(); return app.quit();
+					case 'app.relaunch':
+						// The new instance starts while this one is still shutting down; without releasing the lock
+						// it would find the app already running and quit at once.
+						app.releaseSingleInstanceLock();
+						app.relaunch();
+						return app.quit();
 					default: return undefined;
 				}
 			},

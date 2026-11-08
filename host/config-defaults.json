@@ -151,6 +151,7 @@
 		"stormcoder.engine.fastModel": "",
 		"stormcoder.engine.claudeCode.sdkPath": "",
 		"stormcoder.engine.claudeCode.cliPath": "",
+		"stormcoder.engine.registry": "",
 		"stormcoder.engine.claudeCode.auth": "gateway",
 		"stormcoder.engine.claudeCode.loadProjectSettings": true,
 		"stormcoder.engine.appendProjectMemory": false,
@@ -705,6 +706,10 @@
 		"stormcoder.engine.claudeCode.cliPath": {
 			"type": "string",
 			"description": "%config.engine.claudeCode.cliPath%"
+		},
+		"stormcoder.engine.registry": {
+			"type": "string",
+			"description": "%config.engine.registry%"
 		},
 		"stormcoder.engine.claudeCode.auth": {
 			"type": "string",
