@@ -20,6 +20,7 @@ Module._load = function (request, parent, isMain) {
 
 const { AnthropicGateway, UsageTap, MAX_BODY_BYTES } = await import(new URL('../out/engine/gateway.js', import.meta.url));
 const wire = await import(new URL('../out/engine/anthropicWire.js', import.meta.url));
+const { OPEN_MARK, CLOSE_MARK } = await import(new URL('../out/persona/thinking.js', import.meta.url));
 const { resolveTarget, engineModelEnv, MAIN_ALIAS, FAST_ALIAS } = await import(new URL('../out/engine/modelMap.js', import.meta.url));
 const { checkTarget, compactionEnv } = await import(new URL('../out/engine/capabilities.js', import.meta.url));
 
@@ -559,6 +560,90 @@ await test('translated: a failure inside the grace period is still a real HTTP s
 	assert.equal(res.body.error.type, 'authentication_error');
 	await g.stop();
 	delete providers.flaky;
+});
+
+await test('reasoning a provider streams inline never reaches the harness, even with marks split across chunks', async () => {
+	agentBehavior = async request => {
+		const wholeStream = `${OPEN_MARK}step by step: the secret reasoning${CLOSE_MARK}The answer is 42.`;
+		for (let i = 0; i < wholeStream.length; i += 3) { request.onToken(wholeStream.slice(i, i + 3)); }
+		return { content: wholeStream, toolCalls: [], finishReason: 'stop' };
+	};
+	const r = await call('/v1/messages', { body: { model: MAIN_ALIAS, stream: true, max_tokens: 100, tools: [readFileTool], messages: [{ role: 'user', content: 'go' }] } });
+	const text = frames(r.text).filter(f => f.event === 'content_block_delta').map(f => f.data.delta.text).join('');
+	assert.equal(text, 'The answer is 42.');
+	assert.ok(!r.text.includes('secret reasoning') && !r.text.includes('Thinking'));
+	const plain = await call('/v1/messages', { body: { model: MAIN_ALIAS, stream: false, max_tokens: 100, tools: [readFileTool], messages: [{ role: 'user', content: 'go' }] } });
+	assert.deepEqual(plain.json.content, [{ type: 'text', text: 'The answer is 42.' }]);
+});
+
+await test('an answer a provider returns without streaming any of it is still delivered', async () => {
+	agentBehavior = async () => ({ content: `${OPEN_MARK}thinking${CLOSE_MARK}Delivered whole.`, toolCalls: [], finishReason: 'stop' });
+	const r = await call('/v1/messages', { body: { model: MAIN_ALIAS, stream: true, max_tokens: 100, tools: [readFileTool], messages: [{ role: 'user', content: 'go' }] } });
+	const f = frames(r.text);
+	assert.equal(f.filter(x => x.event === 'content_block_delta').map(x => x.data.delta.text).join(''), 'Delivered whole.');
+	assert.equal(f.at(-1).event, 'message_stop');
+	assert.ok(!r.text.includes('thinking'));
+});
+
+await test('a rotated key that turns out to be the same one keeps the real error, with a body', async () => {
+	upstreamSeen.length = 0;
+	upstreamBehavior = () => ({ status: 429, headers: { 'retry-after': '3' }, json: { type: 'error', error: { type: 'rate_limit_error', message: 'slow down' } } });
+	const stuck = { ...registry, rotateApiKey: async () => true, getApiKey: async id => (id === 'anthropic' ? 'sk-ant-only' : undefined) };
+	const g = new AnthropicGateway({ registry: stuck });
+	await g.start();
+	const s = g.registerSession({ id: 'stuck', route: claudeRoute });
+	const res = await new Promise((resolve, reject) => {
+		const body = JSON.stringify({ model: 'claude-sonnet-x', max_tokens: 9, messages: [{ role: 'user', content: 'x' }] });
+		const req = http.request({ host: '127.0.0.1', port: Number(new URL(g.baseUrl).port), path: '/v1/messages', method: 'POST', headers: { authorization: `Bearer ${s.token}`, 'content-length': Buffer.byteLength(body) } }, r => {
+			const chunks = [];
+			r.on('data', c => chunks.push(c));
+			r.on('end', () => resolve({ status: r.statusCode, headers: r.headers, text: Buffer.concat(chunks).toString('utf8') }));
+		});
+		req.on('error', reject);
+		req.end(body);
+	});
+	assert.equal(res.status, 429);
+	assert.equal(res.headers['retry-after'], '3');
+	assert.equal(JSON.parse(res.text).error.message, 'slow down', 'the harness gets the provider\'s own explanation');
+	assert.equal(upstreamSeen.length, 1, 'the same key is not tried twice');
+	await g.stop();
+});
+
+await test('an oversized chunked upload is answered with a 413, not a dropped connection', async () => {
+	const small = new AnthropicGateway({ registry, maxBodyBytes: 1024 });
+	await small.start();
+	const s = small.registerSession({ id: 'chunked', route });
+	const out = await new Promise((resolve, reject) => {
+		const req = http.request({ host: '127.0.0.1', port: Number(new URL(small.baseUrl).port), path: '/v1/messages', method: 'POST', headers: { authorization: `Bearer ${s.token}`, 'transfer-encoding': 'chunked' } }, res => {
+			const chunks = [];
+			res.on('data', c => chunks.push(c));
+			res.on('end', () => resolve({ status: res.statusCode, connection: res.headers.connection, body: Buffer.concat(chunks).toString('utf8') }));
+		});
+		req.on('error', reject);
+		for (let i = 0; i < 6; i++) { req.write('x'.repeat(500)); }
+		req.end();
+	});
+	assert.equal(out.status, 413);
+	assert.equal(out.connection, 'close');
+	assert.equal(JSON.parse(out.body).error.type, 'request_too_large');
+	await small.stop();
+});
+
+await test('ThinkingFilter: every split point, an unclosed block, and text that merely looks like a mark', () => {
+	const whole = `Before. ${OPEN_MARK}hidden${CLOSE_MARK}After.`;
+	for (let cut = 0; cut <= whole.length; cut++) {
+		const f = new wire.ThinkingFilter();
+		const out = f.push(whole.slice(0, cut)) + f.push(whole.slice(cut)) + f.flush();
+		assert.equal(out, 'Before. After.', `cut at ${cut}`);
+	}
+	const unclosed = new wire.ThinkingFilter();
+	assert.equal(unclosed.push(`Hi ${OPEN_MARK}reasoning that never ends`) + unclosed.flush(), 'Hi ', 'a block that never closes is all reasoning');
+	const lookalike = new wire.ThinkingFilter();
+	assert.equal(lookalike.push('a\n\n--') + lookalike.push('-b') + lookalike.flush(), 'a\n\n---b', 'a rule outside reasoning is ordinary text');
+	const partial = new wire.ThinkingFilter();
+	assert.equal(partial.push('ends with 🤔 *Thi') + partial.flush(), 'ends with 🤔 *Thi', 'a held partial mark is released if the stream ends');
+	const two = new wire.ThinkingFilter();
+	assert.equal(two.push(`${OPEN_MARK}a${CLOSE_MARK}x${OPEN_MARK}b${CLOSE_MARK}y`), 'xy');
 });
 
 await test('a disposed session stops working', async () => {

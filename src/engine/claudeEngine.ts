@@ -188,6 +188,8 @@ export interface EngineCallbacks {
 
 /** A finished turn. */
 export interface EngineResult extends RunResult {
+	/** Whether the harness produced anything at all. False with an `error` means it never started. */
+	readonly started: boolean;
 	readonly sessionId?: string;
 	/** The harness's own running cost estimate for this chat, USD. */
 	readonly costUsd?: number;
@@ -413,11 +415,14 @@ export class MessageMapper {
 	sessionId: string | undefined;
 	costUsd: number | undefined;
 	result: EngineResult | undefined;
+	/** How many messages the harness has sent. */
+	seen = 0;
 
 	constructor(private readonly cb: EngineCallbacks) { }
 
 	/** Handles one message. */
 	handle(message: SdkMessage): void {
+		this.seen++;
 		switch (message.type) {
 			case 'system': return this.system(message);
 			case 'stream_event': return this.streamEvent(message);
@@ -536,7 +541,7 @@ export class MessageMapper {
 			reason = 'error';
 			detail = errors || text || 'The Claude Code engine stopped with an error.';
 		}
-		this.result = { reason, detail, sessionId: this.sessionId, costUsd: this.costUsd, ...(reason === 'error' ? { failure: new Error(detail) } : {}) };
+		this.result = { reason, detail, started: true, sessionId: this.sessionId, costUsd: this.costUsd, ...(reason === 'error' ? { failure: new Error(detail) } : {}) };
 	}
 }
 
@@ -586,7 +591,7 @@ export class ClaudeEngine {
 			void query?.interrupt().catch(() => undefined);
 		}, turn.maxRunMs) : undefined;
 		const limitResult = (): EngineResult => ({
-			reason: 'limit', sessionId: mapper.sessionId, costUsd: mapper.costUsd,
+			reason: 'limit', started: true, sessionId: mapper.sessionId, costUsd: mapper.costUsd,
 			detail: `The Claude Code engine was stopped after ${Math.round((turn.maxRunMs ?? 0) / 60_000)} minutes (stormcoder.agent.maxRunMinutes). Send "continue" to carry on.`,
 		});
 		try {
@@ -594,7 +599,11 @@ export class ClaudeEngine {
 			const options = buildQueryOptions(turn, { env, abort, tracker, stderr: data => { stderr = (stderr + data).slice(-2_000); }, note: text => cb.onNote(text) });
 			query = sdk.query({ prompt: buildPrompt(turn), options });
 			for await (const message of query) {
-				mapper.handle(message);
+				try {
+					mapper.handle(message);
+				} catch {
+					// A message the UI mapping tripped on is skipped; it must not end the whole run.
+				}
 			}
 			mapper.flush();
 		} catch (err) {
@@ -606,7 +615,7 @@ export class ClaudeEngine {
 				throw new DOMException('Aborted', 'AbortError');
 			}
 			const detail = `${err instanceof Error ? err.message : String(err)}${stderr.trim() ? `\n${stderr.trim()}` : ''}`;
-			return { reason: 'error', detail, failure: err instanceof Error ? err : new Error(detail), sessionId: mapper.sessionId, costUsd: mapper.costUsd };
+			return { reason: 'error', detail, started: mapper.seen > 0, failure: err instanceof Error ? err : new Error(detail), sessionId: mapper.sessionId, costUsd: mapper.costUsd };
 		} finally {
 			if (timer) { clearTimeout(timer); }
 			turn.signal.removeEventListener('abort', onAbort);
@@ -619,6 +628,6 @@ export class ClaudeEngine {
 		if (timedOut) {
 			return limitResult();
 		}
-		return mapper.result ?? { reason: 'error', detail: 'The Claude Code engine ended without a result.', sessionId: mapper.sessionId, costUsd: mapper.costUsd };
+		return mapper.result ?? { reason: 'error', detail: 'The Claude Code engine ended without a result.', started: mapper.seen > 0, sessionId: mapper.sessionId, costUsd: mapper.costUsd };
 	}
 }

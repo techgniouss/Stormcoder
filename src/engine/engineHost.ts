@@ -36,6 +36,13 @@ export function engineSelectedAtStart(): EngineId {
 	return engineAtStart;
 }
 
+/** After this many start failures in a row the engine is left alone for {@link START_FAILURE_BLOCK_MS}. */
+const START_FAILURES_BEFORE_BLOCK = 2;
+const START_FAILURE_BLOCK_MS = 5 * 60_000;
+
+/** The longest the engine may take to become ready before the built-in agent serves the message instead. */
+const PREFLIGHT_TIMEOUT_MS = 20_000;
+
 /** How the engine reaches its model: through Stormcoder's gateway (default) or the user's own Claude Code login. */
 function readAuth(): 'gateway' | 'own-login' {
 	return vscode.workspace.getConfiguration('stormcoder').get<string>('engine.claudeCode.auth') === 'own-login' ? 'own-login' : 'gateway';
@@ -87,6 +94,8 @@ export function buildTranscriptSeed(history: readonly ChatMessage[], maxChars = 
 
 /** Everything the host needs to know about the app around it. */
 export interface EngineHostOptions {
+	/** Replaces the real engine (tests). */
+	readonly engine?: Pick<ClaudeEngine, 'run'>;
 	readonly context: vscode.ExtensionContext;
 	readonly registry: ProviderRegistry;
 	readonly catalog: (providerId: string) => ModelEntry[] | undefined;
@@ -103,13 +112,18 @@ export class EngineHost {
 	readonly id: EngineId;
 	private gateway?: AnthropicGateway;
 	private starting?: Promise<AnthropicGateway>;
-	private readonly engine: ClaudeEngine;
+	private readonly engine: Pick<ClaudeEngine, 'run'>;
+	/** Consecutive times the harness failed before producing anything. */
+	private startFailures = 0;
+	/** Until when the engine is treated as unavailable after repeated start failures. */
+	private blockedUntil = 0;
+	private lastStartFailure = '';
 	/** The SDK version this process has loaded. A module is cached for the life of the process, so a newer one needs a restart. */
 	private loadedVersion: string | undefined;
 
 	constructor(private readonly options: EngineHostOptions) {
 		this.id = engineSelectedAtStart();
-		this.engine = new ClaudeEngine({
+		this.engine = options.engine ?? new ClaudeEngine({
 			gateway: () => this.gateway,
 			load: async () => {
 				const { sdk, found } = await loadClaudeSdk(this.sdkLocation());
@@ -170,15 +184,27 @@ export class EngineHost {
 	 * uses its own login) the gateway is up. Nothing is changed by a failure, so the caller can hand the
 	 * message to the built-in agent instead.
 	 */
-	async preflight(): Promise<{ ok: true } | { ok: false; reason: string }> {
+	async preflight(timeoutMs = PREFLIGHT_TIMEOUT_MS): Promise<{ ok: true } | { ok: false; reason: string }> {
+		if (Date.now() < this.blockedUntil) {
+			return { ok: false, reason: `the engine failed to start ${START_FAILURES_BEFORE_BLOCK} times in a row (${this.lastStartFailure}); it will be tried again in a few minutes` };
+		}
+		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			this.loadedVersion = (await loadClaudeSdk(this.sdkLocation())).found.version;
-			if (readAuth() === 'gateway') {
-				await this.ensureStarted();
-			}
+			// An SDK whose import never finishes must not hold up every message that follows.
+			await Promise.race([
+				(async () => {
+					this.loadedVersion = (await loadClaudeSdk(this.sdkLocation())).found.version;
+					if (readAuth() === 'gateway') {
+						await this.ensureStarted();
+					}
+				})(),
+				new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Starting the engine took too long.')), timeoutMs); }),
+			]);
 			return { ok: true };
 		} catch (err) {
 			return { ok: false, reason: (err instanceof Error ? err.message : String(err)).split('\n')[0] };
+		} finally {
+			if (timer) { clearTimeout(timer); }
 		}
 	}
 
@@ -226,12 +252,23 @@ export class EngineHost {
 		if (auth === 'gateway') {
 			await this.ensureStarted();
 		}
-		return this.engine.run({
+		const result = await this.engine.run({
 			...turn,
 			auth,
 			cliPath: (() => { const raw = cfg.get<unknown>('engine.claudeCode.cliPath'); return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined; })(),
 			loadProjectSettings: cfg.get<boolean>('engine.claudeCode.loadProjectSettings') !== false,
 		}, callbacks);
+		// A harness that cannot start costs a process launch each time; after repeated failures it is left alone for a while.
+		if (result.reason === 'error' && !result.started) {
+			this.lastStartFailure = (result.detail ?? 'unknown error').split('\n')[0].slice(0, 160);
+			if (++this.startFailures >= START_FAILURES_BEFORE_BLOCK) {
+				this.blockedUntil = Date.now() + START_FAILURE_BLOCK_MS;
+				this.startFailures = 0;
+			}
+		} else if (result.started) {
+			this.startFailures = 0;
+		}
+		return result;
 	}
 
 	/** Stops the gateway. */

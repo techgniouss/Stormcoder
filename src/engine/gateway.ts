@@ -9,9 +9,10 @@ import type { AddressInfo } from 'net';
 import { anthropicAuthHeaders } from '../providers/anthropic';
 import type { ProviderRegistry } from '../providers/registry';
 import { withProviderResilience } from '../providers/resilience';
+import { stripThinking } from '../persona/thinking';
 import { AgentStep, ChatProvider, ModelEntry, isAbortError, modelSupportsVision } from '../providers/types';
 import {
-	AnthropicRequest, MessageStream, WireUsage, buildMessage, errorBody, estimateRequestTokens, estimateUsage, sse,
+	AnthropicRequest, MessageStream, ThinkingFilter, WireUsage, buildMessage, errorBody, estimateRequestTokens, estimateUsage, sse,
 	statusForFailure, stopReasonFor, toInternal,
 } from './anthropicWire';
 import { checkTarget } from './capabilities';
@@ -221,7 +222,9 @@ export class AnthropicGateway {
 			this.counters.errors++;
 			const message = err instanceof Error ? err.message : String(err);
 			if (!res.headersSent) {
-				this.respond(res, err instanceof BodyError ? err.status : 500, errorBody(err instanceof BodyError ? err.status : 500, message));
+				const status = err instanceof BodyError ? err.status : 500;
+				// An oversized upload is answered, then the connection closed: the rest of it is not read.
+				this.respond(res, status, errorBody(status, message), err instanceof BodyError ? { connection: 'close' } : {});
 			} else {
 				res.end();
 			}
@@ -242,7 +245,7 @@ export class AnthropicGateway {
 		return presented ? this.sessions.get(hashToken(presented.trim())) : undefined;
 	}
 
-	private respond(res: http.ServerResponse, status: number, body: Record<string, unknown>): void {
+	private respond(res: http.ServerResponse, status: number, body: Record<string, unknown>, extraHeaders: Record<string, string> = {}): void {
 		if (res.destroyed || res.writableEnded) {
 			return;
 		}
@@ -252,7 +255,7 @@ export class AnthropicGateway {
 				return;
 			}
 			const text = JSON.stringify(body);
-			res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text) });
+			res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(text), ...extraHeaders });
 			res.end(text);
 		} catch {
 			try { res.destroy(); } catch { /* already gone */ }
@@ -353,8 +356,12 @@ export class AnthropicGateway {
 				return;
 			}
 			if (KEY_STATUSES.has(upstream.status) && await registry.rotateApiKey(target.providerId, apiKey, `HTTP ${upstream.status}`)) {
-				await upstream.body?.cancel().catch(() => undefined);
-				continue;
+				// Only give this response up once there is a different key to try; otherwise it is the answer.
+				const next = await registry.getApiKey(target.providerId).catch(() => undefined);
+				if (next && !attempted.has(next)) {
+					await upstream.body?.cancel().catch(() => undefined);
+					continue;
+				}
 			}
 			break;
 		}
@@ -442,12 +449,15 @@ export class AnthropicGateway {
 
 		const early = setTimeout(begin, this.deps.earlyStartMs ?? EARLY_START_MS);
 		early.unref();
+		// Reasoning a provider streams inline is not the answer: the harness must never see it.
+		const thinking = new ThinkingFilter();
+		const show = (text: string): void => { if (stream && text) { begin(); safeWrite(res, frames.text(text)); } };
 		let step: AgentStep;
 		try {
 			step = await withProviderResilience(registry, target.providerId, target.model, apiKey => this.runStep(provider, {
 				messages: internal.messages, tools, model: target.model, apiKey, baseUrl: registry.getBaseUrl(target.providerId),
 				maxTokens, signal: abort.signal,
-				onToken: delta => { if (stream && delta) { begin(); safeWrite(res, frames.text(delta)); } },
+				onToken: delta => show(thinking.push(delta)),
 			}), () => !frames.hasStarted);
 		} catch (err) {
 			clearTimeout(early);
@@ -470,9 +480,17 @@ export class AnthropicGateway {
 		clearTimeout(early);
 		if (ping) { clearInterval(ping); }
 
+		// The answer without any inline reasoning, however the provider delivered it.
+		const answer = stripThinking(step.content);
+		step = { ...step, content: answer };
 		const usage: WireUsage = estimateUsage({ ...internal, tools }, step);
 		const finish = step.truncated ? 'length' : step.finishReason;
 		if (stream) {
+			show(thinking.flush());
+			// A provider may hand back its whole answer without streaming any of it.
+			if (!frames.hasText) {
+				show(answer.trim());
+			}
 			begin();
 			for (const call of step.toolCalls) {
 				safeWrite(res, frames.toolUse(call));
@@ -562,11 +580,16 @@ function readBody(req: http.IncomingMessage, limit: number): Promise<Buffer> {
 		}
 		const chunks: Buffer[] = [];
 		let size = 0;
+		let over = false;
 		req.on('data', (chunk: Buffer) => {
+			if (over) {
+				return; // drained and dropped: nothing more is kept
+			}
 			size += chunk.length;
 			if (size > limit) {
+				over = true;
+				chunks.length = 0;
 				reject(new BodyError(413, `The request is larger than the ${limit} byte limit.`));
-				req.destroy();
 				return;
 			}
 			chunks.push(chunk);

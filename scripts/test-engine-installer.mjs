@@ -99,6 +99,22 @@ await test('pickPlatformPackage: the exact build for the machine, musl only on L
 	assert.equal(pickPlatformPackage(optional, 'linux', 'arm64', true), undefined, 'no guessing a different build');
 });
 
+await test('a file system that fails mid-extraction is an error, not an uncaught exception', async () => {
+	// A folder where a file is meant to go makes the write stream fail asynchronously, as a full disk does.
+	const dest = tmp('fail-');
+	fs.mkdirSync(path.join(dest, 'lib', 'x.js'), { recursive: true });
+	const data = tar([entry({ name: 'package/lib/x.js' }, 'content that cannot be written'), entry({ name: 'package/after.txt' }, 'never reached')]);
+	await assert.rejects(extractTarStream(inPieces(data, 300), dest), /Could not write .*x\.js/);
+	assert.ok(!fs.existsSync(path.join(dest, 'after.txt')), 'extraction stopped at the failure');
+	fs.rmSync(dest, { recursive: true, force: true });
+});
+
+await test('entryTarget: names that merely start with two dots stay inside', () => {
+	const dest = path.join(os.tmpdir(), 'dest2');
+	assert.equal(entryTarget(dest, 'package/..cache/x', 1), path.join(dest, '..cache', 'x'));
+	assert.throws(() => entryTarget(dest, 'package/..', 1), /outside its folder/, 'a bare .. is still a way out');
+});
+
 await test('entryTarget: strips the wrapper, skips the folder itself, and refuses every way out', () => {
 	const dest = path.join(os.tmpdir(), 'dest');
 	assert.equal(entryTarget(dest, 'package/lib/a.js', 1), path.join(dest, 'lib', 'a.js'));

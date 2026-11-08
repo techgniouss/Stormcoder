@@ -285,7 +285,7 @@ await test('FileTracker feeds Undo: before and after of an edit, a new file, and
 
 // --- parity with the built-in loop: user hooks, sub-agent caps, timeouts, sandbox --------------------
 
-const { postHooks } = await import(new URL('../out/engine/toolBridge.js', import.meta.url));
+const { postHooks, patternEscapes } = await import(new URL('../out/engine/toolBridge.js', import.meta.url));
 const nodeHook = script => `"${process.execPath}" -e "${script.replace(/"/g, '\\"')}"`;
 /** A hook that reads the event from stdin and exits 2 (a veto) for the named tool. */
 const vetoHook = (event, tool, message) => ({
@@ -364,6 +364,30 @@ await test('asking to leave the sandbox is refused while the sandbox is on', asy
 	assert.match(v.message, /sandbox/);
 	assert.equal((await decideToolUse('Bash', { command: 'ls' }, on)).behavior, 'allow');
 	assert.equal((await decideToolUse('Bash', { command: 'ls', dangerouslyDisableSandbox: true }, ctx({ guardrails: { ...policy('yolo'), sandbox: 'off' } }))).behavior, 'allow', 'with no sandbox configured there is nothing to leave');
+});
+
+await test('a folder whose name merely starts with two dots is inside the workspace; real escapes are not', async () => {
+	assert.deepEqual(relativeToRoot(root, '..cache/x.txt'), { ok: true, rel: '..cache/x.txt' });
+	assert.deepEqual(relativeToRoot(root, '..github'), { ok: true, rel: '..github' });
+	assert.equal(relativeToRoot(root, '..').ok, false);
+	assert.equal(relativeToRoot(root, '../x').ok, false);
+	assert.equal((await decideToolUse('Read', { file_path: '..cache/x.txt' }, ctx())).behavior, 'allow');
+	assert.equal((await decideToolUse('Write', { file_path: '..data/out.txt', content: 'x' }, ctx())).behavior, 'allow');
+});
+
+await test('Glob and Grep are judged by their patterns too, not only their path', async () => {
+	for (const bad of ['/etc/**', '../../**/*.env', '~/.ssh/*', '{../x,y}', 'C:/Users/**', '\\\\server\\share\\*', 'a/../../b', '..', 'src/{a,../b}']) {
+		assert.ok(patternEscapes(bad), `escapes: ${bad}`);
+		const glob = await decideToolUse('Glob', { pattern: bad }, ctx());
+		assert.equal(glob.behavior, 'deny', `Glob ${bad}`);
+		assert.match(glob.message, /outside the workspace folder/);
+		assert.equal((await decideToolUse('Grep', { pattern: 'x', glob: bad }, ctx())).behavior, 'deny', `Grep ${bad}`);
+	}
+	for (const fine of ['src/**/*.ts', '**/*.{js,ts}', '*.md', 'docs/..foo/*', 'a..b/*.txt', 'file..name', 'lib/*.{c,h}']) {
+		assert.ok(!patternEscapes(fine), `inside: ${fine}`);
+		assert.equal((await decideToolUse('Glob', { pattern: fine }, ctx())).behavior, 'allow', `Glob ${fine}`);
+	}
+	assert.equal((await decideToolUse('Grep', { pattern: '../..', path: 'src' }, ctx())).behavior, 'allow', 'a regex is not a path');
 });
 
 fs.rmSync(root, { recursive: true, force: true });

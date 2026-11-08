@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { estimateTokens } from '../agent/context';
+import { CLOSE_MARK, OPEN_MARK } from '../persona/thinking';
 import { MALFORMED_ARGS } from '../providers/toolCalls';
 import { AgentStep, ChatImage, ChatMessage, FinishReason, ToolCall, ToolSpec } from '../providers/types';
 
@@ -246,6 +247,61 @@ export function buildMessage(id: string, model: string, step: AgentStep, usage: 
 	};
 }
 
+/** Length of the longest suffix of `text` that is a proper prefix of `mark`. */
+function partialMarkSuffix(text: string, mark: string): number {
+	for (let len = Math.min(text.length, mark.length - 1); len > 0; len--) {
+		if (text.endsWith(mark.slice(0, len))) {
+			return len;
+		}
+	}
+	return 0;
+}
+
+/**
+ * Removes the reasoning a provider streams inline from a token stream, leaving the answer.
+ *
+ * Providers with native reasoning wrap it in {@link OPEN_MARK} and {@link CLOSE_MARK} so Stormcoder's
+ * own chat can fold it away. The Claude Code harness has no such convention: sent through, the
+ * reasoning would appear as the model's answer and be replayed in every later request. Marks may be
+ * split across chunks, so a possible partial mark is held back until the next chunk settles it.
+ */
+export class ThinkingFilter {
+	private inside = false;
+	private held = '';
+
+	/** Feeds one streamed delta; returns the part of it that is answer text. */
+	push(delta: string): string {
+		let text = this.held + delta;
+		this.held = '';
+		let visible = '';
+		for (;;) {
+			const mark = this.inside ? CLOSE_MARK : OPEN_MARK;
+			const at = text.indexOf(mark);
+			if (at >= 0) {
+				if (!this.inside) {
+					visible += text.slice(0, at);
+				}
+				text = text.slice(at + mark.length);
+				this.inside = !this.inside;
+				continue;
+			}
+			const keep = partialMarkSuffix(text, mark);
+			if (!this.inside) {
+				visible += text.slice(0, text.length - keep);
+			}
+			this.held = text.slice(text.length - keep);
+			return visible;
+		}
+	}
+
+	/** Called when the stream ends: a held partial mark outside reasoning was ordinary text after all. */
+	flush(): string {
+		const rest = this.inside ? '' : this.held;
+		this.held = '';
+		return rest;
+	}
+}
+
 /** One server-sent event, serialized. */
 export function sse(event: string, data: Record<string, unknown>): string {
 	return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -260,12 +316,18 @@ export class MessageStream {
 	private index = -1;
 	private textOpen = false;
 	private started = false;
+	private emittedText = false;
 
 	constructor(private readonly id: string, private readonly model: string) { }
 
 	/** Whether `start` has produced its frame yet. */
 	get hasStarted(): boolean {
 		return this.started;
+	}
+
+	/** Whether any answer text has been streamed. */
+	get hasText(): boolean {
+		return this.emittedText;
 	}
 
 	/** The `message_start` frame (once). */
@@ -288,6 +350,7 @@ export class MessageStream {
 		if (!delta) {
 			return '';
 		}
+		this.emittedText = true;
 		let out = '';
 		if (!this.textOpen) {
 			this.index++;

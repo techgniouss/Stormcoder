@@ -91,6 +91,27 @@ export function detectMusl(): boolean {
 	}
 }
 
+/** Ends a write stream and waits until it is closed, even if it already failed. */
+function closeStream(stream: fs.WriteStream): Promise<void> {
+	return new Promise(resolve => {
+		if (stream.destroyed || stream.closed) {
+			resolve();
+			return;
+		}
+		stream.once('close', () => resolve());
+		stream.end();
+	});
+}
+
+/** Waits until a stream can take more data, or has closed (after a failure it never will). */
+function drainedOrClosed(stream: fs.WriteStream): Promise<void> {
+	return new Promise(resolve => {
+		const done = (): void => { stream.off('drain', done); stream.off('close', done); resolve(); };
+		stream.once('drain', done);
+		stream.once('close', done);
+	});
+}
+
 /** Throws unless the registry address is https (or http on this machine, for tests). */
 function assertSecureRegistry(registry: string): void {
 	let url: URL;
@@ -162,17 +183,24 @@ async function download(
 	}
 	const hash = crypto.createHash(expected.algorithm);
 	const out = fs.createWriteStream(file);
+	// A listener that is always there: a full disk fails the stream at any moment, and an 'error' event
+	// with no listener would be an uncaught exception in the app.
+	let writeError: Error | undefined;
+	out.on('error', err => { writeError = err; });
 	let received = 0;
 	let reported = 0;
 	try {
 		for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+			if (writeError) {
+				throw writeError;
+			}
 			received += chunk.length;
 			if (received > MAX_DOWNLOAD_BYTES) {
 				throw new Error(`${label} is larger than ${Math.round(MAX_DOWNLOAD_BYTES / 1_048_576)} MB, so the download was stopped.`);
 			}
 			hash.update(chunk);
 			if (!out.write(chunk)) {
-				await new Promise<void>((resolve, reject) => { out.once('drain', resolve); out.once('error', reject); });
+				await drainedOrClosed(out);
 			}
 			if (received - reported > 8 * 1_048_576) {
 				reported = received;
@@ -180,7 +208,10 @@ async function download(
 			}
 		}
 	} finally {
-		await new Promise<void>(resolve => out.end(() => resolve()));
+		await closeStream(out);
+	}
+	if (writeError) {
+		throw new Error(`Could not save ${label} (${(writeError as Error).message}). Check the free space in Stormcoder's data folder.`);
 	}
 	if (hash.digest(expected.encoding) !== expected.digest) {
 		throw new Error(`${label} did not match the checksum the registry published for it, so it was not installed.`);
@@ -249,7 +280,7 @@ export function entryTarget(dest: string, name: string, strip: number): string |
 	}
 	const target = path.join(dest, ...kept);
 	const relative = path.relative(dest, target);
-	if (relative.startsWith('..') || path.isAbsolute(relative)) {
+	if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
 		throw new Error(`The package contains a file outside its folder ("${name}"), so it was not installed.`);
 	}
 	return target;
@@ -258,6 +289,8 @@ export function entryTarget(dest: string, name: string, strip: number): string |
 /** The sink for one regular file being written. */
 interface FileSink {
 	readonly stream: fs.WriteStream;
+	/** Set by a listener that is always attached, so a failing disk is an error here, never an uncaught one. */
+	error?: Error;
 	left: number;
 	readonly padding: number;
 	readonly target: string;
@@ -289,7 +322,10 @@ export async function extractTarStream(
 		if (!sink) { return; }
 		const done = sink;
 		sink = undefined;
-		await new Promise<void>((resolve, reject) => { done.stream.once('error', reject); done.stream.end(() => resolve()); });
+		await closeStream(done.stream);
+		if (done.error) {
+			throw new Error(`Could not write ${done.target} (${done.error.message}). Check the free space in Stormcoder's data folder.`);
+		}
 		fs.chmodSync(done.target, done.executable ? 0o755 : 0o644);
 		files++;
 	};
@@ -313,8 +349,14 @@ export async function extractTarStream(
 					const n = Math.min(sink.left, pending.length);
 					if (n > 0) {
 						const piece = pending.subarray(0, n);
+						if (sink.error) {
+							throw sink.error;
+						}
 						if (!sink.stream.write(piece)) {
-							await new Promise<void>((resolve, reject) => { sink!.stream.once('drain', resolve); sink!.stream.once('error', reject); });
+							await drainedOrClosed(sink.stream);
+							if (sink.error) {
+								throw sink.error;
+							}
 						}
 						pending = pending.subarray(n);
 						sink.left -= n;
@@ -396,7 +438,9 @@ export async function extractTarStream(
 					discard = padding;
 					continue;
 				}
-				sink = { stream: fs.createWriteStream(target), left: size, padding, target, executable: (mode & 0o111) !== 0 };
+				const created: FileSink = { stream: fs.createWriteStream(target), left: size, padding, target, executable: (mode & 0o111) !== 0 };
+				created.stream.on('error', err => { created.error = err; });
+				sink = created;
 			}
 		}
 		// Bytes left over that never made a whole header block mean the archive was cut short.

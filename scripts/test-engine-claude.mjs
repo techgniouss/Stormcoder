@@ -554,6 +554,35 @@ await test('run: a finished turn leaves no timer running', async () => {
 	// An hour-long timer left behind would keep the process alive; the test exiting promptly is the proof.
 });
 
+await test('run: a harness that never produced anything is reported as not started; one that did is not', async () => {
+	const dead = { query: () => ({ close: () => { }, interrupt: async () => { }, async *[Symbol.asyncIterator]() { throw new Error('spawn claude ENOENT'); } }) };
+	const r1 = await new ClaudeEngine({ gateway: () => fakeGateway(), load: async () => dead, env: {} }).run(turn(), recorder().cb);
+	assert.equal(r1.reason, 'error');
+	assert.equal(r1.started, false, 'nothing came from it');
+	const empty = fakeSdk([]);
+	assert.equal((await new ClaudeEngine({ gateway: () => fakeGateway(), load: async () => empty.sdk, env: {} }).run(turn(), recorder().cb)).started, false, 'a stream that ends at once never started either');
+
+	const dies = fakeSdk([{ type: 'system', subtype: 'init', session_id: 'S' }], { throwAfter: new Error('API Error: 401') });
+	const r2 = await new ClaudeEngine({ gateway: () => fakeGateway(), load: async () => dies.sdk, env: {} }).run(turn(), recorder().cb);
+	assert.equal(r2.reason, 'error');
+	assert.equal(r2.started, true, 'it started; the model call failed afterwards');
+	assert.equal((await new ClaudeEngine({ gateway: () => fakeGateway(), load: async () => fakeSdk(okScript).sdk, env: {} }).run(turn(), recorder().cb)).started, true);
+});
+
+await test('run: a callback that throws on one message does not end the run', async () => {
+	const seen = [];
+	const cb = { ...recorder().cb, onStepStart: () => { throw new Error('UI hiccup'); }, onToolStart: c => seen.push(c.name) };
+	const script = [
+		{ type: 'system', subtype: 'init', session_id: 'S' },
+		{ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'text', text: 'hi' }] } },
+		{ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 'u', name: 'Read', input: { file_path: 'a' } }] } },
+		{ type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: 'S' },
+	];
+	const result = await new ClaudeEngine({ gateway: () => fakeGateway(), load: async () => fakeSdk(script).sdk, env: {} }).run(turn(), cb);
+	assert.equal(result.reason, 'done');
+	assert.deepEqual(seen, ['read_file'], 'later messages were still handled');
+});
+
 // --- finding and loading the SDK -----------------------------------------------------------------
 
 await test('SDK discovery order and version note', () => {

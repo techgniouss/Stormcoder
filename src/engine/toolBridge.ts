@@ -90,10 +90,20 @@ function pathOf(input: Record<string, unknown>): string {
 export function relativeToRoot(root: string, raw: string): { readonly ok: true; readonly rel: string } | { readonly ok: false; readonly error: string } {
 	const resolved = path.resolve(root, raw);
 	const rel = path.relative(root, resolved);
-	if (rel.startsWith('..') || path.isAbsolute(rel)) {
+	// `..cache` is a folder name; only `..` itself, or `..` followed by a separator, leaves the folder.
+	if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
 		return { ok: false, error: `Path "${raw}" is outside the workspace folder and was blocked.` };
 	}
 	return { ok: true, rel: (rel || '.').split(path.sep).join('/') };
+}
+
+/**
+ * Whether a glob names somewhere outside the workspace: absolute, home-relative, or containing a `..`
+ * step anywhere (also inside braces, as in `{../x,y}`). A `Glob` or `Grep` is judged by its pattern as
+ * well as its `path`, because either can reach out.
+ */
+export function patternEscapes(pattern: string): boolean {
+	return /^[\\/~]/.test(pattern) || /^[A-Za-z]:/.test(pattern) || /(^|[\\/{,])\.\.([\\/},]|$)/.test(pattern);
 }
 
 /** The first word of a command, for approval identities ("always allow `npm` here"). */
@@ -234,6 +244,12 @@ async function decide(toolName: string, input: Record<string, unknown>, ctx: Bri
 	const rootUri = vscode.Uri.file(root);
 
 	if (READ_TOOLS.has(toolName)) {
+		for (const field of toolName === 'Glob' ? ['pattern'] : toolName === 'Grep' ? ['glob'] : []) {
+			const pattern = str(input[field]);
+			if (pattern && patternEscapes(pattern)) {
+				return deny(`The pattern "${pattern}" reaches outside the workspace folder and was blocked.`);
+			}
+		}
 		const raw = pathOf(input);
 		if (!raw) {
 			return { behavior: 'allow' }; // Glob and Grep default to the working directory, which is the workspace.

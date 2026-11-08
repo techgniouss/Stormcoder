@@ -154,16 +154,25 @@ Features are decided per **upstream**, per request, in `src/engine/capabilities.
   the equivalent Stormcoder tool and applies `checkCommand`/`checkPath`, protected paths, workspace
   confinement and the approval policy (including the remote approval floor). Unknown tools are
   denied. Sub-agent calls (`agent_id` set) go through the same hook.
+- **Parity with the built-in loop:** the user's own `stormcoder.hooks` (PreToolUse veto, PostToolUse
+  feedback) run for harness calls; `agent.maxSubagents` and `maxSubagentDepth` cap the harness's
+  sub-agents; `agent.commandTimeoutMs` clamps a command's timeout (through the hook's rewritten
+  input); `agent.sandbox` becomes the harness's own fail-closed OS sandbox, and a request to leave
+  it is refused; `Glob`/`Grep` are judged by their patterns as well as their paths.
 - **Never set:** `allowDangerouslySkipPermissions`, `bypassPermissions`, plugins, `user` settings.
 - **MCP:** `strictMcpConfig: true`; only servers Stormcoder itself started (trusted folders).
 
 ## 7. Decisions and constraints for the owner
 
-1. **Distribution (7.3).** The SDK is proprietary. We do not add it to `package.json` or the
-   installer. The loader finds it in `engine.claudeCode.sdkPath`, then
-   `<userData>/engines/claude/node_modules`, then the app's own `node_modules` if the owner chooses
-   to bundle. An in-app installer that downloads it into `<userData>` (integrity-checked) is the
-   follow-up that gives "keeps itself updated" without redistributing it.
+1. **Distribution.** The SDK is proprietary. We do not add it to `package.json` or the installer. The
+   **Install Claude Code Engine** command (also reached by choosing the engine) downloads it from the
+   npm registry into `<userData>/engines/claude` after a modal notice naming Anthropic's terms. Each
+   download is verified against the registry's published hash, extraction refuses anything outside its
+   folder, and the new install is swapped in atomically, so a failed or cancelled install leaves a
+   working one untouched. `stormcoder.engine.registry` points it at a company mirror (https only). The
+   loader also finds the SDK in `engine.claudeCode.sdkPath`, or in the app's own `node_modules` if the
+   owner decides to bundle it. A module is cached per process, so an updated SDK takes effect after a
+   restart (the install message says so).
 2. **Subscription login.** Third-party use of a Claude subscription login is a terms question. The
    gateway path needs no Claude login at all. `own-login` stays off until reviewed.
 3. **Gateway wire support is a moving target.** Anthropic adds request fields and block types. The
@@ -178,6 +187,7 @@ Features are decided per **upstream**, per request, in `src/engine/capabilities.
 | `stormcoder.engine.fastModel` | `""` | `provider:model` for the harness's small/background calls. Empty = same as the main model. |
 | `stormcoder.engine.claudeCode.cliPath` | `""` | Path to the `claude` binary (empty = the SDK's own). |
 | `stormcoder.engine.claudeCode.sdkPath` | `""` | Folder containing `@anthropic-ai/claude-agent-sdk`. |
+| `stormcoder.engine.registry` | `""` | npm registry for the in-app installer (a company mirror). Empty = the public registry. https only. |
 | `stormcoder.engine.claudeCode.auth` | `gateway` | `gateway` or `own-login`. |
 | `stormcoder.engine.claudeCode.loadProjectSettings` | `true` | Load `.claude/settings.json` and `CLAUDE.md` in trusted folders. |
 | `stormcoder.engine.appendProjectMemory` | `false` | Append Stormcoder's memory block to the harness prompt (costs tokens). |
@@ -217,65 +227,92 @@ request). Switching engines mid-conversation therefore keeps the gist, not the f
 
 | Piece | Where | Verified by |
 |---|---|---|
-| Messages API translators, SSE writer, error shapes | `src/engine/anthropicWire.ts` | `scripts/test-engine-gateway.mjs` |
-| Local gateway: pass-through (byte-identical, key rotation, usage tap) and translation | `src/engine/gateway.ts` | same, 42 tests against a fake Anthropic server and fake providers |
+| Messages API translators, SSE writer, thinking filter, error shapes | `src/engine/anthropicWire.ts` | `scripts/test-engine-gateway.mjs` |
+| Local gateway: pass-through (byte-identical, key rotation, usage tap) and translation | `src/engine/gateway.ts` | same, 49 tests against a fake Anthropic server and fake providers |
 | Model aliasing, per-target capability checks | `src/engine/modelMap.ts`, `capabilities.ts` | same |
-| Tool bridge: guardrail parity, trust, allow-list, Undo tracking | `src/engine/toolBridge.ts` | `scripts/test-engine-bridge.mjs`, 16 tests, including the same verdict as `checkCommand` under every policy |
-| SDK adapter: options, scrubbed env, message mapping, SDK discovery | `src/engine/claudeEngine.ts` | `scripts/test-engine-claude.mjs`, 26 tests against a scripted fake SDK |
-| Engine host: boot-once selection, routes, gateway lifecycle | `src/engine/engineHost.ts` | `scripts/test-engine-host.mjs` |
-| Routing seam, restart prompt, post-run review | `src/chatViewProvider.ts`, `src/extension.ts`, `host/controller.ts`, `electron/main.ts` | `test/engine-e2e.mjs` |
+| Tool bridge: guardrails, trust, allow-list, user hooks, sub-agent caps, timeout clamp, Undo tracking | `src/engine/toolBridge.ts` | `scripts/test-engine-bridge.mjs`, 25 tests, including the same verdict as `checkCommand` under every policy |
+| SDK adapter: options, scrubbed env, sandbox mapping, message mapping, wall-clock limit, SDK discovery | `src/engine/claudeEngine.ts` | `scripts/test-engine-claude.mjs`, 34 tests against a scripted fake SDK |
+| Engine host: boot-once selection, routes, gateway lifecycle, preflight, start-failure circuit breaker | `src/engine/engineHost.ts` | `scripts/test-engine-host.mjs` |
+| SDK installer: verified download, streaming tar extraction, atomic swap | `src/engine/installer.ts` | `scripts/test-engine-installer.mjs` (22 tests, every failure leaves the old install intact); the extractor was also compared byte for byte with system `tar` on two real npm packages |
+| Routing seam, fallback, restart prompt, post-run review, `/review` | `src/chatViewProvider.ts`, `src/extension.ts`, `host/controller.ts`, `electron/main.ts` | `test/engine-e2e.mjs` |
+| Palette commands: choose engine, install SDK | `src/extension.ts` | `test/engine-commands-e2e.mjs`, through the real UI |
 | Codex read-only reviewer | `src/providers/codexCli.ts` | `scripts/test-codex-cli.mjs`, router assertions in `scripts/test-auto-router.mjs` |
-| Working-tree diff for reviews | `src/git/repo.ts` | `scripts/test-engine-review.mjs` against real git repositories |
+| Per-file working-tree diff for reviews | `src/git/repo.ts` | `scripts/test-engine-review.mjs` against real git repositories |
 
 `test/engine-e2e.mjs` drives the real app engine and UI in Chromium with a stand-in harness that
 behaves like the real one (it calls the gateway over HTTP, runs the hooks it was given, executes
 tools). It proves, by counting the requests a mock model receives: a tool turn is exactly the
 harness's two requests; no compaction, memory or title request is made; the provider key never
 reaches the harness; `rm -rf` is blocked; a follow-up resumes the engine session; a review costs
-exactly one extra request and only when a reviewer is pinned and the run changed files; and its
-findings reach the engine once. It fails (verified) when the engine setting is `builtin`.
+exactly one extra request, only when a reviewer is pinned and the run changed files, and covers only
+the files that run changed; `/review` goes to the reviewer and not to the harness; the findings
+reach the engine once; and when the SDK is missing or the harness cannot start, the built-in agent
+answers instead and the composer stays usable. It fails (verified) when the engine setting is
+`builtin`.
+
+### Never breaking the app
+
+The engine is an optional layer around a working app, and it is built so that it can only ever
+degrade to the built-in agent, not take the app down:
+
+- Selecting the engine without a usable SDK, a gateway that cannot start, an SDK import that hangs
+  (20 second limit), or a harness that produces nothing at all: the message is served by the built-in
+  agent with a one-time note. After two start failures in a row the engine is left alone for five
+  minutes instead of launching a failing process on every message.
+- Edit mode (an editor feature, not an agent loop) always uses the built-in path.
+- An engine turn always ends with `done`; every failure inside it is a message in the chat. A hung
+  turn is stopped by `agent.maxRunMinutes`; Stop works at any point.
+- The gateway cannot be crashed by a client: socket errors are handled, writes to a client that left
+  are dropped, a stalled or vanished client frees its request, oversized bodies get a 413, buffers
+  are bounded.
+- The installer cannot damage a working install and cannot throw from a failing disk: stream errors
+  are caught where they occur.
+- A review is optional, bounded (git snapshots time out at 15 seconds, the Codex process at 15
+  minutes) and its failure is a note, never a failed turn.
+- Settings and stored state are validated, so a hand-edited file cannot start the engine in a bad state.
 
 ### What is not verified, and why
 
 - **No run against the real `claude` binary or real provider APIs.** The stand-in follows the SDK
   types read from `@anthropic-ai/claude-agent-sdk@0.3.319`, but the real harness may differ in ways
-  those types do not show (message ordering, hook timing, how it reacts to a stream that opens late).
-  This is the first thing to check with a real key: one Agent turn on a Claude model and one on a
-  non-Claude model.
-- **Windows and macOS.** Developed and tested on Linux only.
-- **The SDK installer** (download into `<userData>/engines/claude`, integrity-checked, update
-  prompts). Until then the SDK is installed by hand (`npm install --prefix ... @anthropic-ai/claude-agent-sdk`)
-  or pointed to with `stormcoder.engine.claudeCode.sdkPath`.
+  those types do not show (message ordering, hook timing, how it reacts to a stream that opens late,
+  whether it accepts every key in the sandbox settings). This is the first thing to check with a real
+  key: one Agent turn on a Claude model and one on a non-Claude model. If the real harness refuses to
+  start, the fallback above keeps the app working while that is sorted out.
+- **Windows and macOS.** Developed and tested on Linux only. The installer selects the right platform
+  build and handles `.exe` and musl, but has only run here.
 - **Own-login mode** is implemented (no gateway, Claude models only) but has never been run with a
   real login, and its terms question (7.2) is open.
-- **Codex CLI** flags and event names follow `@openai/codex-sdk@0.167.0`; not run against the real
-  CLI.
+- **Codex CLI** flags and event names follow `@openai/codex-sdk@0.167.0`; not run against the real CLI.
+- **The installer against the real npm registry.** It is tested against a stand-in registry serving
+  real tarballs, and its extractor against two real packages; the registry's response shape is the
+  documented abbreviated-metadata format.
 - **Electron smoke, the update test and the Android shell** need binaries that are not in this
   environment and were not run.
 
 ### Known limits
 
-- No Settings-panel row for `stormcoder.engine` and its siblings yet (they are in `settings.json`);
-  a panel row is a UI change and needs the taste-skill pass.
-- In engine mode: no Auto, no inline Edit mode, no mid-run steering, no background commands
-  (`run_in_background` is refused), no MCP servers from Stormcoder's list, no Stormcoder skills, and
-  `/review` still runs as a normal chat turn rather than through the pinned reviewer.
-- Stormcoder's OS-level command sandbox (`agent.sandbox`) does not wrap the harness's `Bash`; the
-  hook's guardrails, trust and approvals do.
-- A review sees the whole diff against the last commit, so uncommitted work from before the run is
-  included. Review runs only for Agent mode in a git repository.
+- No Settings-panel row for the engine; the **Choose Agent Engine** command (palette) and
+  `settings.json` are the ways in. A panel row is a UI change and needs the taste-skill pass.
+- With the engine on: no Auto (an explicit Auto selection runs on the chat's own model, and the chat
+  says so), no mid-run steering, no background commands (`run_in_background` is refused), no MCP
+  servers from Stormcoder's list, no Stormcoder skills.
 - The translated path emits tool calls when a provider step completes, so a large file write is not
   shown arriving; text streams normally.
 - Claude models reached through a translating provider (OpenRouter, a custom gateway) lose
-  `cache_control` and thinking. Use the Anthropic provider for Claude to get exact parity with
-  Claude Code.
+  `cache_control` and thinking. Use the Anthropic provider for Claude to get exact parity with Claude Code.
+- A review covers whole files the run touched; if the run edited a file that already had uncommitted
+  changes, the file's earlier changes are in the diff too. Review runs only for Agent mode in a git
+  repository.
 
 ## 12. Using it
 
-1. Install the SDK: `npm install --prefix "<user data>/engines/claude" @anthropic-ai/claude-agent-sdk`
-   (or set `stormcoder.engine.claudeCode.sdkPath`).
-2. Set `"stormcoder.engine": "claude-code"` in settings and restart when asked.
-3. Pick any provider and model in the model picker. For the harness's small background requests set
+1. Run **Stormcoder: Choose Agent Engine (Built-in or Claude Code)** from the command palette and pick
+   the Claude Code engine. It offers to install the SDK first (or run **Install Claude Code Engine**
+   on its own). Restart when asked.
+2. Pick any provider and model in the model picker. For the harness's small background requests set
    `stormcoder.engine.fastModel` to a cheap `provider:model`.
-4. Optional second opinion: install the Codex CLI, run `codex login`, and set
-   `"stormcoder.auto.reviewModel": "codex-cli:default"`.
+3. Optional second opinion: install the Codex CLI, run `codex login`, and set
+   `"stormcoder.auto.reviewModel": "codex-cli:default"`. It then reviews each Agent run that changed
+   files, and `/review` goes to it directly.
+4. To go back: choose the built-in agent in the same command, or set `"stormcoder.engine": "builtin"`.

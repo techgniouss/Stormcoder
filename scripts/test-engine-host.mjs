@@ -218,4 +218,65 @@ await test('settings that a hand edit made nonsense are treated as unset', () =>
 	delete settings['engine.claudeCode.sdkPath'];
 });
 
+await test('preflight gives up on an SDK whose import never finishes, so messages are not held up', async () => {
+	const fs = await import('node:fs');
+	const os = await import('node:os');
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hang-'));
+	const pkg = path.join(dir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
+	fs.mkdirSync(pkg, { recursive: true });
+	fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@anthropic-ai/claude-agent-sdk', version: '0.3.1', type: 'module', exports: { '.': { default: './sdk.mjs' } } }));
+	fs.writeFileSync(path.join(pkg, 'sdk.mjs'), 'await new Promise(() => { });\nexport function query() { }\n');
+	try {
+		settings['engine.claudeCode.sdkPath'] = dir;
+		const started = Date.now();
+		const result = await new EngineHost(options()).preflight(150);
+		assert.equal(result.ok, false);
+		assert.match(result.reason, /took too long/);
+		assert.ok(Date.now() - started < 3000);
+	} finally {
+		delete settings['engine.claudeCode.sdkPath'];
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+await test('a harness that keeps failing to start is left alone for a while; a working start resets the count', async () => {
+	const fs = await import('node:fs');
+	const os = await import('node:os');
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-'));
+	const pkg = path.join(dir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
+	fs.mkdirSync(pkg, { recursive: true });
+	fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: '@anthropic-ai/claude-agent-sdk', version: '0.3.1', type: 'module', exports: { '.': { default: './sdk.mjs' } } }));
+	fs.writeFileSync(path.join(pkg, 'sdk.mjs'), 'export function query() { }\n');
+	settings['engine.claudeCode.sdkPath'] = dir;
+	settings['engine.claudeCode.auth'] = 'own-login'; // keeps the gateway out of this test
+	const realNow = Date.now;
+	try {
+		const fail = { reason: 'error', detail: 'spawn claude ENOENT\nmore detail', started: false };
+		const ok = { reason: 'done', started: true };
+		const queue = [];
+		const h = new EngineHost({ ...options(), engine: { run: async () => queue.shift() } });
+		const turn = { sessionId: 's', prompt: 'x', cwd: '/', route: {}, mode: 'agent', guardrails: {}, approver: {}, trusted: true, signal: new AbortController().signal, contextWindow: 1 };
+		const go = async result => { queue.push(result); return h.run(turn, {}); };
+
+		assert.equal((await go(fail)).started, false, 'the result is passed through unchanged');
+		assert.equal((await h.preflight()).ok, true, 'one failure is not enough to give up');
+		await go(ok);
+		await go(fail);
+		assert.equal((await h.preflight()).ok, true, 'a working start in between resets the count');
+		await go(fail); // two in a row
+		const blocked = await h.preflight();
+		assert.equal(blocked.ok, false);
+		assert.match(blocked.reason, /failed to start 2 times in a row \(spawn claude ENOENT\)/);
+		assert.ok(!blocked.reason.includes('more detail'), 'one line only');
+
+		Date.now = () => realNow() + 6 * 60_000; // after the pause
+		assert.equal((await h.preflight()).ok, true, 'it is tried again once the pause is over');
+	} finally {
+		Date.now = realNow;
+		delete settings['engine.claudeCode.sdkPath'];
+		delete settings['engine.claudeCode.auth'];
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 console.log(`engine host: ${passed} tests, all assertions passed`);

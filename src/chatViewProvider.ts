@@ -67,6 +67,18 @@ const AUTO_PROVIDER = '__auto__';
 /** Workspace-state key for the engine session id of each chat (see `engineSessions`). */
 const ENGINE_SESSIONS_KEY = 'stormcoder.engineSessions';
 
+/** The longest a git snapshot for a review may take; past it the review is skipped rather than holding up the turn. */
+const GIT_SNAPSHOT_MS = 15_000;
+
+/** `promise`'s value, or undefined if it fails or takes longer than `ms`. */
+function orTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	return Promise.race([
+		promise.catch(() => undefined),
+		new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), ms); }),
+	]).finally(() => { if (timer) { clearTimeout(timer); } });
+}
+
 /** The most chats whose engine session id is remembered; older ones fall out. */
 const MAX_ENGINE_SESSIONS = 500;
 
@@ -612,6 +624,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	private readonly engineAnnounced = new Set<string>();
 	/** A review that found problems, to be put in front of the engine at the start of the chat's next turn. */
 	private readonly pendingReviews = new Map<string, string>();
+	/** Chats already told that Auto does not apply while the Claude Code engine is selected. */
+	private readonly engineAutoNoted = new Set<string>();
 	/** Chats already told that the engine is unavailable and the built-in agent is serving them. */
 	private readonly engineUnavailableNoted = new Set<string>();
 
@@ -2959,11 +2973,6 @@ ${context.content}` }
 	}
 
 	/**
-	 * Turns a run's {@link RunResult} into the one status message the user sees. A run
-	 * that ends for any reason other than "finished" must say so — silence reads as the
-	 * chat having crashed mid-task.
-	 */
-	/**
 	 * One chat turn under `stormcoder.engine: claude-code`. The Claude Code harness runs the loop;
 	 * Stormcoder is its model gateway, its guardrails (every tool call passes `engine/toolBridge`)
 	 * and its UI. No `AgentRunner` or `AutoOrchestrator` is built and none of Stormcoder's own side
@@ -3001,6 +3010,7 @@ ${context.content}` }
 		this.activeRequests.get(sessionId)?.abort();
 		const controller = new AbortController();
 		this.activeRequests.set(sessionId, controller);
+		let fellBack = false;
 		try {
 			this.trackSessionSend(sessionId, mode, providerId, model);
 			// The engine does not drain Stormcoder's steering queue, so a correction typed mid-run is not accepted.
@@ -3013,12 +3023,15 @@ ${context.content}` }
 			const reviewCommand = reviewer && last.content === REVIEW_PROMPT;
 			// A review of the run's changes happens only when this run changed the tree, so the tree is compared
 			// before and after; without a pinned reviewer (or a git repository) none of this costs anything.
-			const before = reviewer && mode === 'agent' && !reviewCommand ? await workingTreeSections(folder).catch(() => undefined) : undefined;
+			const before = reviewer && mode === 'agent' && !reviewCommand ? await orTimeout(workingTreeSections(folder), GIT_SNAPSHOT_MS) : undefined;
 			post({ type: 'todos', items: [] });
 			if (!this.engineAnnounced.has(sessionId)) {
 				this.engineAnnounced.add(sessionId);
-				const auto = message.provider === AUTO_PROVIDER ? '\nAuto is not used with the Claude Code engine; this chat runs on the model shown.' : '';
-				post({ type: 'info', message: `Claude Code engine · ${provider.info.label} · ${model}${resolved.warnings.length ? `\n${resolved.warnings.join('\n')}` : ''}${auto}` });
+				post({ type: 'info', message: `Claude Code engine · ${provider.info.label} · ${model}${resolved.warnings.length ? `\n${resolved.warnings.join('\n')}` : ''}` });
+			}
+			if (message.provider === AUTO_PROVIDER && !this.engineAutoNoted.has(sessionId)) {
+				this.engineAutoNoted.add(sessionId);
+				post({ type: 'info', message: `Auto is not used with the Claude Code engine; this chat runs on ${provider.info.label} · ${model}. Pick a model in the model picker to choose another.` });
 			}
 			// /review with a reviewer pinned goes to that reviewer, not to the engine's own model.
 			if (reviewCommand && await this.reviewEngineRun(sessionId, folder, 'Review my uncommitted changes.', '', [], post, controller.signal)) {
@@ -3062,6 +3075,13 @@ ${context.content}` }
 				contextWindow: resolved.contextWindow,
 				title: last.content.replace(/\s+/g, ' ').trim().slice(0, 60) || undefined,
 			}, callbacks);
+			if (result.reason === 'error' && !result.started) {
+				// The harness produced nothing at all, so it cannot run here (a corrupt binary, a sandbox the
+				// machine lacks, ...). The built-in agent serves this message, and the user is told why.
+				fellBack = true;
+				post({ type: 'info', message: `The Claude Code engine did not start (${(result.detail ?? 'unknown error').split('\n')[0].slice(0, 200)}). This message was handled by the built-in agent instead.` });
+				return false;
+			}
 			if (result.sessionId) {
 				this.rememberEngineSession(sessionId, result.sessionId);
 			} else if (resumeId && result.reason === 'error') {
@@ -3086,8 +3106,11 @@ ${context.content}` }
 			}
 			this.clearSteerable(sessionId, runId);
 			this.endSessionRun(sessionId);
-			this.announceCheckpoint(sessionId, runId, post);
-			post({ type: 'done' });
+			if (!fellBack) {
+				// A turn handed to the built-in agent is not over: that path announces and finishes it.
+				this.announceCheckpoint(sessionId, runId, post);
+				post({ type: 'done' });
+			}
 		}
 		return true;
 	}
@@ -3181,7 +3204,8 @@ ${context.content}` }
 				post({ type: 'info', message: `Review skipped: ${assignment.problem ?? 'the review model is unavailable.'}` });
 				return false;
 			}
-			const changed = changedSections(before, await workingTreeSections(folder));
+			const after = await orTimeout(workingTreeSections(folder), GIT_SNAPSHOT_MS);
+			const changed = after ? changedSections(before, after) : [];
 			if (!changed.length) {
 				return false; // nothing changed, or not a git repository: nothing to review
 			}
@@ -3258,6 +3282,11 @@ ${context.content}` }
 		await this.engineHost.dispose();
 	}
 
+	/**
+	 * Turns a run's {@link RunResult} into the one status message the user sees. A run
+	 * that ends for any reason other than "finished" must say so — silence reads as the
+	 * chat having crashed mid-task.
+	 */
 	private reportStop(post: SessionPost, result: RunResult): void {
 		if (result.reason === 'done' || !result.detail) {
 			return;

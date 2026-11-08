@@ -13,6 +13,7 @@ import path from 'node:path';
 
 const { workingTreeDiff, workingTreeSections, changedSections, renderSections } = await import(new URL('../out/git/repo.js', import.meta.url));
 
+const tmpFile = text => { const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'outside-')), 'secret.txt'); fs.writeFileSync(f, text); return f; };
 const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd, encoding: 'utf8' });
 const repo = () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wtd-'));
@@ -153,6 +154,31 @@ await test('one enormous file cannot flood the result', async () => {
 	assert.equal(sections.length, 1);
 	assert.ok(sections[0].text.length < 2_300);
 	assert.match(sections[0].text, /file diff truncated/);
+});
+
+await test('an untracked symbolic link is named, never followed to what it points at', async () => {
+	if (process.platform === 'win32') { return; } // creating links needs privileges there
+	const outside = tmpFile('SECRET-FROM-OUTSIDE\n');
+	const dir = repo();
+	fs.writeFileSync(path.join(dir, 'a.txt'), 'one\n');
+	git(dir, 'add', '-A');
+	git(dir, 'commit', '-qm', 'init');
+	fs.symlinkSync(outside, path.join(dir, 'notes'));
+	fs.symlinkSync(os.tmpdir(), path.join(dir, 'tmpdir'));
+	const text = await workingTreeDiff(dir);
+	assert.ok(!text.includes('SECRET-FROM-OUTSIDE'), 'the target\'s content never enters the diff');
+	assert.match(text, /new symbolic link notes \(not followed\)/);
+	assert.match(text, /new symbolic link tmpdir \(not followed\)/);
+});
+
+await test('files and folders whose names start with two dots are part of the diff', async () => {
+	const dir = repo();
+	fs.writeFileSync(path.join(dir, 'a.txt'), 'one\n');
+	git(dir, 'add', '-A');
+	git(dir, 'commit', '-qm', 'init');
+	fs.mkdirSync(path.join(dir, '..cache'));
+	fs.writeFileSync(path.join(dir, '..cache', 'x.txt'), 'in a dotted folder\n');
+	assert.match(await workingTreeDiff(dir), /\+in a dotted folder/);
 });
 
 console.log(`engine review: ${passed} tests, all assertions passed`);

@@ -68,15 +68,16 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.workspace.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration('stormcoder.engine') && readEngineSetting() !== engineSelectedAtStart() && !restartOffered) {
 				restartOffered = true;
-				void vscode.window.showInformationMessage(
+				void Promise.resolve(vscode.window.showInformationMessage(
 					`Stormcoder will use the ${readEngineSetting() === 'claude-code' ? 'Claude Code' : 'built-in'} engine after a restart.`,
 					'Restart now',
-				).then(choice => {
+				)).then(choice => {
 					restartOffered = false;
 					if (choice === 'Restart now') {
-						void vscode.commands.executeCommand('stormcoder.app.relaunch');
+						return vscode.commands.executeCommand('stormcoder.app.relaunch');
 					}
-				});
+					return undefined;
+				}).catch(() => { restartOffered = false; });
 			}
 		}),
 	);
@@ -94,8 +95,8 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand('stormcoder.newChat', () => viewProvider.newChat()),
 		vscode.commands.registerCommand('stormcoder.openSettings', () => viewProvider.openSettingsWindow()),
 		vscode.commands.registerCommand('stormcoder.selectProvider', () => selectProvider(registry, viewProvider)),
-		vscode.commands.registerCommand('stormcoder.engine.choose', () => chooseEngine(viewProvider)),
-		vscode.commands.registerCommand('stormcoder.engine.installClaude', () => installClaudeEngine(viewProvider)),
+		vscode.commands.registerCommand('stormcoder.engine.choose', () => chooseEngine(viewProvider).catch(reportEngineCommandFailure)),
+		vscode.commands.registerCommand('stormcoder.engine.installClaude', () => installClaudeEngine(viewProvider).then(() => undefined, reportEngineCommandFailure)),
 		vscode.commands.registerCommand('stormcoder.configureProvider', (presetId?: string) =>
 			configureProvider(registry, viewProvider, presetId)),
 		vscode.commands.registerCommand('stormcoder.signIn', (presetId?: string) =>
@@ -210,6 +211,11 @@ async function pickProvider(registry: ProviderRegistry, placeHolder: string): Pr
 
 /** Where Anthropic states the terms the Claude Agent SDK is provided under. */
 const CLAUDE_SDK_TERMS_URL = 'https://code.claude.com/docs/en/legal-and-compliance';
+
+/** A failure of an engine command is told to the user; it never escapes as an unhandled rejection. */
+function reportEngineCommandFailure(err: unknown): void {
+	vscode.window.showErrorMessage(`That did not work: ${err instanceof Error ? err.message : String(err)}`);
+}
 
 /** One choice in the "Choose Agent Engine" list. */
 interface EngineChoice extends vscode.QuickPickItem {

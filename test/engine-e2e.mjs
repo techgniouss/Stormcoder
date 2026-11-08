@@ -318,4 +318,47 @@ if (!failed) {
 		mock2.close();
 	}
 }
+
+// --- the engine is installed but the harness cannot start: still the built-in agent, still working ----
+
+if (!failed) {
+	const brokenRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'broken-sdk-'));
+	const brokenDir = path.join(brokenRoot, 'node_modules', '@anthropic-ai', 'claude-agent-sdk');
+	fs.mkdirSync(brokenDir, { recursive: true });
+	fs.writeFileSync(path.join(brokenDir, 'package.json'), JSON.stringify({ name: '@anthropic-ai/claude-agent-sdk', version: '0.3.999', type: 'module', exports: { '.': { default: './sdk.mjs' } } }));
+	fs.writeFileSync(path.join(brokenDir, 'sdk.mjs'), `export function query() { return { close() {}, async interrupt() {}, async *[Symbol.asyncIterator]() { throw new Error('spawn claude ENOENT: the engine binary is missing'); } }; }\n`);
+	const mock3 = await startMock(() => 'Built-in agent answered again.');
+	const host3 = await startHost({ mockPort: mock3.port, settings: { 'stormcoder.engine': 'claude-code', 'stormcoder.engine.claudeCode.sdkPath': brokenRoot } });
+	const browser3 = await launchChromium();
+	try {
+		const page = await browser3.newPage({ viewport: { width: 1280, height: 800 } });
+		const errors = [];
+		page.on('pageerror', e => errors.push(e.message));
+		await page.goto(host3.url);
+		const chat = page.frameLocator('#view-chat');
+		await chat.locator('#input').waitFor();
+		await chat.locator('.seg-btn[data-value=agent]').click();
+		await chat.locator('#input').fill('hello there');
+		await chat.locator('#input').press('Enter');
+		await chat.getByText('Built-in agent answered again.').first().waitFor({ timeout: 30000 });
+		await chat.getByText(/did not start .*engine binary is missing/).first().waitFor({ timeout: 5000 });
+		assert.equal(mock3.seen.length, 1, 'one model request: the built-in agent\'s, not a second one for the failed harness');
+		assert.ok(String(mock3.seen[0].messages[0].content).length > 200, 'the built-in agent\'s own prompt');
+		// The turn finished cleanly: the composer is usable again.
+		await chat.locator('#input').fill('and once more');
+		await chat.locator('#input').press('Enter');
+		await chat.getByText('Built-in agent answered again.').nth(1).waitFor({ timeout: 30000 });
+		assert.deepEqual(errors, [], `page errors: ${errors.join('; ')}`);
+		console.log('engine e2e (harness cannot start): all assertions passed');
+	} catch (err) {
+		failed = true;
+		console.error(err);
+		console.error('--- host log ---\n' + host3.log().slice(-3000));
+	} finally {
+		await browser3.close();
+		host3.stop();
+		mock3.close();
+		fs.rmSync(brokenRoot, { recursive: true, force: true });
+	}
+}
 process.exit(failed ? 1 : 0);

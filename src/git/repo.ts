@@ -782,12 +782,18 @@ export async function workingTreeSections(cwd: string, limits: WorkingTreeDiffLi
 	const fresh = (await ok(['ls-files', '--others', '--exclude-standard'], root)).split('\n').filter(Boolean);
 	for (const rel of fresh.slice(0, limits.maxNewFiles)) {
 		const file = path.join(root, rel);
-		if (path.relative(root, file).startsWith('..')) {
+		const outside = path.relative(root, file);
+		if (outside === '..' || outside.startsWith(`..${path.sep}`) || path.isAbsolute(outside)) {
 			continue;
 		}
 		const key = `new file ${rel}`;
 		try {
-			const stat = await fs.promises.stat(file);
+			// lstat, not stat: a link in the project must not make a file elsewhere part of the diff.
+			const stat = await fs.promises.lstat(file);
+			if (stat.isSymbolicLink()) {
+				sections.push({ key, text: `new symbolic link ${rel} (not followed)\n` });
+				continue;
+			}
 			if (!stat.isFile() || stat.size > limits.maxNewFileBytes) {
 				sections.push({ key, text: `new file ${rel} (${stat.size} bytes, not shown)\n` });
 				continue;
