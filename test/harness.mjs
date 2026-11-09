@@ -62,15 +62,27 @@ export async function startHost({ mockPort, settings = {}, files = {}, env = {} 
 		'stormcoder.guardrails.approval': 'yolo',
 		...settings,
 	}));
-	const host = spawn(process.execPath, [path.join(root, 'dist/dev-host.js')], {
-		env: { ...process.env, MJ_USER_DATA: data, MJ_FOLDER: project, MJ_PORT: '0', ...env },
-		stdio: ['ignore', 'pipe', 'pipe'],
-	});
+	let host;
 	let log = '';
-	host.stderr.on('data', d => { log += d; });
-	const url = await new Promise((resolve, reject) => {
-		const t = setTimeout(() => reject(new Error('dev host did not start\n' + log)), 15000);
-		host.stdout.on('data', d => { const m = /(?:MJOLNIR|STORMCODER)_DEV (\S+)/.exec(String(d)); if (m) { clearTimeout(t); resolve(m[1]); } });
-	});
-	return { url, project, data, log: () => log, stop: () => { host.kill(); fs.rmSync(work, { recursive: true, force: true }); } };
+	/** Spawns the dev host on the (possibly already used) data and project folders and resolves its address. */
+	const launch = async () => {
+		host = spawn(process.execPath, [path.join(root, 'dist/dev-host.js')], {
+			env: { ...process.env, MJ_USER_DATA: data, MJ_FOLDER: project, MJ_PORT: '0', ...env },
+			stdio: ['ignore', 'pipe', 'pipe'],
+		});
+		host.stderr.on('data', d => { log += d; });
+		return new Promise((resolve, reject) => {
+			const t = setTimeout(() => reject(new Error('dev host did not start\n' + log)), 15000);
+			host.stdout.on('data', d => { const m = /(?:MJOLNIR|STORMCODER)_DEV (\S+)/.exec(String(d)); if (m) { clearTimeout(t); resolve(m[1]); } });
+		});
+	};
+	const url = await launch();
+	/** Stops the app and starts it again on the same data and project, with `patch` merged into the settings: what a user's restart does. */
+	const restart = async patch => {
+		await new Promise(r => { host.once('exit', r); host.kill(); });
+		const file = path.join(data, 'settings.json');
+		fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), ...patch }));
+		return launch();
+	};
+	return { url, project, data, restart, log: () => log, stop: () => { host.kill(); fs.rmSync(work, { recursive: true, force: true }); } };
 }
