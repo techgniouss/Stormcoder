@@ -84,7 +84,7 @@ export class CodexCliProvider implements ChatProvider {
 			throw new Error(`Codex CLI: "${model}" is not a valid model name.`);
 		}
 		// Hard-coded, never a setting: this provider's one promise is that it cannot change anything.
-		const args = ['exec', '--experimental-json', '--sandbox', 'read-only', '--skip-git-repo-check'];
+		const args = ['exec', '--json', '--sandbox', 'read-only', '--skip-git-repo-check'];
 		if (model && model !== CODEX_DEFAULT_MODEL) {
 			args.push('--model', model);
 		}

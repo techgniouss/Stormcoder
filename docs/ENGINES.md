@@ -74,7 +74,7 @@ Read from `@anthropic-ai/claude-agent-sdk@0.3.319` type definitions and bundle, 
 
 ### 2.3 Codex SDK
 
-`codex exec --experimental-json` with `--sandbox read-only|workspace-write|danger-full-access`,
+`codex exec --json` with `--sandbox read-only|workspace-write|danger-full-access`,
 `--cd`, `--skip-git-repo-check`, `--model`, `--config approval_policy="..."`. Events are JSONL
 (`item.completed` with `agent_message`, `turn.completed` with usage). There is a sandbox and an
 approval policy but no per-tool-call callback in the SDK. A read-only sandbox is a hard guarantee
@@ -309,7 +309,7 @@ degrade to the built-in agent, not take the app down:
   build and handles `.exe` and musl, but has only run here.
 - **Own-login mode** is implemented (no gateway, Claude models only) but has never been run with a
   real login, and its terms question (7.2) is open.
-- **Codex CLI** flags and event names follow `@openai/codex-sdk@0.167.0`; not run against the real CLI.
+- **Codex CLI** (checked against `@openai/codex` 0.167.0): the flags (`exec --json --sandbox read-only --skip-git-repo-check`, prompt on stdin) are accepted, and the provider was run against the real binary signed out. Its real event stream (`thread.started`, `turn.started`, retry `error` events, `turn.failed`) is replayed in `scripts/test-codex-cli.mjs`, and the failure surfaces as `exited with code 1: unexpected status 401 ... Run \`codex login\``, after about 17 seconds of the CLI's own retries. **Not verified:** a signed-in review (the `item.completed` / `agent_message` success event is taken from the SDK's types), and Windows. The old flag name `--experimental-json` was replaced by the documented `--json`; an older CLI that lacks `--json` fails with the CLI's own message.
 - **The installer against the real npm registry.** It is tested against a stand-in registry serving
   real tarballs, and its extractor against two real packages; the registry's response shape is the
   documented abbreviated-metadata format.
