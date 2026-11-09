@@ -17,7 +17,7 @@ fs.writeFileSync(path.join(sdkDir, 'package.json'), JSON.stringify({ name: '@ant
 fs.writeFileSync(path.join(sdkDir, 'sdk.mjs'), `
 import fs from 'node:fs';
 export function query({ prompt, options }) {
-	fs.appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ prompt: String(prompt) }) + '\\n');
+	fs.appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({ prompt: String(prompt), resume: options.resume ?? null }) + '\\n');
 	return {
 		close() {}, async interrupt() {},
 		async *[Symbol.asyncIterator]() {
@@ -93,6 +93,17 @@ try {
 	assert.ok(await ui.chat.getByText('Engine reply.').count() >= 1, 'the chat from the engine session is still there');
 
 	// 4. The panel agrees.
+	await ui.page.close();
+
+	// 4. Back to the engine: the harness missed the built-in turn, so it must not resume its old session.
+	const url3 = await host.restart({ 'stormcoder.engine': 'claude-code' });
+	ui = await open(url3);
+	await send(ui.chat, 'hello three');
+	await ui.chat.getByText('Engine reply.').nth(1).waitFor({ timeout: 30000 });
+	const calls = fs.readFileSync(callsFile, 'utf8').trim().split('\n').map(l => JSON.parse(l));
+	assert.equal(calls.length, 2);
+	assert.equal(calls[1].resume, null, 'a stale harness session is not resumed after built-in turns');
+	assert.match(calls[1].prompt, /hello two/, 'the chat\'s history, including the built-in turn, is given to the harness instead');
 	assert.deepEqual(ui.errors, []);
 	console.log('engine switch-back e2e: all assertions passed');
 } catch (err) {

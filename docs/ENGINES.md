@@ -214,6 +214,15 @@ history; the first engine turn on such a chat starts a fresh engine session and 
 of the earlier messages (the last few, clipped; built without a model call, so it costs no extra
 request). Switching engines mid-conversation therefore keeps the gist, not the full history.
 
+A message that the built-in agent handles (the engine is off, or it declined and the built-in agent
+served it) makes the chat's saved engine session stale, because the harness never saw that turn or its
+file changes. The saved session is forgotten, so the next engine turn starts afresh from the chat's
+history instead of resuming a conversation with a hole in it. Clearing or deleting a chat forgets its
+engine session too. The harness keeps its own session files in `<userData>/engines/claude-home`
+(`CLAUDE_CONFIG_DIR`, gateway mode only), not in the user's `~/.claude`, so they never mix with their own
+Claude Code history. Stop, Close and Clear work from the moment a message is sent, including while the
+engine is still getting ready, and closing the app or changing folder stops any run in flight.
+
 ## 10. Self-review: gaps found in the earlier plan and their fixes
 
 | Gap | Fix |
@@ -319,7 +328,10 @@ degrade to the built-in agent, not take the app down:
 ### Known limits
 
 - With the engine on: no Auto (an explicit Auto selection runs on the chat's own model, and the chat
-  says so), no mid-run steering, no background commands (`run_in_background` is refused). MCP servers and
+  says so), no mid-run steering, no background commands (`run_in_background` is refused), no `/compact` (the harness compacts its own
+  context; the command says so and makes no model call), and no Stormcoder memory: `remember`, `recall`,
+  the run journal and `/memory` notes do not reach the harness unless `engine.appendProjectMemory` is on,
+  and then only the saved notes are added to its prompt. MCP servers and
   skills work (section 6a); not offered: MCP resources and prompts, and an MCP server with a `cwd`.
 - The translated path emits tool calls when a provider step completes, so a large file write is not
   shown arriving; text streams normally.

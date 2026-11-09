@@ -83,6 +83,14 @@ await test('the harness environment keeps only the allow-list and never a provid
 	assert.equal(env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION, 'false');
 });
 
+await test('the harness keeps its sessions in Stormcoder\'s own folder, not the user\'s ~/.claude (gateway mode only)', () => {
+	const env = buildEngineEnv({ PATH: '/p', HOME: '/home/u' }, { route: translatedRoute, auth: 'gateway', contextWindow: 128_000, configDir: '/data/engines/claude-home' }, { baseUrl: 'http://127.0.0.1:1', token: 't' });
+	assert.equal(env.CLAUDE_CONFIG_DIR, '/data/engines/claude-home');
+	const own = buildEngineEnv({ PATH: '/p' }, { route: claudeRoute, auth: 'own-login', contextWindow: 200_000, configDir: '/data/x' }, undefined);
+	assert.equal(own.CLAUDE_CONFIG_DIR, undefined, 'the user\'s own login lives in their own config folder');
+	assert.equal(buildEngineEnv({ PATH: '/p' }, { route: translatedRoute, auth: 'gateway', contextWindow: 1 }, { baseUrl: 'x', token: 't' }).CLAUDE_CONFIG_DIR, undefined);
+});
+
 await test('a Claude model keeps its real ids and needs no compaction override; own-login sets no gateway at all', () => {
 	const env = buildEngineEnv({ PATH: '/p' }, { route: claudeRoute, auth: 'gateway', contextWindow: 200_000 }, { baseUrl: 'http://127.0.0.1:1', token: 't' });
 	assert.equal(env.ANTHROPIC_MODEL, 'claude-sonnet-x');

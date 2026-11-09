@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import type { ProviderRegistry } from '../providers/registry';
@@ -252,9 +253,14 @@ export class EngineHost {
 		if (auth === 'gateway') {
 			await this.ensureStarted();
 		}
+		const configDir = auth === 'gateway' ? path.join(path.dirname(this.installDir()), 'claude-home') : undefined;
+		if (configDir) {
+			await fs.promises.mkdir(configDir, { recursive: true }).catch(() => undefined);
+		}
 		const result = await this.engine.run({
 			...turn,
 			auth,
+			configDir,
 			cliPath: (() => { const raw = cfg.get<unknown>('engine.claudeCode.cliPath'); return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined; })(),
 			loadProjectSettings: cfg.get<boolean>('engine.claudeCode.loadProjectSettings') !== false,
 		}, callbacks);

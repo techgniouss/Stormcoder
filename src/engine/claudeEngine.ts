@@ -173,6 +173,8 @@ export interface EngineTurn {
 	readonly loadProjectSettings: boolean;
 	readonly auth: 'gateway' | 'own-login';
 	readonly cliPath?: string;
+	/** Where the harness keeps its own session files and settings. Stormcoder's own folder, so chats never mix with the user's Claude Code history in `~/.claude`. */
+	readonly configDir?: string;
 	/** MCP servers for the harness to connect to itself (already vetted); absent for none. */
 	readonly mcpServers?: Record<string, unknown>;
 	/** How long after the turn starts to ask the harness how its MCP servers fared (default 8 seconds; tests shorten it). */
@@ -232,13 +234,13 @@ const QUIET_ENV: Record<string, string> = {
  */
 export function buildEngineEnv(
 	parent: NodeJS.ProcessEnv,
-	turn: Pick<EngineTurn, 'route' | 'auth' | 'contextWindow'>,
+	turn: Pick<EngineTurn, 'route' | 'auth' | 'contextWindow'> & { configDir?: string },
 	gateway: { baseUrl: string; token: string } | undefined,
 ): Record<string, string> {
 	const env = allowlistedEnv(parent);
 	Object.assign(env, QUIET_ENV);
 	if (turn.auth === 'gateway' && gateway) {
-		Object.assign(env, {
+		Object.assign(env, turn.configDir ? { CLAUDE_CONFIG_DIR: turn.configDir } : {}, {
 			ANTHROPIC_BASE_URL: gateway.baseUrl,
 			ANTHROPIC_AUTH_TOKEN: gateway.token,
 			...engineModelEnv(turn.route),

@@ -290,7 +290,8 @@ if (!app.requestSingleInstanceLock()) {
 						// The new instance starts while this one is still shutting down; without releasing the lock
 						// it would find the app already running and quit at once.
 						app.releaseSingleInstanceLock();
-						app.relaunch();
+						// Inside an AppImage the running binary lives in a mount that disappears when this process exits.
+						app.relaunch(process.env.APPIMAGE ? { execPath: process.env.APPIMAGE, args: process.argv.slice(1) } : undefined);
 						return app.quit();
 					default: return undefined;
 				}
