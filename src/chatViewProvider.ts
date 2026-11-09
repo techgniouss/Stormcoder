@@ -1692,6 +1692,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				const result = this.sessionStore.closeSession(message.sessionId);
 				this.checkpoints.delete(message.sessionId);
 				this.queueDrains.sessionClosed(message.sessionId);
+				this.forgetEngineNotes(message.sessionId);
 				if (result.abortSessionId) {
 					this.activeRequests.get(result.abortSessionId)?.abort();
 				}
@@ -3277,6 +3278,15 @@ ${context.content}` }
 		return out;
 	}
 
+	/** Drops the small per-chat engine notes of a closed chat (its saved engine session stays, so a restored chat can continue). */
+	private forgetEngineNotes(sessionId: string): void {
+		this.engineMcpNoted.delete(sessionId);
+		this.engineAnnounced.delete(sessionId);
+		this.engineAutoNoted.delete(sessionId);
+		this.engineUnavailableNoted.delete(sessionId);
+		this.pendingReviews.delete(sessionId);
+	}
+
 	/** Whether the Claude Code engine, not the built-in agent, runs chats in this app session. */
 	get engineActive(): boolean {
 		return this.engineHost.enabled;
@@ -3516,6 +3526,12 @@ ${context.content}` }
 		const say = (message: string) => this.bus.postTo(origin, { type: 'info', sessionId, message });
 		const session = this.sessionStore.getSession(sessionId);
 		if (!session) {
+			return;
+		}
+		if (this.engineHost.enabled) {
+			// The harness keeps its own conversation and compacts it itself; a summary made here would cost a model
+			// call and change nothing the harness sees.
+			say('The Claude Code engine manages this chat\'s context itself and compacts it automatically when it fills, so there is nothing to do here.');
 			return;
 		}
 		if (this.activeRequests.has(sessionId)) {
