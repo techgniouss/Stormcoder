@@ -3277,11 +3277,20 @@ ${context.content}` }
 		return out;
 	}
 
+	/** Whether the Claude Code engine, not the built-in agent, runs chats in this app session. */
+	get engineActive(): boolean {
+		return this.engineHost.enabled;
+	}
+
 	/** Tells the chat, once per distinct problem, about a server the harness could not connect to. */
 	private reportEngineMcp(sessionId: string, servers: readonly { name: string; status: string }[], post: SessionPost): void {
 		const broken = servers.filter(s => s.status === 'failed' || s.status === 'needs-auth');
 		const key = broken.map(s => `${s.name}:${s.status}`).join(',');
-		if (!key || this.engineMcpNoted.get(sessionId) === key) {
+		if (!key) {
+			this.engineMcpNoted.delete(sessionId); // recovered: a later failure is news again
+			return;
+		}
+		if (this.engineMcpNoted.get(sessionId) === key) {
 			return;
 		}
 		this.engineMcpNoted.set(sessionId, key);
@@ -4728,7 +4737,7 @@ ${context.content}` }
 			let servers: Awaited<ReturnType<McpManager['resolveForEngine']>>['servers'] = [];
 			let issues: string[] = this.engineMcpIssues;
 			try {
-				const resolved = await this.mcp.resolveForEngine();
+				const resolved = await this.mcp.resolveForEngine({ interactive: false });
 				servers = resolved.servers;
 				issues = resolved.status;
 			} catch {
@@ -4736,7 +4745,7 @@ ${context.content}` }
 			}
 			this.post({
 				type: 'mcp',
-				status: [...servers.map(s => `${s.id}: loaded by the Claude Code engine over ${s.config.type === 'http' ? 'HTTP' : 'stdio'} when a chat starts.`), ...issues],
+				status: [...servers.map(s => `${s.id}: will be connected by the Claude Code engine over ${s.config.type === 'http' ? 'HTTP' : 'stdio'} in an Agent chat (trusted folders only).`), ...issues],
 				toolCount: 0,
 				engineServers: servers.length,
 			});

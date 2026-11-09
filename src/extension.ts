@@ -103,17 +103,26 @@ export function activate(context: vscode.ExtensionContext): void {
 			signIn(registry, viewProvider, presetId)),
 		vscode.commands.registerCommand('stormcoder.clearKey', () => clearKey(registry, viewProvider)),
 		vscode.commands.registerCommand('stormcoder.mcpReconnect', async () => {
+			if (viewProvider.engineActive) {
+				// The Claude Code engine connects to the servers itself, on each turn; starting them here would run each twice.
+				vscode.window.showInformationMessage(await engineMcpSummary(mcp));
+				return;
+			}
 			mcp.reconnect();
 			await mcp.ensureStarted();
 			vscode.window.showInformationMessage(`MCP: ${mcp.getStatus().join('  ·  ')}`);
 		}),
 		vscode.commands.registerCommand('stormcoder.mcpStatus', async () => {
+			if (viewProvider.engineActive) {
+				vscode.window.showInformationMessage(await engineMcpSummary(mcp));
+				return;
+			}
 			await mcp.ensureStarted();
 			vscode.window.showInformationMessage(`MCP: ${mcp.getStatus().join('  ·  ')}`);
 		}),
 		vscode.commands.registerCommand('stormcoder.selectSkill', () => selectSkill(viewProvider, context.extensionUri)),
 		vscode.commands.registerCommand('stormcoder.createSkill', () => createSkill(viewProvider)),
-		vscode.commands.registerCommand('stormcoder.mcpAdd', () => mcpAdd(mcp, context.workspaceState)),
+		vscode.commands.registerCommand('stormcoder.mcpAdd', () => mcpAdd(mcp, context.workspaceState, viewProvider.engineActive)),
 		vscode.commands.registerCommand('stormcoder.mcpOpenConfig', () => mcpOpenConfig()),
 		vscode.commands.registerCommand('stormcoder.remoteEnable', (options?: { quiet?: boolean }) => remoteEnable(remoteService, options?.quiet === true)),
 		vscode.commands.registerCommand('stormcoder.remoteInstallCloudflared', () => remoteInstallCloudflared(context)),
@@ -459,7 +468,7 @@ async function createSkill(view: ChatViewProvider): Promise<void> {
  * settings), the server id and the launch command, then reconnects so its tools are
  * available to the agent right away.
  */
-async function mcpAdd(mcp: McpManager, workspaceState: vscode.Memento): Promise<void> {
+async function mcpAdd(mcp: McpManager, workspaceState: vscode.Memento, engineActive: boolean): Promise<void> {
 	const root = vscode.workspace.workspaceFolders?.[0]?.uri;
 	const target = await vscode.window.showQuickPick(
 		[
@@ -565,9 +574,20 @@ async function mcpAdd(mcp: McpManager, workspaceState: vscode.Memento): Promise<
 		await cfg.update('mcp.servers', servers, vscode.ConfigurationTarget.Global);
 	}
 
+	if (engineActive) {
+		vscode.window.showInformationMessage(`Saved "${id}". The Claude Code engine connects to it in your next Agent chat.`);
+		return;
+	}
 	mcp.reconnect();
 	await mcp.ensureStarted();
 	vscode.window.showInformationMessage(`MCP: ${mcp.getStatus().join('  ·  ')}`);
+}
+
+/** What the Claude Code engine will load, without starting anything. */
+async function engineMcpSummary(mcp: McpManager): Promise<string> {
+	const { servers, status } = await mcp.resolveForEngine({ interactive: false });
+	const loaded = servers.length ? `The Claude Code engine will connect to: ${servers.map(s => s.id).join(', ')}.` : 'The Claude Code engine has no MCP servers to connect to.';
+	return `MCP: ${[loaded, ...status].join('  ·  ')}`;
 }
 
 /** Opens (creating if needed) the project's `.stormcoder/mcp.json`. */

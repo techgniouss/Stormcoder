@@ -24,6 +24,8 @@ const MAX_NAME = 64;
 const MAX_DESCRIPTION = 1024;
 /** Plugin folders kept on disk besides the one in use. Older ones may still be read by a running turn. */
 const KEEP_FOLDERS = 3;
+/** A plugin folder used within this long is never removed: a long run may still be reading its skills. */
+const PRUNE_MIN_AGE_MS = 60 * 60_000;
 
 /** The plugin's name; its skills appear to the model as `stormcoder:<slug>`. */
 export const PLUGIN_NAME = 'stormcoder';
@@ -83,8 +85,11 @@ export function selectEngineSkills(skills: readonly Skill[], trusted: boolean, a
 
 /** The `SKILL.md` text for one skill. */
 export function renderSkillFile(skill: EngineSkill): string {
+	// Claude Code runs !`command` in a skill body when the skill loads; Stormcoder's skills are instructions, not
+	// scripts, and such a command would not pass through the tool bridge. A space defuses it.
+	const body = skill.body.trim().replace(/!`/g, '! `');
 	// JSON strings are valid YAML scalars, which keeps a colon or quote in a description from breaking the header.
-	return `---\nname: ${skill.slug}\ndescription: ${JSON.stringify(skill.description)}\n---\n\n${skill.body.trim()}\n`;
+	return `---\nname: ${skill.slug}\ndescription: ${JSON.stringify(skill.description)}\n---\n\n${body}\n`;
 }
 
 /** A short digest of what would be written, so an unchanged set is never rewritten. */
@@ -102,13 +107,16 @@ function digest(skills: readonly EngineSkill[]): string {
  * fails because of them). Each distinct set gets its own folder, written to a temporary name and
  * renamed into place, so a turn that is reading one never sees a half-written or changing plugin.
  */
-export async function writeSkillsPlugin(root: string, skills: readonly EngineSkill[]): Promise<string | undefined> {
+export async function writeSkillsPlugin(root: string, skills: readonly EngineSkill[], minAgeMs = PRUNE_MIN_AGE_MS): Promise<string | undefined> {
 	if (!skills.length) {
 		return undefined;
 	}
 	try {
 		const target = path.join(root, digest(skills));
 		if (fs.existsSync(path.join(target, '.claude-plugin', 'plugin.json'))) {
+			// Used again: mark it recent so a run reading it is not pruned by a newer set.
+			const now = new Date();
+			await fs.promises.utimes(target, now, now).catch(() => undefined);
 			return target;
 		}
 		// Unique per writer: two turns starting in the same millisecond must not share a staging folder.
@@ -132,7 +140,7 @@ export async function writeSkillsPlugin(root: string, skills: readonly EngineSki
 				throw err;
 			}
 		}
-		await prune(root, path.basename(target));
+		await prune(root, path.basename(target), minAgeMs);
 		return target;
 	} catch {
 		return undefined;
@@ -140,7 +148,7 @@ export async function writeSkillsPlugin(root: string, skills: readonly EngineSki
 }
 
 /** Removes all but the newest few plugin folders (and any abandoned temporary ones). Never throws. */
-async function prune(root: string, keep: string): Promise<void> {
+async function prune(root: string, keep: string, minAgeMs: number): Promise<void> {
 	try {
 		const entries = await fs.promises.readdir(root, { withFileTypes: true });
 		const dated: { name: string; mtime: number }[] = [];
@@ -151,6 +159,9 @@ async function prune(root: string, keep: string): Promise<void> {
 			const stat = await fs.promises.stat(path.join(root, entry.name));
 			if (entry.name.includes('.tmp-') && Date.now() - stat.mtimeMs < 10 * 60_000) {
 				continue; // another turn is still writing it
+			}
+			if (Date.now() - stat.mtimeMs < minAgeMs) {
+				continue; // possibly in use by a run that is still going
 			}
 			dated.push({ name: entry.name, mtime: stat.mtimeMs });
 		}

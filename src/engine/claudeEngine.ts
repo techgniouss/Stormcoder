@@ -39,6 +39,8 @@ export interface SdkMessage {
 /** The running query. */
 export interface SdkQuery extends AsyncIterable<SdkMessage> {
 	interrupt(): Promise<unknown>;
+	/** Each MCP server's current state (optional: older harnesses lack it). */
+	mcpServerStatus?(): Promise<readonly { name: string; status: string }[]>;
 	close(): void;
 }
 
@@ -173,6 +175,8 @@ export interface EngineTurn {
 	readonly cliPath?: string;
 	/** MCP servers for the harness to connect to itself (already vetted); absent for none. */
 	readonly mcpServers?: Record<string, unknown>;
+	/** How long after the turn starts to ask the harness how its MCP servers fared (default 8 seconds; tests shorten it). */
+	readonly mcpStatusDelayMs?: number;
 	/** A local plugin folder holding Stormcoder's skills as `SKILL.md` files, for the harness to load natively. */
 	readonly skillsPlugin?: string;
 	/** A short chat title; given to the harness so it does not spend a model call inventing one. */
@@ -202,6 +206,9 @@ export interface EngineResult extends RunResult {
 	/** The harness's own running cost estimate for this chat, USD. */
 	readonly costUsd?: number;
 }
+
+/** When to ask the harness how its MCP servers fared (ms after the turn starts). */
+const MCP_STATUS_DELAY_MS = 8_000;
 
 /** How long the harness may take to send its first message before it is judged not to have started. */
 const START_TIMEOUT_MS = 60_000;
@@ -242,10 +249,13 @@ export function buildEngineEnv(
 }
 
 /** The harness tools offered to a run. Fewer tools mean a shorter prompt on every request. */
-export function engineTools(upstream: UpstreamKind): string[] {
+export function engineTools(upstream: UpstreamKind, withMcp = false): string[] {
 	// Only names from the SDK's published built-in list: a name it does not know could fail the whole start.
 	const tools = ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'NotebookEdit', 'Bash', 'WebFetch', 'TodoWrite', 'Agent', 'ExitPlanMode', 'Skill'];
-	return upstream === 'anthropic' ? [...tools, ...ANTHROPIC_ONLY_TOOLS] : tools;
+	// With MCP servers: ToolSearch lets the model load tools the harness defers, and WaitForMcpServers lets it
+	// wait for a server that is still connecting (the harness does not block on them at start).
+	const all = withMcp ? [...tools, 'ToolSearch', 'WaitForMcpServers'] : tools;
+	return upstream === 'anthropic' ? [...all, ...ANTHROPIC_ONLY_TOOLS] : all;
 }
 
 /** The structural hook types we hand the SDK. */
@@ -323,7 +333,7 @@ export function buildQueryOptions(
 		// Stormcoder's skills, as a plugin the harness loads like any other. `skills: 'all'` states what the
 		// harness would do anyway, so a later default change cannot hide them.
 		...(turn.skillsPlugin ? { plugins: [{ type: 'local', path: turn.skillsPlugin, skipMcpDiscovery: true }], skills: 'all' } : {}),
-		tools: engineTools(upstream),
+		tools: engineTools(upstream, !!(turn.mcpServers && Object.keys(turn.mcpServers).length)),
 		disallowedTools: upstream === 'anthropic' ? [] : [...ANTHROPIC_ONLY_TOOLS],
 		includePartialMessages: true,
 		promptSuggestions: false,
@@ -611,6 +621,7 @@ export class ClaudeEngine {
 			void query?.interrupt().catch(() => undefined);
 		}, turn.maxRunMs) : undefined;
 		let neverStarted = false;
+		let statusTimer: ReturnType<typeof setTimeout> | undefined;
 		const startTimer = setTimeout(() => {
 			if (mapper.seen === 0) {
 				neverStarted = true;
@@ -627,6 +638,13 @@ export class ClaudeEngine {
 			const env = buildEngineEnv(this.deps.env ?? process.env, turn, gatewaySession && gateway ? { baseUrl: gateway.baseUrl, token: gatewaySession.token } : undefined);
 			const options = buildQueryOptions(turn, { env, abort, tracker, stderr: data => { stderr = (stderr + data).slice(-2_000); }, note: text => cb.onNote(text) });
 			query = sdk.query({ prompt: buildPrompt(turn), options });
+			if (turn.mcpServers && Object.keys(turn.mcpServers).length) {
+				// The start report usually says "pending"; look again once the servers have had time to connect.
+				const running = query;
+				statusTimer = setTimeout(() => {
+					void running.mcpServerStatus?.().then(list => cb.onMcpStatus?.(list), () => undefined);
+				}, turn.mcpStatusDelayMs ?? MCP_STATUS_DELAY_MS);
+			}
 			for await (const message of query) {
 				if (mapper.seen === 0) {
 					clearTimeout(startTimer);
@@ -657,6 +675,7 @@ export class ClaudeEngine {
 			return { reason: 'error', detail, started: mapper.seen > 0, failure: err instanceof Error ? err : new Error(detail), sessionId: mapper.sessionId, costUsd: mapper.costUsd };
 		} finally {
 			clearTimeout(startTimer);
+			if (statusTimer) { clearTimeout(statusTimer); }
 			if (timer) { clearTimeout(timer); }
 			turn.signal.removeEventListener('abort', onAbort);
 			gatewaySession?.dispose();

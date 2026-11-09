@@ -60,7 +60,7 @@ export interface BridgeContext {
 
 /** Tools that touch nothing outside the harness's own bookkeeping. */
 const HARNESS_ONLY_TOOLS = new Set([
-	'TodoWrite', 'ExitPlanMode', 'EnterPlanMode', 'ToolSearch', 'Skill',
+	'TodoWrite', 'ExitPlanMode', 'EnterPlanMode', 'ToolSearch', 'WaitForMcpServers', 'Skill',
 	'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate',
 ]);
 

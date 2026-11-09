@@ -171,7 +171,7 @@ export function safeToolName(serverId: string, toolName: string, taken: Readonly
  * Decides whether a server a *project* defined may start. Resolves true to start it.
  * See {@link McpManager}'s constructor.
  */
-export type ProjectServerConsent = (id: string, config: McpServerConfig, file: string) => Promise<boolean>;
+export type ProjectServerConsent = (id: string, config: McpServerConfig, file: string, interactive?: boolean) => Promise<boolean>;
 
 /**
  * The consent `extension.ts` wires in: a modal naming exactly what would run, remembered per
@@ -179,11 +179,14 @@ export type ProjectServerConsent = (id: string, config: McpServerConfig, file: s
  * (a different command, a different URL) asks again instead of inheriting the old answer.
  */
 export function promptingConsent(memento: vscode.Memento): ProjectServerConsent {
-	return async (id, config, file) => {
+	return async (id, config, file, interactive = true) => {
 		const key = consentKey(id, config);
 		const remembered = memento.get<boolean>(key);
 		if (remembered !== undefined) {
 			return remembered;
+		}
+		if (!interactive) {
+			return false; // listing servers must never raise a dialog; the question comes when a chat needs them
 		}
 		const what = config.url
 			? `connect to ${config.url}`
@@ -420,7 +423,18 @@ export class McpManager implements McpToolset, vscode.Disposable {
 	 * starts — trust, shape, and the user's consent for a project's own — but not started: the
 	 * harness connects to them itself, so a server runs in one place only. Never throws.
 	 */
-	async resolveForEngine(): Promise<{ servers: EngineMcpServer[]; status: string[] }> {
+	resolveForEngine(options: { interactive?: boolean } = {}): Promise<{ servers: EngineMcpServer[]; status: string[] }> {
+		// One question at a time: a second caller (the Settings list, say) joins the one in flight instead of
+		// stacking a second dialog for the same server.
+		if (options.interactive === false) {
+			return this.resolveServersForEngine(false);
+		}
+		return this.resolvingForEngine ??= this.resolveServersForEngine(true).finally(() => { this.resolvingForEngine = undefined; });
+	}
+
+	private resolvingForEngine?: Promise<{ servers: EngineMcpServer[]; status: string[] }>;
+
+	private async resolveServersForEngine(interactive: boolean): Promise<{ servers: EngineMcpServer[]; status: string[] }> {
 		const servers: EngineMcpServer[] = [];
 		const status: string[] = [];
 		let loaded: Awaited<ReturnType<McpManager['loadConfig']>>;
@@ -441,8 +455,8 @@ export class McpManager implements McpToolset, vscode.Disposable {
 				}
 				const cfg = screened.cfg;
 				const projectFile = loaded.fromProject.get(id);
-				if (projectFile && !await this.projectConsent(id, cfg, projectFile)) {
-					status.push(`${id}: not started (defined by ${projectFile}; not allowed).`);
+				if (projectFile && !await this.projectConsent(id, cfg, projectFile, interactive)) {
+					status.push(interactive ? `${id}: not started (defined by ${projectFile}; not allowed).` : `${id}: waiting for your approval (defined by ${projectFile}); you are asked when an Agent chat needs it.`);
 					continue;
 				}
 				const expand = (value: unknown): string => projectFile ? String(value) : expandEnv(String(value));
