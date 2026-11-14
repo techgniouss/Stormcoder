@@ -1932,3 +1932,17 @@ details[open] > .tool-summary::before,
 #memoryNewText { flex: 1 1 auto; min-width: 0; }
 .hint.mem-error { color: var(--vscode-errorForeground); }
 .remote-pairing-link .mini-button { white-space: nowrap; flex: 0 0 auto; }
+
+/* ---- Stashed draft ----
+   A parked composer draft (main.js toggleStash); a quiet chip beside the attachment chips. */
+.stash-chip {
+	align-self: flex-start;
+	margin: 0 0 4px; padding: 2px 8px;
+	font: inherit; font-size: 0.8em;
+	color: var(--vscode-descriptionForeground);
+	background: transparent;
+	border: 1px dashed var(--vscode-panel-border);
+	border-radius: 10px;
+	cursor: pointer;
+}
+.stash-chip:hover { color: var(--vscode-foreground); }

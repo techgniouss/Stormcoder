@@ -250,10 +250,21 @@
 	 * would let a stale local cache race the host's authoritative one, exactly what this phase
 	 * exists to stop.
 	 */
+	/**
+	 * A pasted text longer than this becomes an attachment chip instead of filling the box:
+	 * a log or a whole file in the composer cannot be read or edited there anyway.
+	 */
+	const LARGE_PASTE_CHARS = 32768;
+	/** Parked drafts, one per chat, by session id (see `toggleStash`). Kept across restarts. */
+	const MAX_STASHES = 50;
+	/** @type {Record<string, string>} */
+	const stashes = Object.create(null);
+
 	function saveState() {
 		vscode.setState({
 			uiStateVersion: UI_STATE_VERSION,
 			selectedProvider,
+			stashes,
 		});
 	}
 
@@ -272,6 +283,11 @@
 	const persisted = vscode.getState();
 	if (persisted) {
 		selectedProvider = persisted.selectedProvider || '';
+		if (persisted.stashes && typeof persisted.stashes === 'object') {
+			for (const [id, text] of Object.entries(persisted.stashes).slice(-MAX_STASHES)) {
+				if (typeof text === 'string' && text) { stashes[id] = text; }
+			}
+		}
 		if (!persisted.uiStateVersion &&
 			(Array.isArray(persisted.sessions) || Array.isArray(persisted.messages) || Array.isArray(persisted.history))) {
 			vscode.postMessage({ type: 'adopt', state: persisted });
@@ -436,6 +452,7 @@
 	function renderAll() {
 		const s = cur();
 		// The whole transcript is about to be rebuilt, `pending` included.
+		renderStashChip();
 		cancelStreamRender();
 		els.messages.innerHTML = '';
 		activeAssistantBody = null;
@@ -2237,6 +2254,63 @@
 		});
 	}
 
+	/**
+	 * Turns a very large paste into the composer's attachment chip. Returns false, leaving
+	 * the paste to land in the box as usual, when the text is short or something is already
+	 * attached (there is one attachment slot and a paste must not silently replace it).
+	 * @param {string} text
+	 */
+	function takeLargePaste(text) {
+		if (text.length <= LARGE_PASTE_CHARS || currentContext) { return false; }
+		const lines = text.split('\n').length;
+		currentContext = { label: `Pasted text, ${lines} line${lines === 1 ? '' : 's'}`, content: `Pasted text:\n\n${text}` };
+		renderContext();
+		return true;
+	}
+
+	/**
+	 * Ctrl/Cmd+Shift+S: parks the draft in the box so something else can be sent first, and
+	 * brings it back when pressed again. With a draft in the box and one parked, the two swap,
+	 * so neither is lost.
+	 */
+	function toggleStash() {
+		const s = cur();
+		if (!s) { return; }
+		const draft = els.input.value;
+		const parked = stashes[s.id] || '';
+		if (!draft.trim() && !parked) { return; }
+		if (draft.trim()) {
+			delete stashes[s.id];
+			const ids = Object.keys(stashes);
+			if (ids.length >= MAX_STASHES) { delete stashes[ids[0]]; }
+			stashes[s.id] = draft;
+		} else {
+			delete stashes[s.id];
+		}
+		els.input.value = parked;
+		autoSize();
+		saveState();
+		renderStashChip();
+	}
+
+	/** Shows that this chat has a parked draft, with a click to bring it back. */
+	function renderStashChip() {
+		const s = cur();
+		const parked = s ? stashes[s.id] : '';
+		let chip = document.getElementById('stashChip');
+		if (!parked) { chip?.remove(); return; }
+		if (!chip) {
+			chip = document.createElement('button');
+			chip.id = 'stashChip';
+			chip.className = 'stash-chip';
+			/** @type {HTMLButtonElement} */ (chip).type = 'button';
+			chip.addEventListener('click', toggleStash);
+			els.contextChip.parentElement?.insertBefore(chip, els.contextChip);
+		}
+		chip.textContent = 'Stashed draft';
+		chip.title = 'Bring the stashed draft back (Ctrl+Shift+S)';
+	}
+
 	function renderSkillChip() {
 		const active = skillsList.filter(s => activeSkills.includes(s.id));
 		if (!active.length) { els.skillChip.classList.add('hidden'); els.skillChip.innerHTML = ''; return; }
@@ -3174,7 +3248,10 @@
 	els.input.addEventListener('paste', (e) => {
 		const items = e.clipboardData ? [...e.clipboardData.items] : [];
 		const imageItems = items.filter(it => it.type.startsWith('image/'));
-		if (!imageItems.length) { return; }
+		if (!imageItems.length) {
+			if (takeLargePaste(e.clipboardData ? e.clipboardData.getData('text/plain') : '')) { e.preventDefault(); }
+			return;
+		}
 		e.preventDefault();
 		addImageFiles(/** @type {File[]} */ (imageItems.map(item => item.getAsFile()).filter(Boolean)));
 	});
@@ -3188,6 +3265,11 @@
 		// keystroke belongs to the IME, and treating it as "send" sent a half-typed message.
 		// keyCode 229 is how some Chromium builds report the same keystroke instead.
 		if (e.isComposing || e.keyCode === 229) { return; }
+		if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 's') {
+			e.preventDefault();
+			toggleStash();
+			return;
+		}
 		if (slashMenuOpen()) {
 			if (e.key === 'ArrowDown') { e.preventDefault(); moveSlashSelection(1); return; }
 			if (e.key === 'ArrowUp') { e.preventDefault(); moveSlashSelection(-1); return; }
@@ -3263,12 +3345,12 @@
 			} else {
 				text = await navigator.clipboard.readText();
 			}
-			if (text) { insertText(el, text); }
+			if (text && !(el === els.input && takeLargePaste(text))) { insertText(el, text); }
 		} catch {
 			// Rich read can be refused where plain text is still allowed — retry.
 			try {
 				const text = await navigator.clipboard.readText();
-				if (text) { insertText(el, text); }
+				if (text && !(el === els.input && takeLargePaste(text))) { insertText(el, text); }
 			} catch (err) {
 				showNotice('Could not read the clipboard: ' + (err instanceof Error ? err.message : String(err)), true);
 			}

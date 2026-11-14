@@ -267,7 +267,23 @@
 
 	const CTX = {
 		copy: COPY_ICON, plus: 'M8 3v10M3 8h10', close: 'M4 4l8 8M12 4l-8 8', all: 'M3 3h10v10H3zM5.5 6h5M5.5 8h5M5.5 10h3',
+		quote: 'M3.5 3.5v9M6.5 5h6M6.5 8h6M6.5 11h4',
 	};
+
+	/**
+	 * Puts `text` into the composer as a Markdown quote at the caret, ready to reply under.
+	 * @param {string} text
+	 */
+	function quoteInComposer(text) {
+		const input = /** @type {HTMLTextAreaElement | null} */ (document.getElementById('input'));
+		if (!input) { return; }
+		const quoted = text.split(/\r?\n/).map(line => (line ? '> ' + line : '>')).join('\n') + '\n\n';
+		const at = input.selectionStart ?? input.value.length;
+		const lead = at > 0 && input.value[at - 1] !== '\n' ? '\n' : '';
+		input.setRangeText(lead + quoted, at, input.selectionEnd ?? at, 'end');
+		input.dispatchEvent(new Event('input', { bubbles: true }));
+		input.focus();
+	}
 
 	/**
 	 * Right-click menus for what the browser has no sensible menu for: messages, code blocks and
@@ -288,6 +304,9 @@
 			items.push({ label: 'Close chat', icon: CTX.close, onSelect: () => { const x = tab.querySelector('.tab-close'); if (x) { /** @type {HTMLElement} */ (x).click(); } } });
 		} else {
 			if (selection) { items.push({ label: 'Copy selection', icon: CTX.copy, shortcut: ['Ctrl', 'C'], onSelect: () => { void copyText(selection); } }); }
+			if (selection && msg && msg.classList.contains('assistant')) {
+				items.push({ label: 'Quote in reply', icon: CTX.quote, onSelect: () => quoteInComposer(selection) });
+			}
 			if (pre) {
 				const code = pre.querySelector('code');
 				items.push({ label: 'Copy code', icon: CTX.copy, onSelect: () => { void copyText(code ? code.textContent || '' : ''); } });

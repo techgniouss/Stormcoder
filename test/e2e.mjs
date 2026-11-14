@@ -51,6 +51,35 @@ try {
 	await chat.locator('#input').press('Enter');
 	await chat.getByText('Hello from the mock model.').waitFor({ timeout: 15000 });
 
+	// 1b. Composer extras. A very large paste becomes an attachment chip instead of filling the
+	// box; a small one lands in the box as usual.
+	const paste = (text) => chat.locator('#input').evaluate((el, t) => {
+		const data = new DataTransfer();
+		data.setData('text/plain', t);
+		return !el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+	}, text);
+	assert.equal(await paste('short text'), false, 'a small paste is left to the box');
+	assert.equal(await paste('line\n'.repeat(8000)), true, 'a large paste is taken over');
+	assert.equal((await chat.locator('#contextChip .chip-text').innerText()).trim(), 'Pasted text, 8001 lines');
+	assert.equal(await chat.locator('#input').inputValue(), '', 'and none of it reaches the box');
+	assert.equal(await paste('line\n'.repeat(8000)), false, 'a second large paste does not replace the attachment');
+	await chat.locator('#removeCtx').click();
+	// Ctrl+Shift+S parks the draft and brings it back; with both present they swap.
+	await chat.locator('#input').fill('first draft');
+	await chat.locator('#input').press('Control+Shift+S');
+	assert.equal(await chat.locator('#input').inputValue(), '');
+	await chat.locator('#stashChip').waitFor();
+	await chat.locator('#input').fill('second draft');
+	await chat.locator('#input').press('Control+Shift+S');
+	assert.equal(await chat.locator('#input').inputValue(), 'first draft');
+	await chat.locator('#stashChip').click();
+	assert.equal(await chat.locator('#input').inputValue(), 'second draft');
+	await chat.locator('#input').fill('');
+	await chat.locator('#input').press('Control+Shift+S');
+	assert.equal(await chat.locator('#input').inputValue(), 'first draft');
+	assert.equal(await chat.locator('#stashChip').count(), 0, 'nothing is left parked');
+	await chat.locator('#input').fill('');
+
 	// 2. An Agent turn runs the tool loop and writes into the project folder.
 	await chat.locator('.seg-btn[data-value=agent]').click();
 	await chat.locator('#input').fill('create hello.txt');

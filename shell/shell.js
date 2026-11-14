@@ -488,7 +488,7 @@
 		const m = MOD();
 		return [
 			['Go to', [['Chat', [m, '1']], ['History', [m, '2']], ['Skills', [m, '3']], ['MCP servers', [m, '4']], ['Changes', [m, '5']], ['Settings', [m, ',']], ['Command palette', [m, 'K']]]],
-			['Chat', [['Send', ['Enter']], ['New line', ['Shift', 'Enter']], ['Slash commands', ['/']], ['New chat', [m, 'N']], ['Open project', [m, 'O']]]],
+			['Chat', [['Send', ['Enter']], ['New line', ['Shift', 'Enter']], ['Stash or restore draft', [m, 'Shift', 'S']], ['Slash commands', ['/']], ['New chat', [m, 'N']], ['Open project', [m, 'O']]]],
 			['Menus', [['Move', ['↑', '↓']], ['Choose', ['Enter']], ['Close', ['Esc']], ['Search a list', ['type']]]],
 		];
 	}
