@@ -1040,6 +1040,14 @@ details[open] > .tool-summary { margin-bottom: 4px; }
 	border-left: 2px solid var(--vscode-panel-border, rgba(127,127,127,0.3));
 }
 .tool-children:empty { display: none; }
+/* A run of finished tool cards folded into one line (main.js foldToolCards). Closed by
+   default; the summary reuses .tool-summary so the caret and hover match a single card's. */
+.tool-group {
+	margin: 2px 0; padding: 4px 8px;
+	border-left: 3px solid var(--vscode-panel-border);
+	border-radius: 0 4px 4px 0;
+}
+.tool-group-body { margin-top: 2px; }
 .tool-children .tool { font-size: 0.95em; }
 
 /* ---- Reasoning ----

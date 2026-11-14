@@ -128,6 +128,12 @@ declare const StormPairing: {
 	};
 };
 
+declare const StormToolGroups: {
+	MIN_GROUP: number;
+	category(name: string): 'command' | 'edit' | 'read' | 'search' | 'other';
+	summarize(names: readonly string[]): string;
+};
+
 declare const StormGlyphs: {
 	asgard: string[];
 	storm: string[];

@@ -82,6 +82,12 @@
 	const toolEls = new Map();
 	let toolSeq = 0;
 	/**
+	 * `stormcoder.chat.toolCalls`: fold runs of finished cards into one group, show every
+	 * card, or drop a card once it ends without error.
+	 * @type {'grouped' | 'all' | 'hideSuccessful'}
+	 */
+	let toolCallsMode = 'grouped';
+	/**
 	 * Separator for composite map keys. A NUL can't occur in a session or call id, so it
 	 * can't collide — spelled as an escape rather than a literal so this file stays plain
 	 * text and greppable (a raw NUL makes grep treat main.js as binary).
@@ -603,6 +609,7 @@
 	function appendToolEl(name, args, container) {
 		const wrap = document.createElement('div');
 		wrap.className = 'tool running';
+		wrap.dataset.tool = String(name);
 		const head = document.createElement('div');
 		head.className = 'tool-head';
 		head.innerHTML = icon(toolIcon(name), 13);
@@ -647,6 +654,88 @@
 		}
 		return parent.children;
 	}
+	/**
+	 * Whether a finished card may be folded into a group or hidden. A running card is the
+	 * thing the user is waiting on and a failed one is the thing they need to see, so neither
+	 * ever is, and nor is a delegate's card while anything nested in it is running or failed.
+	 * @param {Element} el
+	 */
+	function isFoldableTool(el) {
+		return el.classList.contains('tool')
+			&& !el.classList.contains('running')
+			&& !el.classList.contains('tool-error')
+			&& !el.querySelector('.tool.running, .tool.tool-error');
+	}
+
+	/**
+	 * Applies `stormcoder.chat.toolCalls` to a card that just finished: `hideSuccessful`
+	 * removes it when nothing in it failed, `grouped` folds it with its neighbours.
+	 * @param {HTMLElement} wrap
+	 */
+	function settleToolCard(wrap) {
+		if (toolCallsMode === 'hideSuccessful') {
+			if (isFoldableTool(wrap)) { wrap.remove(); }
+			return;
+		}
+		foldToolCards();
+	}
+
+	/**
+	 * Folds each run of consecutive finished, successful top-level tool cards into one
+	 * collapsed group with a one-line summary ("Read 4 files, ran 2 commands"), once the run
+	 * has `StormToolGroups.MIN_GROUP` cards. A group already on screen takes in the cards that
+	 * finish next to it and keeps its open or closed state. Anything else in the transcript
+	 * (a message, a running or failed card, an approval) ends a run.
+	 */
+	function foldToolCards() {
+		if (toolCallsMode !== 'grouped' || typeof StormToolGroups === 'undefined') { return; }
+		/** @type {HTMLElement[]} */
+		let run = [];
+		const flush = () => {
+			const members = run;
+			run = [];
+			/** @type {HTMLElement[]} */
+			const cards = [];
+			for (const el of members) {
+				if (el.classList.contains('tool-group')) {
+					const inner = el.querySelector(':scope > .tool-group-body');
+					cards.push(.../** @type {HTMLElement[]} */ (Array.from(inner ? inner.children : [])));
+				} else {
+					cards.push(el);
+				}
+			}
+			const loose = members.some(el => !el.classList.contains('tool-group'));
+			if (!loose || cards.length < StormToolGroups.MIN_GROUP) { return; }
+			const existing = members.find(el => el.classList.contains('tool-group'));
+			const group = existing || document.createElement('details');
+			if (!existing) {
+				group.className = 'tool-group';
+				const head = document.createElement('summary');
+				head.className = 'tool-summary tool-group-summary';
+				const inner = document.createElement('div');
+				inner.className = 'tool-group-body';
+				group.appendChild(head);
+				group.appendChild(inner);
+			}
+			els.messages.insertBefore(group, members[0]);
+			const body = /** @type {HTMLElement} */ (group.querySelector(':scope > .tool-group-body'));
+			for (const card of cards) { body.appendChild(card); }
+			for (const el of members) {
+				if (el !== group && el.classList.contains('tool-group')) { el.remove(); }
+			}
+			const summary = /** @type {HTMLElement} */ (group.querySelector(':scope > .tool-group-summary'));
+			summary.textContent = StormToolGroups.summarize(cards.map(c => c.dataset.tool || ''));
+		};
+		for (const el of /** @type {HTMLElement[]} */ (Array.from(els.messages.children))) {
+			if (el.classList.contains('tool-group') || isFoldableTool(el)) {
+				run.push(el);
+			} else {
+				flush();
+			}
+		}
+		flush();
+	}
+
 	function summarizeArgs(args) {
 		try {
 			const s = JSON.stringify(args);
@@ -3286,6 +3375,7 @@
 						notice: typeof e.notice === 'string' ? e.notice : '',
 					};
 				}
+				if (msg.toolCalls === 'grouped' || msg.toolCalls === 'all' || msg.toolCalls === 'hideSuccessful') { toolCallsMode = msg.toolCalls; }
 				if (typeof msg.systemPrompt === 'string') { generalConfig.systemPrompt = msg.systemPrompt; }
 				if (typeof msg.maxTokens === 'number') { generalConfig.maxTokens = msg.maxTokens; }
 				if (typeof msg.rules === 'string') { generalConfig.rules = msg.rules; }
@@ -3478,6 +3568,7 @@
 					// Failures stay open: an error the user has to click to discover is a bug report waiting to happen.
 					t.details.open = !!msg.isError;
 					toolEls.delete(key);
+					settleToolCard(t.wrap);
 					scrollToBottom();
 				}
 				break;
@@ -3637,6 +3728,7 @@
 					if (t.summary.textContent === 'running…') { t.summary.textContent = 'stopped'; }
 					toolEls.delete(key);
 				}
+				if (s.id === activeSessionId) { foldToolCards(); }
 				commitPending(s);
 				renderTabs();
 				if (s.id === activeSessionId) { updateComposer(); }

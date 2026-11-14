@@ -1026,6 +1026,21 @@
             ]
           }
         },
+        "stormcoder.chat.toolCalls": {
+          "type": "string",
+          "default": "grouped",
+          "enum": [
+            "grouped",
+            "all",
+            "hideSuccessful"
+          ],
+          "enumDescriptions": [
+            "%config.chat.toolCalls.grouped%",
+            "%config.chat.toolCalls.all%",
+            "%config.chat.toolCalls.hideSuccessful%"
+          ],
+          "markdownDescription": "%config.chat.toolCalls%"
+        },
         "stormcoder.notifications": {
           "type": "string",
           "default": "attention",

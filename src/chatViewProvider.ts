@@ -4773,6 +4773,7 @@ ${context.content}` }
 			maxRunMinutes: cfg.get<number>('agent.maxRunMinutes') ?? 30,
 			memoryEnabled: cfg.get<boolean>('memory.enabled') !== false,
 			memoryRecentRuns: cfg.get<number>('memory.recentRuns') ?? 5,
+			toolCalls: cfg.get<string>('chat.toolCalls') ?? 'grouped',
 			// Shown on a paired phone ("Connected · project"): which desktop and folder it is driving.
 			workspaceName: (vscode.workspace.workspaceFolders?.[0]?.name ?? '').slice(0, 60),
 		});
@@ -4996,6 +4997,7 @@ ${CHAT_APP_HTML}
 	<script nonce="${nonce}" src="${mediaUri('prompts.js')}"></script>
 	<script nonce="${nonce}" src="${mediaUri('highlight.js')}"></script>
 	<script nonce="${nonce}" src="${mediaUri('glyphs.js')}"></script>
+	<script nonce="${nonce}" src="${mediaUri('toolGroups.js')}"></script>
 	<script nonce="${nonce}" src="${mediaUri('markdown.js')}"></script>
 	<script nonce="${nonce}" src="${mediaUri('main.js')}"></script>
 </body>
