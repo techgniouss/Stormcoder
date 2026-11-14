@@ -344,4 +344,48 @@ function fakeImage(bytes) {
 	assert.deepStrictEqual([after.deleteHistory(tab.id), after.deleteHistory(tab.id), after.getHistory()], [true, false, []]);
 }
 
+// Editing an earlier prompt: the transcript is cut back to just before that prompt, and only
+// when doing so cannot corrupt the session.
+{
+	const store = new SessionStore(makeDeps());
+	const id = store.getActiveId();
+	const say = (role, content, extra) => store.appendMessage(id, { role, content, ...extra });
+	say('user', 'one'); say('assistant', 'reply one');
+	say('user', 'two'); say('assistant', 'reply two'); say('assistant', 'a notice', { kind: 'info' });
+	say('user', 'three'); say('assistant', 'reply three');
+	store.setTodos(id, [{ content: 'x', status: 'pending' }]);
+
+	assert.strictEqual(store.truncateForEdit('nope', 0), 'missing');
+	for (const bad of [-1, 7, 1.5, NaN, '2', undefined]) {
+		assert.strictEqual(store.truncateForEdit(id, bad), 'not-a-prompt', `index ${String(bad)}`);
+	}
+	assert.strictEqual(store.truncateForEdit(id, 1), 'not-a-prompt', 'an assistant turn');
+	assert.strictEqual(store.truncateForEdit(id, 4), 'not-a-prompt', 'a notice');
+	assert.strictEqual(store.getSession(id).messages.length, 7, 'a refusal changes nothing');
+
+	// A running chat is never cut.
+	store.getSession(id).streaming = true;
+	assert.strictEqual(store.truncateForEdit(id, 5), 'busy');
+	store.getSession(id).streaming = false;
+
+	assert.strictEqual(store.truncateForEdit(id, 5), 'ok');
+	assert.deepStrictEqual(store.getSession(id).messages.map(m => m.content), ['one', 'reply one', 'two', 'reply two', 'a notice']);
+	assert.deepStrictEqual(store.getSession(id).todos, [], 'the cut run\'s checklist goes with it');
+
+	// Turns already folded into a compaction summary cannot be edited: the summary still
+	// describes them. Two real turns are compacted here, so index 0 is behind the line and
+	// index 2 (the third real turn) is not.
+	store.applyCompaction(id, 'summary of one', 1);
+	assert.strictEqual(store.getSession(id).compactedUpTo, 2);
+	assert.strictEqual(store.truncateForEdit(id, 0), 'compacted');
+	assert.strictEqual(store.truncateForEdit(id, 2), 'ok');
+	assert.deepStrictEqual(store.getSession(id).messages.map(m => m.content), ['one', 'reply one']);
+
+	// A turn another chat's agent delivered, or an editor action wrote, is not the user's to edit.
+	say('user', 'from an agent', { fromAgentSession: { id: 'x', title: 'X' } });
+	say('user', 'from the editor', { fromEditor: true });
+	assert.strictEqual(store.truncateForEdit(id, 2), 'not-a-prompt');
+	assert.strictEqual(store.truncateForEdit(id, 3), 'not-a-prompt');
+}
+
 console.log('test-session-store: all assertions passed');

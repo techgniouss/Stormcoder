@@ -289,6 +289,11 @@ interface WebviewToHost {
 	historyId?: string;
 	/** The replacement queue for `setQueue` — a wholesale set, not an incremental push. */
 	queue?: string[];
+	/**
+	 * `send` only, desktop only: the transcript index of an earlier user prompt this turn
+	 * replaces ("Edit and resend"). The chat is cut back to just before it first.
+	 */
+	editIndex?: number;
 	/** `createSession` only: `false` opens the chat without making it the host's active one (a phone opening its own chat). */
 	activate?: boolean;
 	/** `setRemoteEnabled` only: the Settings switch's new position. */
@@ -1635,7 +1640,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				}
 				break;
 			case 'send':
-				await this.handleSend(message, origin);
+				if (message.editIndex !== undefined) {
+					await this.handleEditPrompt(message, origin);
+				} else {
+					await this.handleSend(message, origin);
+				}
 				break;
 			case 'promptResponse':
 				this.resolvePrompt(message, origin);
@@ -3275,6 +3284,42 @@ ${context.content}` }
 			this.sessionOutput.appendLine(`[engine] skills not loaded: ${err instanceof Error ? err.message : String(err)}`);
 		}
 		return out;
+	}
+
+	/**
+	 * "Edit and resend" on an earlier prompt: cuts the chat back to just before that prompt
+	 * (`SessionStore.truncateForEdit` decides whether that is safe) and then sends the new
+	 * wording as an ordinary turn. It arrives as a `send` carrying `editIndex`. A refusal
+	 * ends the run the webview already started and pushes the transcript back, so the view
+	 * returns to what the session really holds. Files are never rolled back here.
+	 *
+	 * Desktop only: `send` is open to a paired phone, rewriting a chat's history is not.
+	 */
+	private async handleEditPrompt(message: WebviewToHost, origin: string): Promise<void> {
+		const sessionId = message.sessionId;
+		if (!sessionId) {
+			return;
+		}
+		// With the Claude Code engine the conversation lives in the harness's own session,
+		// which cannot be cut back to an earlier turn.
+		const outcome = origin !== WEBVIEW_SINK_ID ? 'remote'
+			: this.engineActive ? 'engine'
+				: this.sessionStore.truncateForEdit(sessionId, message.editIndex as number);
+		if (outcome !== 'ok') {
+			const why: Record<string, string> = {
+				engine: 'Editing an earlier message is not available with the Claude Code engine.',
+				busy: 'Wait for the run to finish before editing an earlier message.',
+				compacted: 'That message is part of the summarised history and can no longer be edited.',
+			};
+			const post = this.sessionPost(sessionId, message.runId);
+			post({ type: 'error', message: why[outcome] ?? 'That message cannot be edited.' });
+			post({ type: 'done' });
+			this.postTranscript(sessionId);
+			return;
+		}
+		this.persistSessionState();
+		this.postSessions();
+		await this.handleSend({ ...message, editIndex: undefined }, origin);
 	}
 
 	/** Whether the Claude Code engine, not the built-in agent, runs chats in this app session. */

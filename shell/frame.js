@@ -268,6 +268,7 @@
 	const CTX = {
 		copy: COPY_ICON, plus: 'M8 3v10M3 8h10', close: 'M4 4l8 8M12 4l-8 8', all: 'M3 3h10v10H3zM5.5 6h5M5.5 8h5M5.5 10h3',
 		quote: 'M3.5 3.5v9M6.5 5h6M6.5 8h6M6.5 11h4',
+		edit: 'M3 13l1-3.5 7-7 2.5 2.5-7 7zM9.5 4l2.5 2.5',
 	};
 
 	/**
@@ -314,6 +315,15 @@
 			if (msg) {
 				const body = msg.querySelector('.body');
 				items.push({ label: 'Copy message', icon: CTX.copy, onSelect: () => { if (body) { void copyText(/** @type {HTMLElement} */ (body).innerText.trim()); } } });
+			}
+			const index = msg instanceof HTMLElement && msg.classList.contains('user') ? Number(msg.dataset.index) : NaN;
+			if (Number.isInteger(index)) {
+				// The chat decides whether this prompt can still be edited (media/main.js canEditPrompt).
+				const query = { query: true, index, allowed: false };
+				window.dispatchEvent(new CustomEvent('stormcoder-edit-prompt', { detail: query }));
+				if (query.allowed) {
+					items.push({ label: 'Edit and resend', icon: CTX.edit, onSelect: () => window.dispatchEvent(new CustomEvent('stormcoder-edit-prompt', { detail: { index } })) });
+				}
 			}
 			if (msg || pre) {
 				items.push({ type: 'sep' });

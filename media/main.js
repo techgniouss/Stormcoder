@@ -33,7 +33,7 @@
 
 	/**
 	 * @typedef {{ role: string, label?: string, provider?: string, model?: string, source?: string }} AutoPhase
-	 * @typedef {{ role: 'user'|'assistant', content: string, images?: {mimeType:string,data:string}[], kind?: 'info'|'error'|'auto', phases?: AutoPhase[], fromAgentSession?: {id:string,title:string} }} Msg
+	 * @typedef {{ role: 'user'|'assistant', content: string, images?: {mimeType:string,data:string}[], kind?: 'info'|'error'|'auto', phases?: AutoPhase[], fromAgentSession?: {id:string,title:string}, fromEditor?: boolean }} Msg
 	 * @typedef {{ content: string, status: 'pending'|'in_progress'|'completed' }} Todo
 	 * @typedef {{ id: string, title: string, messages: Msg[], streaming: boolean, pending: string|null, queue: string[], todos?: Todo[], runId?: string, runMode?: string, steerable?: boolean, compactSummary?: string, compactedUpTo?: number, mode?: string, undo?: { runId: string, files: string[] } }} Session
 	 */
@@ -452,8 +452,10 @@
 	function renderAll() {
 		const s = cur();
 		// The whole transcript is about to be rebuilt, `pending` included.
-		renderStashChip();
 		cancelStreamRender();
+		renderStashChip();
+		if (pendingEdit && (!s || pendingEdit.sessionId !== s.id)) { pendingEdit = null; }
+		renderEditChip();
 		els.messages.innerHTML = '';
 		activeAssistantBody = null;
 		toolEls.clear();
@@ -535,6 +537,8 @@
 			}
 			const body = appendMessageEl(m.role, m.content, m.images);
 			if (m.kind) { body.parentElement?.classList.add(m.kind === 'auto' ? 'info' : m.kind); }
+			// Which transcript entry this bubble is, for "Edit and resend" (see beginPromptEdit).
+			if (body.parentElement) { body.parentElement.dataset.index = String(s.messages.indexOf(m)); }
 			// A message delivered by another chat tab's agent (send_agent_message) — carries
 			// no `kind` (it's a real, sendable turn, unlike an 'info'/'error' notice), so it
 			// is marked distinctly here instead, mirroring the `.steering` class below.
@@ -2817,6 +2821,13 @@
 		// clear it out from under them.
 		const isActiveSend = s.id === activeSessionId;
 		const images = (isActiveSend && pendingImages.length) ? pendingImages.slice() : undefined;
+		// "Edit and resend": the chat is cut back to just before the prompt being replaced.
+		// The host does the same to its own copy before it appends this turn (`editIndex`).
+		const editIndex = opts && typeof opts.editIndex === 'number' ? opts.editIndex : undefined;
+		if (editIndex !== undefined) {
+			s.messages.length = editIndex;
+			if (isActiveSend) { renderAll(); }
+		}
 		s.messages.push({ role: 'user', content: text, images });
 		if (!s.title && text) {
 			s.title = text.length > 28 ? text.slice(0, 27) + '…' : text;
@@ -2859,6 +2870,7 @@
 		// `done`, and the host accepts only the first drain per finished run (see handleSend).
 		vscode.postMessage({
 			type: 'send',
+			editIndex,
 			sessionId: s.id,
 			runId: s.runId,
 			mode: sendMode,
@@ -2883,6 +2895,13 @@
 		if (s.streaming) {
 			// Mid-run input: steer a live agent run, queue for anything else.
 			if (!text) { return; }
+			if (pendingEdit) {
+				// A run started (a queued follow-up, another client) while an earlier prompt
+				// was being rewritten. Steering with that text would not be what was meant.
+				endPromptEdit();
+				showNotice('Editing was cancelled because a run is in progress. Your text is still in the box.', true);
+				return;
+			}
 			if (s.runMode === 'agent' && s.steerable !== false) {
 				steer(s, text);
 			} else {
@@ -2898,8 +2917,81 @@
 			return;
 		}
 		els.input.value = ''; autoSize();
-		sendText(text);
+		const editing = pendingEdit && pendingEdit.sessionId === s.id ? pendingEdit.index : undefined;
+		endPromptEdit();
+		sendText(text, editing !== undefined ? { editIndex: editing } : undefined);
 	}
+
+	/**
+	 * The earlier prompt the composer is rewriting, if any: sending replaces that prompt and
+	 * everything after it. Cleared by sending, by Escape, or by leaving the chat.
+	 * @type {{ sessionId: string, index: number } | null}
+	 */
+	let pendingEdit = null;
+
+	/**
+	 * Whether the prompt at `index` of the visible chat may be edited and resent: a prompt
+	 * the user typed, in an idle chat, not yet folded into the compaction summary, and not
+	 * under the Claude Code engine (whose conversation lives in the harness). The host
+	 * checks the same things again (`SessionStore.truncateForEdit`).
+	 * @param {number} index
+	 */
+	function canEditPrompt(index) {
+		const s = cur();
+		const m = s && s.messages[index];
+		if (!s || !m || s.streaming || m.role !== 'user' || m.kind || m.fromAgentSession || m.fromEditor) { return false; }
+		if (engineConfig.running === 'claude-code') { return false; }
+		const realBefore = s.messages.slice(0, index).filter(x => !x.kind && !(x.role === 'assistant' && x.content === '')).length;
+		return realBefore >= (s.compactedUpTo || 0);
+	}
+
+	/**
+	 * Loads an earlier prompt into the composer for rewriting. Nothing changes until it is
+	 * sent: Escape, or switching chats, leaves the conversation as it was.
+	 * @param {number} index
+	 */
+	function beginPromptEdit(index) {
+		const s = cur();
+		if (!s || !canEditPrompt(index)) { return; }
+		pendingEdit = { sessionId: s.id, index };
+		els.input.value = s.messages[index].content;
+		autoSize();
+		els.input.focus();
+		renderEditChip();
+	}
+
+	/** Leaves edit mode without sending; the text stays in the box. */
+	function endPromptEdit() {
+		if (!pendingEdit) { return; }
+		pendingEdit = null;
+		renderEditChip();
+	}
+
+	/** Says, above the composer, that sending will replace an earlier message. */
+	function renderEditChip() {
+		const s = cur();
+		const on = !!(pendingEdit && s && pendingEdit.sessionId === s.id);
+		let chip = document.getElementById('editChip');
+		if (!on) { chip?.remove(); return; }
+		if (!chip) {
+			chip = document.createElement('button');
+			chip.id = 'editChip';
+			chip.className = 'stash-chip edit-chip';
+			/** @type {HTMLButtonElement} */ (chip).type = 'button';
+			chip.addEventListener('click', endPromptEdit);
+			els.contextChip.parentElement?.insertBefore(chip, els.contextChip);
+		}
+		chip.textContent = 'Editing an earlier message: sending replaces it and everything after. Click to cancel.';
+		chip.title = 'Cancel editing (Esc)';
+	}
+
+	// The desktop shell's message menu asks for these (shell/frame.js); a plain event keeps
+	// this file free of any dependency on the shell.
+	window.addEventListener('stormcoder-edit-prompt', e => {
+		const detail = /** @type {CustomEvent} */ (e).detail || {};
+		if (detail.query) { detail.allowed = canEditPrompt(Number(detail.index)); return; }
+		beginPromptEdit(Number(detail.index));
+	});
 
 	/** Filtered matches currently shown in the slash menu, and which one is highlighted. */
 	let slashMatches = [];
@@ -3291,6 +3383,7 @@
 			}
 			if (e.key === 'Escape') { e.preventDefault(); hideSlashMenu(); return; }
 		}
+		if (e.key === 'Escape' && pendingEdit) { e.preventDefault(); endPromptEdit(); return; }
 		if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 	});
 

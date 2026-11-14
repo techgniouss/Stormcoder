@@ -80,6 +80,30 @@ try {
 	assert.equal(await chat.locator('#stashChip').count(), 0, 'nothing is left parked');
 	await chat.locator('#input').fill('');
 
+	// 1c. Edit and resend: an earlier prompt loads into the box, Escape leaves the chat alone,
+	// and sending replaces that prompt and everything after it.
+	const editPrompt = (detail) => chat.locator('body').evaluate((_el, d) => {
+		window.dispatchEvent(new CustomEvent('stormcoder-edit-prompt', { detail: d }));
+		return d.allowed;
+	}, detail);
+	const userTexts = () => chat.locator('#messages > .message.user .body').allInnerTexts();
+	assert.equal(await editPrompt({ query: true, index: 0, allowed: false }), true, 'the first prompt can be edited');
+	assert.equal(await editPrompt({ query: true, index: 1, allowed: false }), false, 'an assistant turn cannot');
+	await editPrompt({ index: 0 });
+	assert.equal(await chat.locator('#input').inputValue(), 'say hello');
+	await chat.locator('#editChip').waitFor();
+	await chat.locator('#input').press('Escape');
+	assert.equal(await chat.locator('#editChip').count(), 0, 'Escape leaves edit mode');
+	assert.deepEqual((await userTexts()).map(t => t.trim()), ['say hello'], 'and the chat is untouched');
+	await editPrompt({ index: 0 });
+	await chat.locator('#input').fill('say hello again');
+	await chat.locator('#input').press('Enter');
+	await chat.locator('#messages > .message.assistant', { hasText: 'Hello from the mock model.' }).waitFor({ timeout: 15000 });
+	await chat.locator('#sendButton:not(.hidden)').waitFor({ timeout: 15000 });
+	assert.deepEqual((await userTexts()).map(t => t.trim()), ['say hello again'], 'the old prompt and its reply are gone');
+	assert.equal(await chat.locator('#messages > .message.assistant').count(), 1);
+	assert.equal(await chat.locator('#editChip').count(), 0);
+
 	// 2. An Agent turn runs the tool loop and writes into the project folder.
 	await chat.locator('.seg-btn[data-value=agent]').click();
 	await chat.locator('#input').fill('create hello.txt');

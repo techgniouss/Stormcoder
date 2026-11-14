@@ -352,6 +352,42 @@ export class SessionStore {
 		session.compactSummary = summary ? summary : session.compactSummary;
 	}
 
+	/**
+	 * Cuts a session's transcript back to just before the user prompt at `index`, so that
+	 * prompt can be sent again in a different wording. Refuses, changing nothing, unless the
+	 * cut is safe:
+	 *
+	 *  - `busy`: a run is in flight, and its turns are still being appended.
+	 *  - `not-a-prompt`: `index` is not a prompt the user typed (an assistant turn, a notice,
+	 *    a message another chat's agent delivered, an editor action's turn, or out of range).
+	 *  - `compacted`: the prompt is already folded into the compaction summary, which would
+	 *    go on describing turns that no longer exist.
+	 *
+	 * Files are not touched: undoing what a run changed stays the Undo bar's job.
+	 */
+	truncateForEdit(sessionId: string, index: number): 'ok' | 'missing' | 'busy' | 'not-a-prompt' | 'compacted' {
+		const session = this.getSession(sessionId);
+		if (!session) {
+			return 'missing';
+		}
+		if (session.streaming) {
+			return 'busy';
+		}
+		const entry = Number.isInteger(index) ? session.messages[index] : undefined;
+		if (!entry || entry.role !== 'user' || entry.kind || entry.fromAgentSession || entry.fromEditor) {
+			return 'not-a-prompt';
+		}
+		// `compactedUpTo` counts the same "real" turns `sendableMessages` does.
+		const realBefore = session.messages.slice(0, index).filter(m => !m.kind && !(m.role === 'assistant' && m.content === '')).length;
+		if (realBefore < (session.compactedUpTo || 0)) {
+			return 'compacted';
+		}
+		session.messages = session.messages.slice(0, index);
+		session.pending = null;
+		session.todos = [];
+		return 'ok';
+	}
+
 	// ---- Transcript, queue, todos, run state ---------------------------------------
 
 	/**
