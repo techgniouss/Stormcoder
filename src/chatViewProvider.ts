@@ -19,6 +19,7 @@ import { ApprovalRequest, ApprovalResult, ToolApprover, UserQuestion, stopBackgr
 import { AutoOrchestrator, describePinnedModelError, fallbackNote, isModelError, nextCandidate, reviewSystem } from './auto/orchestrator';
 import { EngineHost, buildTranscriptSeed, parseTarget, readEngineSetting } from './engine/engineHost';
 import type { EngineCallbacks } from './engine/claudeEngine';
+import { reportUsage } from './usage/usageLog';
 import { AUTO_ROLES, AutoRole, RoleAssignment, RoleRouter } from './auto/router';
 import { WebAuthManager } from './auth';
 import { githubAccountLabel, tokenEmailLabel } from './accountLabels';
@@ -3112,7 +3113,14 @@ ${context.content}` }
 				onNote: text => post({ type: 'info', message: text }),
 				onTodos: items => post({ type: 'todos', items }),
 				onMcpStatus: servers => this.reportEngineMcp(sessionId, servers, post),
-				onUsage: u => this.sessionOutput.appendLine(`[engine ${sessionId}] ${u.path} ${u.providerId}:${u.model} in=${u.inputTokens} out=${u.outputTokens} cacheRead=${u.cacheReadTokens} cacheWrite=${u.cacheWriteTokens}${u.estimated ? ' (estimated)' : ''}`),
+				onUsage: u => {
+					this.sessionOutput.appendLine(`[engine ${sessionId}] ${u.path} ${u.providerId}:${u.model} in=${u.inputTokens} out=${u.outputTokens} cacheRead=${u.cacheReadTokens} cacheWrite=${u.cacheWriteTokens}${u.estimated ? ' (estimated)' : ''}`);
+					// A translated request is recorded by the provider that served it; only the
+					// pass-through to the Anthropic API has no provider in the path to do so.
+					if (u.path === 'passthrough') {
+						reportUsage(u.providerId, u.model, { input: u.inputTokens, output: u.outputTokens, cacheRead: u.cacheReadTokens, cacheWrite: u.cacheWriteTokens });
+					}
+				},
 			};
 			const context = await this.resolveContext(mode, message.context, 0, undefined);
 			// What the reviewer found last turn goes in front of the engine once, with the user's follow-up.

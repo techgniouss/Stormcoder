@@ -6,6 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as repo from '../src/git/repo';
+import { USAGE_FILE, UsageLog, usageReport } from '../src/usage/usageLog';
 import { configureHost, HostEnvironment, readJsonFile, UiEvent, ViewId, writeJsonFile } from './env';
 import { attentionFor, AttentionKind, attentionLevel, AttentionThrottle } from './attention';
 import { cancelProgress, commands, createContext, deliverToView, deliverUri, ExtensionContext, registeredCommands, reloadSettings, resetHost, runCommand, settingDefaults, workspace } from './vscode';
@@ -417,6 +418,10 @@ export class Controller {
 				}
 				if (id === 'app.cancelProgress') { cancelProgress(Number(rest[0])); return undefined; }
 				if (id === 'app.settingsDefaults') { return settingDefaults(); }
+				if (id === 'usage.read') {
+					// The same file the engine appends to (`context.globalStorageUri`, see host/vscode.ts).
+					return usageReport(new UsageLog(path.join(this.opts.userDataDir, 'storage', USAGE_FILE)));
+				}
 				if (id.startsWith('git.')) { return this.gitCall(id.slice(4), rest); }
 				if (id.startsWith('app.')) { return this.opts.appCommand?.(id, rest); }
 				return runCommand(id, ...rest);

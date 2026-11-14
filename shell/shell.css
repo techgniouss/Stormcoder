@@ -238,3 +238,19 @@ kbd {
 .keys-row:last-child { border-bottom: 0; }
 .keys-k { display: inline-flex; gap: 4px; }
 @media (max-width: 760px) { .keys-body { grid-template-columns: 1fr; } }
+
+/* ---------------------------------------------------------------- usage sheet */
+.usage-periods { display: inline-flex; gap: 2px; padding: 2px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--radius-card); }
+.usage-period { padding: 5px 12px; font: inherit; font-size: 12px; color: var(--muted); background: transparent; border: 0; border-radius: calc(var(--radius-card) - 3px); cursor: pointer; }
+.usage-period[aria-selected="true"] { color: var(--text); background: var(--hover); }
+.usage-totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; margin-bottom: 18px; }
+.usage-total { display: flex; flex-direction: column; gap: 2px; }
+.usage-total b { font-size: 20px; font-weight: 650; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.usage-total span { font-size: 12px; color: var(--muted); }
+.usage-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.usage-table th { padding: 6px 0; font-size: 12px; font-weight: 600; color: var(--muted); text-align: right; border-bottom: 1px solid var(--rule); }
+.usage-table td { padding: 7px 0; color: var(--text-2); text-align: right; border-bottom: 1px solid var(--rule); font-variant-numeric: tabular-nums; }
+.usage-table th:first-child, .usage-table td:first-child { text-align: left; overflow-wrap: anywhere; }
+.usage-table tr:last-child td { border-bottom: 0; }
+.usage-note { margin: 14px 0 0; font-size: 12px; color: var(--muted); }
+@media (max-width: 760px) { .usage-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

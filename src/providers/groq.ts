@@ -36,6 +36,11 @@ const NON_CHAT_MODEL = /(whisper|-tts|tts-|orpheus|playai|guard|embed)/i;
  * `agentRunner.adoptRequestCeiling`. One request per run pays for the lesson.
  */
 export class GroqProvider extends OpenAICompatibleProvider {
+	/** This API ends a streamed reply with its token counts when asked. */
+	protected override streamsUsage(): boolean {
+		return true;
+	}
+
 	readonly info: ProviderInfo = {
 		id: 'groq',
 		label: 'Groq (free tier)',

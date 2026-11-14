@@ -11,6 +11,7 @@ import {
 import { RateLimitSnapshot, RateLimitTracker } from './rateLimits';
 import { parseToolArgs } from './toolCalls';
 import { CLOSE_MARK, OPEN_MARK } from '../persona/thinking';
+import { AnthropicUsageTally, reportUsage } from '../usage/usageLog';
 
 const ANTHROPIC_VERSION = '2023-06-01';
 const OAUTH_BETA = 'oauth-2025-04-20';
@@ -300,6 +301,7 @@ export class AnthropicProvider implements ChatProvider {
 			events.handle(json, this.info.label);
 		}, request.signal, { label: this.info.label, sawTerminal: () => events.finishReason !== undefined });
 		events.close();
+		reportUsage(this.info.id, request.model, events.usage.result());
 		if (events.finishReason === 'refused' && !events.text) {
 			throw new Error(refusalMessage(this.info.label, events.refusalCategory));
 		}
@@ -352,6 +354,7 @@ export class AnthropicProvider implements ChatProvider {
 			events.handle(event, this.info.label);
 		}, request.signal, { label: this.info.label, sawTerminal: () => events.finishReason !== undefined });
 		events.close();
+		reportUsage(this.info.id, request.model, events.usage.result());
 
 		const toolCalls: ToolCall[] = events.blocksOf('tool_use')
 			.map(b => ({ id: b.id ?? '', name: b.name ?? 'unknown', args: parseToolArgs(b.json, events.finishReason === 'length') }));
@@ -388,12 +391,17 @@ class StreamState {
 	text = '';
 	finishReason: FinishReason | undefined;
 	refusalCategory: string | undefined;
+	/** Token counts the stream reported, for the Usage view. */
+	readonly usage = new AnthropicUsageTally();
 	private readonly byIndex = new Map<number, StreamedBlock>();
 	private reasoningOpen = false;
 
 	constructor(private readonly onToken: (delta: string) => void) { }
 
 	handle(event: any, label: string): void {
+		if (event?.type === 'message_start' || event?.type === 'message_delta') {
+			this.usage.note(event);
+		}
 		if (event?.type === 'message_delta' && event?.delta?.stop_reason) {
 			this.finishReason = normalizeFinishReason(event.delta.stop_reason);
 			const category = event.delta.stop_details?.category ?? event.stop_details?.category;

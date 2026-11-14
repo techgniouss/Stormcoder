@@ -398,6 +398,7 @@
 		const project = [
 			{ label: 'Open Project Folder…', description: 'Project', run: () => api.command('app.openFolder') },
 			{ label: 'Keyboard Shortcuts', description: 'Help', run: () => openShortcuts() },
+			{ label: 'Usage', description: 'Tokens by provider and model', run: () => openUsage() },
 			...(update.status === 'ready' ? [{ label: 'Install Update and Restart', description: 'App', run: () => api.command('app.installUpdate') }] : []),
 			{ label: 'Check for Updates', description: 'App', run: () => api.command('app.checkUpdates') },
 			{ label: 'Toggle Light / Dark Theme', description: 'View', run: () => setTheme(theme === 'light' ? 'dark' : 'light') },
@@ -428,7 +429,7 @@
 		chat: 'M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z', plus: 'M8 3v10M3 8h10', folder: 'M2 4.5h4l1.5 1.5H14v6.5H2z',
 		history: 'M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 5v3.2l2.2 1.4', skills: 'M3.5 2.5h7l2 2v9h-9zM5.5 7h5M5.5 9.5h5',
 		mcp: 'M6 2.5v3M10 2.5v3M4.5 5.5h7v2.5a3.5 3.5 0 0 1-7 0zM8 11.5v2', settings: 'M2.5 4.5h6M11.5 4.5h2M2.5 8h2M7.5 8h6M2.5 11.5h7M12.5 11.5h1',
-		palette: 'M5.5 3.5a2 2 0 1 0-2 2h9a2 2 0 1 0-2-2v9a2 2 0 1 0 2-2h-9a2 2 0 1 0 2 2z', keys: 'M2 4.5h12v7H2zM4.5 7h1M7.5 7h1M10.5 7h1M5 9.5h6',
+		palette: 'M5.5 3.5a2 2 0 1 0-2 2h9a2 2 0 1 0-2-2v9a2 2 0 1 0 2-2h-9a2 2 0 1 0 2 2z', usage: 'M3 13V8M6.5 13V4M10 13V9.5M13.5 13V6', keys: 'M2 4.5h12v7H2zM4.5 7h1M7.5 7h1M10.5 7h1M5 9.5h6',
 		sun: 'M8 5.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6zM8 1.6v1.6M8 12.8v1.6M1.6 8h1.6M12.8 8h1.6',
 		moon: 'M13 9.6A5.4 5.4 0 0 1 6.4 3a5.4 5.4 0 1 0 6.6 6.6z', refresh: 'M13.5 2.5v4h-4M13.2 6.5A5.5 5.5 0 1 0 14 8',
 		logs: 'M3.5 2.5h9v11h-9zM5.5 5.5h5M5.5 8h5M5.5 10.5h3', link: 'M6 3.5H3.5v9h9V10M9 2.5h4.5V7M13.5 2.5L7.5 8.5',
@@ -453,6 +454,7 @@
 			{ label: 'Settings', icon: IC.settings, shortcut: [mod, ','], onSelect: () => navigate('settings') },
 			{ type: 'sep' },
 			{ label: 'Command palette', icon: IC.palette, shortcut: [mod, 'K'], onSelect: () => openCommands() },
+			{ label: 'Usage', icon: IC.usage, onSelect: () => openUsage() },
 			{ label: 'Keyboard shortcuts', icon: IC.keys, shortcut: ['?'], onSelect: () => openShortcuts() },
 			{ label: theme === 'light' ? 'Dark theme' : 'Light theme', icon: theme === 'light' ? IC.moon : IC.sun, onSelect: () => setTheme(theme === 'light' ? 'dark' : 'light') },
 			{ label: 'Zoom in', icon: IC.zoomIn, onSelect: () => api.command('app.zoomIn') },
@@ -524,6 +526,94 @@
 		overlay.addEventListener('mousedown', onDown);
 		$('keysClose').onclick = close;
 		$('keysClose').focus();
+	}
+
+	// ------------------------------------------------------------------ usage sheet
+
+	/** 1234567 -> "1.23M", 45678 -> "45.7k", 912 -> "912". */
+	function compactCount(n) {
+		const v = Number(n) || 0;
+		if (v >= 1e6) { return (v / 1e6).toFixed(2) + 'M'; }
+		if (v >= 1e4) { return (v / 1e3).toFixed(1) + 'k'; }
+		return v.toLocaleString();
+	}
+
+	/**
+	 * Draws one period of the usage report: four totals, then a row per provider and model.
+	 * Every value is written with textContent; provider and model names come from the log.
+	 */
+	function renderUsage(summary) {
+		const body = $('usageBody');
+		body.textContent = '';
+		if (!summary || !summary.requests) {
+			const empty = document.createElement('p');
+			empty.className = 'usage-note';
+			empty.textContent = 'No usage recorded for this period yet.';
+			body.appendChild(empty);
+		} else {
+			const totals = document.createElement('div');
+			totals.className = 'usage-totals';
+			const hit = typeof summary.cacheHitRate === 'number' ? Math.round(summary.cacheHitRate * 100) + '%' : 'n/a';
+			for (const [value, label] of [[compactCount(summary.input + summary.cacheRead + summary.cacheWrite), 'Prompt tokens'], [compactCount(summary.output), 'Output tokens'], [hit, 'Served from cache'], [summary.requests.toLocaleString(), 'Requests']]) {
+				const cell = document.createElement('div');
+				cell.className = 'usage-total';
+				const b = document.createElement('b');
+				b.textContent = value;
+				const s = document.createElement('span');
+				s.textContent = label;
+				cell.append(b, s);
+				totals.appendChild(cell);
+			}
+			const table = document.createElement('table');
+			table.className = 'usage-table';
+			const head = table.createTHead().insertRow();
+			for (const h of ['Model', 'Requests', 'Input', 'Cached', 'Output']) { const th = document.createElement('th'); th.textContent = h; head.appendChild(th); }
+			const rows = table.createTBody();
+			for (const r of summary.rows) {
+				const tr = rows.insertRow();
+				for (const text of [r.provider + ' / ' + r.model, r.requests.toLocaleString(), compactCount(r.input + r.cacheWrite), compactCount(r.cacheRead), compactCount(r.output)]) {
+					tr.insertCell().textContent = text;
+				}
+			}
+			body.append(totals, table);
+		}
+		const note = document.createElement('p');
+		note.className = 'usage-note';
+		note.textContent = 'Token counts as each provider reported them. A provider that reports none is not listed, and nothing is estimated. Kept on this computer for 90 days.';
+		body.appendChild(note);
+	}
+
+	async function openUsage() {
+		let report;
+		try { report = await api.command('usage.read'); } catch (e) { report = undefined; }
+		const periods = [['today', 'Today'], ['week', '7 days'], ['month', '30 days']];
+		let chosen = 'week';
+		const tabs = $('usagePeriods');
+		const draw = () => {
+			tabs.textContent = '';
+			for (const [key, label] of periods) {
+				const b = document.createElement('button');
+				b.type = 'button';
+				b.className = 'usage-period';
+				b.setAttribute('role', 'tab');
+				b.setAttribute('aria-selected', String(key === chosen));
+				b.textContent = label;
+				b.addEventListener('click', () => { chosen = key; draw(); });
+				tabs.appendChild(b);
+			}
+			renderUsage(report ? report[chosen] : undefined);
+		};
+		draw();
+		const overlay = $('usage');
+		overlay.classList.remove('hidden');
+		const release = trapFocus(overlay);
+		const close = () => { overlay.classList.add('hidden'); document.removeEventListener('keydown', onKey, true); overlay.removeEventListener('mousedown', onDown); release(); };
+		const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); } };
+		const onDown = e => { if (e.target === overlay) { close(); } };
+		document.addEventListener('keydown', onKey, true);
+		overlay.addEventListener('mousedown', onDown);
+		$('usageClose').onclick = close;
+		$('usageClose').focus();
 	}
 
 	// ------------------------------------------------------------------ dialogs and toasts

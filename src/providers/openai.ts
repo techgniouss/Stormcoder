@@ -33,6 +33,11 @@ export function usesChatGptBackend(apiKey: string, baseUrl: string): boolean {
  * are routed through the ChatGPT backend (see `chatgptBackend.ts`).
  */
 export class OpenAIProvider extends OpenAICompatibleProvider {
+	/** This API ends a streamed reply with its token counts when asked. */
+	protected override streamsUsage(): boolean {
+		return true;
+	}
+
 	readonly info: ProviderInfo = {
 		id: 'openai',
 		label: 'OpenAI (ChatGPT)',

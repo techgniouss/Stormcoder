@@ -20,6 +20,7 @@ import { ensureCloudflared, getRelayMode, TUNNEL_TOKEN_KEY } from './remote/loca
 import { deployRelay } from './remote/deploy';
 import { RemoteService } from './remote/remoteService';
 import { SkillRegistry } from './skills';
+import { daysAgo, setUsageSink, USAGE_FILE, USAGE_KEEP_DAYS, UsageLog } from './usage/usageLog';
 
 /**
  * Providers only use `fetch`, so the stream stall timeout is pushed in from here and
@@ -47,6 +48,11 @@ export function activate(context: vscode.ExtensionContext): void {
 	// An installed app's own folder is read-only, so a user's .env lives in the user data folder.
 	loadEnvFile(path.dirname(context.globalStorageUri.fsPath));
 	applyStreamIdleTimeout();
+	// Token counts the providers report, for the Usage sheet. Old entries are dropped on start.
+	const usageLog = new UsageLog(path.join(context.globalStorageUri.fsPath, USAGE_FILE));
+	usageLog.prune(daysAgo(new Date(), USAGE_KEEP_DAYS));
+	setUsageSink(usageLog);
+	context.subscriptions.push({ dispose: () => setUsageSink(undefined) });
 	context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
 		if (e.affectsConfiguration('stormcoder.stream.idleTimeoutMs')) {
 			applyStreamIdleTimeout();

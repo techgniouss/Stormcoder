@@ -22,6 +22,11 @@ interface OpenRouterCatalogModel {
  * PKCE flow (see `signInOpenRouter` in oauth.ts), which mints a key for them.
  */
 export class OpenRouterProvider extends OpenAICompatibleProvider {
+	/** This API ends a streamed reply with its token counts when asked. */
+	protected override streamsUsage(): boolean {
+		return true;
+	}
+
 	readonly info: ProviderInfo = {
 		id: 'openrouter',
 		label: 'OpenRouter (all models)',

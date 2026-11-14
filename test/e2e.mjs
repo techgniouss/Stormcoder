@@ -45,6 +45,8 @@ try {
 	await page.goto(url);
 	const chat = page.frameLocator('#view-chat');
 	await chat.locator('#input').waitFor();
+	// The box is there before the host's first `sessions` push; Enter with no session is a no-op.
+	await chat.locator('.chat-tab').first().waitFor();
 
 	// 1. A plain Ask turn streams a reply.
 	await chat.locator('#input').fill('say hello');
@@ -121,6 +123,29 @@ try {
 	assert.equal(journaled.goal, 'create hello.txt');
 	assert.deepEqual(journaled.files, ['hello.txt']);
 	if (process.env.E2E_SHOT) { await page.screenshot({ path: process.env.E2E_SHOT }); }
+
+	// 2b. The Usage sheet reads the log the providers append to and adds it up per model.
+	{
+		const pad = n => String(n).padStart(2, '0');
+		const d = new Date();
+		const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+		const usageFile = path.join(host.data, 'storage', 'usage.jsonl');
+		fs.mkdirSync(path.dirname(usageFile), { recursive: true });
+		fs.appendFileSync(usageFile, [
+			{ day: today, provider: 'openai', model: 'gpt-x', input: 1200, output: 300, cacheRead: 800, cacheWrite: 0 },
+			{ day: today, provider: 'openai', model: 'gpt-x', input: 800, output: 100, cacheRead: 200, cacheWrite: 0 },
+			{ day: '2001-01-01', provider: 'old', model: 'ancient', input: 5, output: 5, cacheRead: 0, cacheWrite: 0 },
+		].map(e => JSON.stringify(e)).join('\n') + '\n');
+		await page.click('#markBtn');
+		await page.getByRole('menuitem', { name: 'Usage' }).click();
+		await page.locator('#usage:not(.hidden) .usage-table').waitFor();
+		const row = page.locator('#usageBody .usage-table tbody tr', { hasText: 'openai / gpt-x' });
+		assert.deepEqual((await row.locator('td').allInnerTexts()).map(t => t.trim()), ['openai / gpt-x', '2', '2,000', '1,000', '400']);
+		assert.equal(await page.locator('#usageBody', { hasText: 'ancient' }).count(), 0, 'entries outside the period are left out');
+		assert.equal((await page.locator('#usageBody .usage-total b').nth(2).innerText()).trim(), '33%', 'cache share of prompt tokens');
+		await page.keyboard.press('Escape');
+		await page.locator('#usage.hidden').waitFor({ state: 'attached' });
+	}
 
 	// 3. Settings opens as its own view, and areas switch.
 	await page.click('[data-view=settings]');

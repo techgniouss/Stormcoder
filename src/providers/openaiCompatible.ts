@@ -11,6 +11,7 @@ import {
 import { normalizeToolCallId, parseToolArgs } from './toolCalls';
 import { RateLimitSnapshot, RateLimitTracker } from './rateLimits';
 import { CLOSE_MARK, OPEN_MARK } from '../persona/thinking';
+import { reportUsage, TokenUsage, usageFromOpenAI } from '../usage/usageLog';
 
 /**
  * How an assistant turn that carries both narration and tool calls is put on the wire.
@@ -67,6 +68,17 @@ function chatModelsOnly(entries: ModelEntry[]): ModelEntry[] {
  */
 export abstract class OpenAICompatibleProvider implements ChatProvider {
 	abstract readonly info: ProviderInfo;
+
+	/**
+	 * Whether to ask a streamed reply to end with its token counts (`stream_options.
+	 * include_usage`), which is what feeds the Usage view. Off unless a subclass knows its
+	 * backend takes the field: a server that has never heard of it may reject the request,
+	 * and a chat that works matters more than a number. Usage a backend volunteers on its own
+	 * is recorded either way.
+	 */
+	protected streamsUsage(): boolean {
+		return false;
+	}
 
 	/** Extra request body fields (e.g. sampling defaults). Overridable by subclasses. */
 	protected extraBody(): Record<string, unknown> {
@@ -308,6 +320,7 @@ export abstract class OpenAICompatibleProvider implements ChatProvider {
 				messages: serializeMessages(request.messages, mode, this.wantsCacheBreakpoints(request.model), id => this.toolCallId(id, request.model)),
 				[this.tokenLimitField(request.model)]: request.maxTokens,
 				stream: true,
+				...(this.streamsUsage() ? { stream_options: { include_usage: true } } : {}),
 				...this.requestExtras(request.model),
 			}),
 			request.signal,
@@ -324,6 +337,7 @@ export abstract class OpenAICompatibleProvider implements ChatProvider {
 		let phase = 'idle' as 'idle' | 'reasoning' | 'answer';
 		let truncated = false;
 		let finishReason: FinishReason | undefined;
+		let usage: TokenUsage | undefined;
 		await readSSE(response, data => {
 			// Only the parse is guarded. `throwStreamError` used to sit inside the same catch
 			// that skips malformed chunks, so on this path — Ask, Plan, Edit and Auto's text
@@ -336,6 +350,7 @@ export abstract class OpenAICompatibleProvider implements ChatProvider {
 				return;
 			}
 			throwStreamError(this.info.label, json);
+			usage = usageFromOpenAI(json) ?? usage;
 			const raw = json?.choices?.[0]?.finish_reason;
 			if (raw) {
 				finishReason = normalizeFinishReason(raw);
@@ -359,6 +374,7 @@ export abstract class OpenAICompatibleProvider implements ChatProvider {
 				request.onToken(content);
 			}
 		}, request.signal, { label: this.info.label, sawTerminal: () => finishReason !== undefined });
+		reportUsage(this.info.id, request.model, usage);
 		// A reply that ended while still reasoning (cut off, or a model that answered only in
 		// its reasoning) still closes the block, or the thinking parser holds the rest open.
 		if (phase === 'reasoning') {
@@ -396,6 +412,7 @@ export abstract class OpenAICompatibleProvider implements ChatProvider {
 				})),
 				tool_choice: 'auto',
 				stream: true,
+				...(this.streamsUsage() ? { stream_options: { include_usage: true } } : {}),
 				...this.requestExtras(request.model),
 			}),
 			request.signal,
@@ -413,6 +430,7 @@ export abstract class OpenAICompatibleProvider implements ChatProvider {
 		let thinkingOpen = false;
 		let truncated = false;
 		let finishReason: FinishReason | undefined;
+		let usage: TokenUsage | undefined;
 		const acc = new Map<number, { id?: string; name?: string; args: string }>();
 		await readSSE(response, data => {
 			let json: any;
@@ -422,6 +440,7 @@ export abstract class OpenAICompatibleProvider implements ChatProvider {
 				return;
 			}
 			throwStreamError(this.info.label, json);
+			usage = usageFromOpenAI(json) ?? usage;
 			const raw = json?.choices?.[0]?.finish_reason;
 			if (raw) {
 				finishReason = normalizeFinishReason(raw);
@@ -468,6 +487,7 @@ export abstract class OpenAICompatibleProvider implements ChatProvider {
 				acc.set(index, cur);
 			}
 		}, request.signal, { label: this.info.label, sawTerminal: () => finishReason !== undefined });
+		reportUsage(this.info.id, request.model, usage);
 		// Reasoning followed by tool calls (or nothing) never sees content to close the block,
 		// which would leave the thinking parser holding everything after it open.
 		if (thinkingOpen) {
