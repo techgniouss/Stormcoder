@@ -1,4 +1,5 @@
-// Launches Chromium for the browser tests: Playwright's own install when present, otherwise a
+// Launches Chromium for the browser tests: Playwright's own install when present, then an
+// installed Chrome or Edge, otherwise a
 // chromium under PLAYWRIGHT_BROWSERS_PATH or /opt/pw-browsers (as in sandboxed environments).
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
@@ -22,6 +23,14 @@ export async function launchChromium() {
 	try {
 		return await chromium.launch({ args });
 	} catch {
+		// A developer machine without Playwright's download usually has Chrome or Edge installed.
+		for (const channel of ['chrome', 'msedge']) {
+			try {
+				return await chromium.launch({ channel, args });
+			} catch {
+				// not installed; try the next one
+			}
+		}
 		const executablePath = findInstalled();
 		if (!executablePath) { throw new Error('No Chromium found. Run: npx playwright-core install chromium'); }
 		return chromium.launch({ executablePath, args });
