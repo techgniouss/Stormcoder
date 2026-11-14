@@ -73,6 +73,23 @@ people reach for daily.
   rate. Cost only when the model catalog has a price; otherwise tokens only.
 - Desktop-only (`REMOTE_DENIED`).
 
+## As built: where it differs from the above
+
+- **Tool folding is for live runs only.** Tool cards were never part of a rebuilt transcript
+  (switching tabs drops them), so there is nothing to fold there.
+- **Edit an earlier prompt** rides on `send` as `editIndex` instead of a new message type, and
+  is honoured from the desktop webview only. It is refused under the Claude Code engine, whose
+  conversation lives in the harness, and for a prompt already folded into the compaction
+  summary. A paired phone is sent the cut transcript.
+- **Prompt stash** is kept in the webview's own saved state (capped at 50 chats), not with the
+  host's queue: it is a draft on this screen, not session state a phone should see.
+- **Usage** is reported by the providers to a sink (`reportUsage`) rather than carried on
+  `StreamChatResult`/`AgentStep`: one call site per provider instead of every caller of every
+  provider. `stream_options.include_usage` is sent to OpenAI, OpenRouter and Groq only.
+  Gemini goes through the OpenAI-compatible base and is recorded only if it volunteers usage.
+- **Usage is a sheet**, opened from the app menu and the command palette, not a rail view.
+  No cost is shown: the model catalog carries no prices.
+
 ## Left to the builder
 
 Exact copy, CSS, and where each helper lives inside `media/main.js`.

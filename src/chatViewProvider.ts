@@ -3327,6 +3327,9 @@ ${context.content}` }
 		}
 		this.persistSessionState();
 		this.postSessions();
+		// The desktop webview already cut its own copy; a paired phone has not, and would
+		// otherwise keep showing the turns that no longer exist.
+		this.bus.postExcept(origin, { type: 'transcript', sessionId, ...this.sessionStore.windowedMessages(sessionId) });
 		await this.handleSend({ ...message, editIndex: undefined }, origin);
 	}
 

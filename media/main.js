@@ -527,7 +527,7 @@
 			els.messages.appendChild(empty);
 			return;
 		}
-		for (const m of s.messages) {
+		for (const [at, m] of s.messages.entries()) {
 			// The Auto run's model summary is a transcript entry like any other, so it survives
 			// a tab switch and a reload — the record of which models ran is the whole point of
 			// it, and a DOM node appended once does not survive either.
@@ -538,7 +538,7 @@
 			const body = appendMessageEl(m.role, m.content, m.images);
 			if (m.kind) { body.parentElement?.classList.add(m.kind === 'auto' ? 'info' : m.kind); }
 			// Which transcript entry this bubble is, for "Edit and resend" (see beginPromptEdit).
-			if (body.parentElement) { body.parentElement.dataset.index = String(s.messages.indexOf(m)); }
+			if (body.parentElement) { body.parentElement.dataset.index = String(at); }
 			// A message delivered by another chat tab's agent (send_agent_message) — carries
 			// no `kind` (it's a real, sendable turn, unlike an 'info'/'error' notice), so it
 			// is marked distinctly here instead, mirroring the `.steering` class below.
@@ -2833,7 +2833,9 @@
 			s.title = text.length > 28 ? text.slice(0, 27) + '…' : text;
 		}
 		if (isActiveSend) {
-			appendMessageEl('user', text, images);
+			const sent = appendMessageEl('user', text, images).parentElement;
+			// Its place in the transcript, so this bubble can be edited and resent as well.
+			if (sent) { sent.dataset.index = String(s.messages.length - 1); }
 			pendingImages = [];
 			renderImageChips();
 		}

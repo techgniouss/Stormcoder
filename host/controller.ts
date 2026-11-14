@@ -136,8 +136,12 @@ export class Controller {
 		if (!this.opts.attention) {
 			return;
 		}
-		const level = attentionLevel(workspace.getConfiguration('stormcoder').get('notifications'));
-		const kind = attentionFor(message, level);
+		// Every streamed token passes through here, so the cheap check on the message comes
+		// first and the setting is read only for the few messages that could notify.
+		if (!attentionFor(message, 'all')) {
+			return;
+		}
+		const kind = attentionFor(message, attentionLevel(workspace.getConfiguration('stormcoder').get('notifications')));
 		if (kind && this.attentionThrottle.allow(kind)) {
 			this.opts.attention(kind);
 		}
