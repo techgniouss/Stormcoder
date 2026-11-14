@@ -8,9 +8,14 @@ import * as esbuild from 'esbuild';
 
 const root = path.resolve(import.meta.dirname, '..');
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mj-ctl-'));
-await esbuild.build({ entryPoints: [path.join(root, 'host/controller.ts')], outfile: path.join(tmp, 'controller.cjs'), bundle: true, platform: 'node', format: 'cjs', logLevel: 'error' });
+// One bundle holds both modules, so the test reads the same host environment the Controller installs.
+const entry = path.join(tmp, 'entry.ts');
+fs.writeFileSync(entry, `export * from ${JSON.stringify(path.join(root, 'host/controller.ts'))};
+export { host as hostEnvOf } from ${JSON.stringify(path.join(root, 'host/env.ts'))};
+`);
+await esbuild.build({ entryPoints: [entry], outfile: path.join(tmp, 'controller.cjs'), bundle: true, platform: 'node', format: 'cjs', logLevel: 'error' });
 const { createRequire } = await import('node:module');
-const { Controller } = createRequire(import.meta.url)(path.join(tmp, 'controller.cjs'));
+const { Controller, hostEnvOf } = createRequire(import.meta.url)(path.join(tmp, 'controller.cjs'));
 
 const data = path.join(tmp, 'data');
 const project = path.join(tmp, 'project');
@@ -23,13 +28,15 @@ fs.writeFileSync(path.join(data, 'settings.json'), '{}');
 
 let activations = 0;
 let failNext = false;
-const engine = { activate: () => { activations++; if (failNext) { failNext = false; throw new Error('boom'); } }, deactivate: () => undefined };
+const engine = { activate: () => { hostEnv = hostEnvOf(); activations++; if (failNext) { failNext = false; throw new Error('boom'); } }, deactivate: () => undefined };
 const fatals = [];
+const attention = [];
+let hostEnv;
 const c = new Controller({
 	appRoot: root, userDataDir: data, uriScheme: 'stormcoder', appVersion: 't', platform: process.platform, secureStorage: false,
 	codec: { encrypt: s => Buffer.from(s), decrypt: b => String(b) },
 	send: () => undefined, openExternal: async () => true, readClipboard: async () => '', writeClipboard: async () => undefined,
-	pickFolder: async () => undefined, pickFiles: async () => undefined, confirmTrust: async () => 'trust', showFatal: (t, d) => fatals.push([t, d]),
+	pickFolder: async () => undefined, pickFiles: async () => undefined, confirmTrust: async () => 'trust', showFatal: (t, d) => fatals.push([t, d]), attention: k => attention.push(k),
 }, engine, h => h);
 
 const can = async (name, file, text) => { try { await c.handleCall(name, text === undefined ? [file] : [file, text]); return true; } catch { return false; } };
@@ -60,6 +67,19 @@ await c.start();
 const before = activations;
 await c.start();
 assert.equal(activations, before + 1);
+
+// Desktop notifications: only chat messages that block a run reach the embedder at the default
+// level, only the kind is passed on, and a burst is throttled to one.
+assert.ok(hostEnv, 'the engine saw a configured host');
+attention.length = 0;
+hostEnv.postToView('chat', { type: 'token', text: 'x' });
+hostEnv.postToView('settings', { type: 'approvalRequest' });
+hostEnv.postToView('chat', { type: 'done' });
+assert.deepEqual(attention, [], 'tokens, other views and a finished run are silent by default');
+hostEnv.postToView('chat', { type: 'approvalRequest', detail: 'rm -rf /' });
+hostEnv.postToView('chat', { type: 'approvalRequest', detail: 'again' });
+hostEnv.postToView('chat', { type: 'askRequest', question: 'secret?' });
+assert.deepEqual(attention, ['approval', 'question']);
 
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log('test-controller: all assertions passed');

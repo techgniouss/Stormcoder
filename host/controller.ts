@@ -7,7 +7,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as repo from '../src/git/repo';
 import { configureHost, HostEnvironment, readJsonFile, UiEvent, ViewId, writeJsonFile } from './env';
-import { cancelProgress, commands, createContext, deliverToView, deliverUri, ExtensionContext, registeredCommands, reloadSettings, resetHost, runCommand, settingDefaults } from './vscode';
+import { attentionFor, AttentionKind, attentionLevel, AttentionThrottle } from './attention';
+import { cancelProgress, commands, createContext, deliverToView, deliverUri, ExtensionContext, registeredCommands, reloadSettings, resetHost, runCommand, settingDefaults, workspace } from './vscode';
 import COMMAND_LIST from './command-list.json';
 import type { UpdateService } from './updater';
 
@@ -32,6 +33,11 @@ export interface ControllerOptions {
 	confirmTrust(folder: string): Promise<'trust' | 'readonly' | 'cancel'>;
 	showFatal(title: string, detail: string): void;
 	onExternalActivity?(): void;
+	/**
+	 * A chat wants the user back: a run is waiting for an approval or an answer, or it finished.
+	 * Only the kind is passed, never the message, so the embedder has nothing sensitive to show.
+	 */
+	attention?(kind: AttentionKind): void;
 	/** App-level commands the shell can ask for (`app.quit`, `app.checkUpdates`, `app.openLogs`, `app.zoom`…). */
 	appCommand?(id: string, args: unknown[]): void | Promise<void>;
 	/** Keeps the app current from GitHub releases; its state is pushed to the shell as `app:update`. */
@@ -62,6 +68,8 @@ export class Controller {
 	private readonly viewHtml = new Map<ViewId, string>();
 	private readonly pending = new Map<number, (value: unknown) => void>();
 	private requestId = 0;
+	/** One desktop notification per kind every five seconds, however many chats ask. */
+	private readonly attentionThrottle = new AttentionThrottle(5000);
 	private context: ExtensionContext | undefined;
 	private chain: Promise<void> = Promise.resolve();
 	private rendererReady = false;
@@ -122,6 +130,18 @@ export class Controller {
 		}
 	}
 
+	/** Tells the embedder when a message bound for the chat view means a chat needs the user. */
+	private raiseAttention(message: unknown): void {
+		if (!this.opts.attention) {
+			return;
+		}
+		const level = attentionLevel(workspace.getConfiguration('stormcoder').get('notifications'));
+		const kind = attentionFor(message, level);
+		if (kind && this.attentionThrottle.allow(kind)) {
+			this.opts.attention(kind);
+		}
+	}
+
 	private environment(): HostEnvironment {
 		const self = this;
 		return {
@@ -137,7 +157,12 @@ export class Controller {
 				this.toRenderer('ui:request', { id, req });
 			}),
 			notify: (event: UiEvent) => this.toRenderer('ui:event', event),
-			postToView: (view, message) => this.toRenderer('view:message', { view, message }),
+			postToView: (view, message) => {
+				this.toRenderer('view:message', { view, message });
+				if (view === 'chat') {
+					this.raiseAttention(message);
+				}
+			},
 			setViewHtml: (view, html) => {
 				this.viewHtml.set(view, this.prepareHtml(html));
 				this.toRenderer('view:reload', { view });

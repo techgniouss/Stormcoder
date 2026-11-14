@@ -3,10 +3,11 @@
  *  Licensed under the MIT License.
  *--------------------------------------------------------------------------------------------*/
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, MenuItemConstructorOptions, net, protocol, safeStorage, screen, session, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, MenuItemConstructorOptions, net, Notification, protocol, safeStorage, screen, session, shell } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
+import { AttentionKind, attentionText } from '../host/attention';
 import { Controller } from '../host/controller';
 import { readJsonFile, writeJsonFile } from '../host/env';
 import { createSecretCodec, keychainAvailable } from './secrets';
@@ -121,6 +122,35 @@ function validBounds(raw: unknown): WindowBounds | undefined {
 
 let renderCrashes: number[] = [];
 
+/**
+ * Shows a desktop notification and flashes the taskbar when a chat needs the user and the
+ * window is not in front. The text is fixed per kind (see `attentionText`); clicking it brings
+ * the window forward on the chat view. This is the main-process `Notification`, which needs no
+ * page permission: the page itself is still refused every permission request.
+ */
+function showAttention(kind: AttentionKind): void {
+	if (!window || window.isDestroyed() || window.isFocused()) {
+		return;
+	}
+	window.flashFrame(true);
+	if (!Notification.isSupported()) {
+		return;
+	}
+	const note = new Notification({ title: APP_NAME, body: attentionText(kind) });
+	note.on('click', () => {
+		if (!window || window.isDestroyed()) {
+			return;
+		}
+		if (window.isMinimized()) {
+			window.restore();
+		}
+		window.show();
+		window.focus();
+		window.webContents.send('app:navigate', { view: 'chat' });
+	});
+	note.show();
+}
+
 function createWindow(): void {
 	const b = validBounds(readJsonFile<unknown>(windowFile, undefined));
 	window = new BrowserWindow({
@@ -185,6 +215,8 @@ function createWindow(): void {
 			writeJsonFile(windowFile, { ...(maximized ? prior : window.getBounds()), maximized });
 		}
 	});
+	// Stops the taskbar flash a notification started once the user is back.
+	window.on('focus', () => window?.flashFrame(false));
 	window.on('closed', () => { window = undefined; controller.rendererGone(); });
 	// Only the shell page itself: iframe navigations (the chat and settings views) also fire
 	// `did-start-loading`, and treating those as a reload would strand every queued message.
@@ -236,6 +268,10 @@ if (!app.requestSingleInstanceLock()) {
 	}
 
 	void app.whenReady().then(async () => {
+		// Windows files notifications under this id; without it they show no app name or do not show at all.
+		if (process.platform === 'win32') {
+			app.setAppUserModelId('dev.stormcoder.app');
+		}
 		// The UI needs no camera, microphone, geolocation or notification access; refuse every request.
 		session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
 		session.defaultSession.setPermissionCheckHandler(() => false);
@@ -277,6 +313,7 @@ if (!app.requestSingleInstanceLock()) {
 				return r.response === 0 ? 'trust' : r.response === 1 ? 'readonly' : 'cancel';
 			},
 			showFatal: (title, detail) => dialog.showErrorBox(title, detail),
+			attention: showAttention,
 			updates,
 			appCommand: id => {
 				switch (id) {

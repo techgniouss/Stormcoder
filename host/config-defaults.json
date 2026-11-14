@@ -139,6 +139,7 @@
 		],
 		"stormcoder.mcp.servers": {},
 		"stormcoder.skills": [],
+		"stormcoder.notifications": "attention",
 		"stormcoder.memory.enabled": true,
 		"stormcoder.memory.autoPropose": false,
 		"stormcoder.memory.recentRuns": 5,
@@ -648,6 +649,20 @@
 		"stormcoder.skills": {
 			"type": "array",
 			"description": "%config.skills%"
+		},
+		"stormcoder.notifications": {
+			"type": "string",
+			"enum": [
+				"off",
+				"attention",
+				"all"
+			],
+			"enumDescriptions": [
+				"%config.notifications.off%",
+				"%config.notifications.attention%",
+				"%config.notifications.all%"
+			],
+			"description": "%config.notifications%"
 		},
 		"stormcoder.memory.enabled": {
 			"type": "boolean",
