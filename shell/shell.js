@@ -397,6 +397,7 @@
 		].map(([label, key]) => ({ label, description: 'Navigate', run: () => navigate(key) }));
 		const project = [
 			{ label: 'Open Project Folder…', description: 'Project', run: () => api.command('app.openFolder') },
+			{ label: 'New Scratch Chat', description: 'A chat in an empty folder of its own, no project needed', run: () => api.command('app.newScratch') },
 			{ label: 'Keyboard Shortcuts', description: 'Help', run: () => openShortcuts() },
 			{ label: 'Usage', description: 'Tokens by provider and model', run: () => openUsage() },
 			...(update.status === 'ready' ? [{ label: 'Install Update and Restart', description: 'App', run: () => api.command('app.installUpdate') }] : []),
@@ -444,6 +445,7 @@
 		const items = [
 			{ label: 'New chat', icon: IC.plus, shortcut: [mod, 'N'], onSelect: () => api.command('stormcoder.newChat') },
 			{ label: 'Open project folder…', icon: IC.folder, shortcut: [mod, 'O'], onSelect: () => api.command('app.openFolder') },
+			{ label: 'New scratch chat', icon: IC.plus, onSelect: () => api.command('app.newScratch') },
 			...(recent.length ? [{ type: 'header', label: 'Recent projects' }, ...recent.map(f => ({ label: baseName(f), detail: f, icon: IC.folder, onSelect: () => api.command('app.openFolder', f) }))] : []),
 			{ type: 'sep' },
 			{ label: 'Chat', icon: IC.chat, shortcut: [mod, '1'], onSelect: () => navigate('chat') },
@@ -477,6 +479,7 @@
 			...(others.length ? [{ type: 'header', label: 'Recent' }, ...others.map(f => ({ label: baseName(f), detail: f, icon: IC.folder, onSelect: () => api.command('app.openFolder', f) }))] : []),
 			{ type: 'sep' },
 			{ label: 'Open project folder…', icon: IC.plus, shortcut: [MOD(), 'O'], onSelect: () => api.command('app.openFolder') },
+			{ label: 'New scratch chat', icon: IC.plus, onSelect: () => api.command('app.newScratch') },
 			...(appState.folder ? [{ label: 'Close project', icon: IC.close, onSelect: () => api.command('app.closeFolder') }] : []),
 		];
 		StormMenu.open({ anchor: $('projectBtn'), placement: 'bottom-start', items, minWidth: 320, ariaLabel: 'Project' });

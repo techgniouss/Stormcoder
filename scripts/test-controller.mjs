@@ -81,5 +81,33 @@ hostEnv.postToView('chat', { type: 'approvalRequest', detail: 'again' });
 hostEnv.postToView('chat', { type: 'askRequest', question: 'secret?' });
 assert.deepEqual(attention, ['approval', 'question']);
 
+// A scratch chat: an empty folder of the app's own, opened as the project and trusted without
+// the trust question (which would otherwise be asked for any folder not yet trusted).
+{
+	let asked = 0;
+	const c2 = new Controller({
+		appRoot: root, userDataDir: data, uriScheme: 'stormcoder', appVersion: 't', platform: process.platform, secureStorage: false,
+		codec: { encrypt: s => Buffer.from(s), decrypt: b => String(b) },
+		send: () => undefined, openExternal: async () => true, readClipboard: async () => '', writeClipboard: async () => undefined,
+		pickFolder: async () => undefined, pickFiles: async () => undefined, confirmTrust: async () => { asked++; return 'cancel'; }, showFatal: () => undefined,
+	}, { activate: () => undefined, deactivate: () => undefined }, h => h);
+	await c2.handleCall('command', ['app.newScratch']);
+	const first = hostEnvOf().workspaceFolder;
+	assert.ok(first && path.dirname(first) === path.join(data, 'scratch'), 'the folder is under the app data');
+	assert.match(path.basename(first), /^\d{4}-\d{2}-\d{2}-\d{6}(-\d+)?$/);
+	assert.deepEqual(fs.readdirSync(first), [], 'and it is empty');
+	assert.equal(hostEnvOf().workspaceTrusted, true);
+	assert.equal(asked, 0, 'the trust question is not asked for a folder the app just made');
+	// Two in the same second get different folders.
+	await c2.handleCall('command', ['app.newScratch']);
+	const second = hostEnvOf().workspaceFolder;
+	assert.notEqual(second, first);
+	assert.ok(c2.recentFolders().includes(first) && c2.recentFolders().includes(second), 'both can be reopened from recent projects');
+	// Any other folder is still asked about.
+	await c2.openFolder(secret);
+	assert.equal(asked, 1);
+	assert.equal(hostEnvOf().workspaceFolder, second, 'and declining leaves the scratch folder open');
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log('test-controller: all assertions passed');

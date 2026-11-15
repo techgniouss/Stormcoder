@@ -280,6 +280,30 @@ export class Controller {
 		await this.start();
 	}
 
+	/**
+	 * "New scratch chat": a chat with no project of the user's behind it. Creates an empty
+	 * folder under the app's own data directory, named by date and time, and opens it as the
+	 * project. It is trusted without asking, because the app made it and it is empty: there
+	 * is no cloned content in it that could have been written to steer the agent. It is an
+	 * ordinary folder afterwards (it appears under recent projects, and can be moved or
+	 * opened like any other), and the agent stays confined to it like any project.
+	 */
+	async newScratch(): Promise<void> {
+		const pad = (n: number) => String(n).padStart(2, '0');
+		const d = new Date();
+		const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+		const root = path.join(this.opts.userDataDir, 'scratch');
+		let dir = path.join(root, stamp);
+		for (let n = 2; fs.existsSync(dir); n++) {
+			dir = path.join(root, `${stamp}-${n}`);
+		}
+		fs.mkdirSync(dir, { recursive: true });
+		if (!this.state.trusted.includes(dir)) {
+			this.state.trusted.push(dir);
+		}
+		await this.openFolder(dir);
+	}
+
 	async closeFolder(): Promise<void> {
 		this.state.folder = undefined;
 		this.save();
@@ -433,6 +457,7 @@ export class Controller {
 				const rest = args.slice(1);
 				if (id === 'app.openFolder') { return this.openFolder(rest[0] as string | undefined); }
 				if (id === 'app.closeFolder') { return this.closeFolder(); }
+				if (id === 'app.newScratch') { return this.newScratch(); }
 				if (id === 'app.state') { return this.publicState(); }
 				if (id === 'app.updateState') { return this.opts.updates?.state(); }
 				if (id === 'app.checkUpdates' && this.opts.updates) { return this.opts.updates.check(true); }
