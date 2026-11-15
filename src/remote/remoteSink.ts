@@ -281,6 +281,16 @@ export function redactForRemote(message: Record<string, unknown> & { type: strin
 	if (message.type === 'error' && typeof clone.message === 'string') {
 		clone.message = scrubValue(clone.message);
 	}
+	// A worktree chat's folder is a path on the desktop (it names the user's account folder). A
+	// phone is told that the chat has a worktree and which branch, never where it is.
+	if (message.type === 'sessions' && Array.isArray(clone.sessions)) {
+		clone.sessions = clone.sessions.map(entry => {
+			const worktree = (entry as { worktree?: { branch?: unknown } } | null)?.worktree;
+			return worktree && typeof entry === 'object'
+				? { ...entry, worktree: { branch: typeof worktree.branch === 'string' ? worktree.branch : '' } }
+				: entry;
+		});
+	}
 	// A `userTurn` carries the turn's attached images as base64 — hundreds of KB each, which a
 	// phone that only needs to show "1 image" would otherwise download over cellular on every
 	// message. The count is all a remote transcript renders.

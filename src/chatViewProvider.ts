@@ -3482,7 +3482,8 @@ ${context.content}` }
 		}
 		if (!fs.existsSync(worktree.path)) {
 			const post = this.sessionPost(sessionId as string, runId);
-			post({ type: 'error', message: `This chat's worktree folder is missing (${worktree.path}). Its work, if committed, is on branch ${worktree.branch}. Start a new chat to continue.` });
+			// No path in the text: this message goes to every client, a paired phone included.
+			post({ type: 'error', message: `This chat's worktree folder is missing. Its work, if committed, is on branch ${worktree.branch}. Start a new chat to continue.` });
 			post({ type: 'done' });
 			this.postTranscript(sessionId as string);
 			return;
@@ -3494,7 +3495,7 @@ ${context.content}` }
 			// data, and could name anything). The run does not happen; it never moves to the project.
 			if (err instanceof Error && /worktree the app created/.test(err.message)) {
 				const post = this.sessionPost(sessionId as string, runId);
-				post({ type: 'error', message: `This chat's worktree (${worktree.path}) is not a folder the app created, so the run was refused.` });
+				post({ type: 'error', message: `This chat's worktree is not a folder the app created, so the run was refused.` });
 				post({ type: 'done' });
 				return;
 			}

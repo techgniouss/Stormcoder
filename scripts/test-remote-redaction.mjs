@@ -153,4 +153,19 @@ assert.equal(
 	assert.equal(sent.approval, 'auto-edits', 'the rest of the config still arrives');
 }
 
+// A worktree chat: a phone learns the branch, never the folder on the desktop.
+{
+	const out = redactForRemote({ type: 'sessions', sessions: [
+		{ id: 'a', title: 'Plain', mode: 'ask' },
+		{ id: 'b', title: 'Isolated', mode: 'agent', worktree: { path: 'C:\\Users\\someone\\AppData\\Roaming\\Stormcoder\\worktrees\\k\\b', branch: 'stormcoder/chat-b' } },
+		{ id: 'c', title: 'Damaged', worktree: { path: '/home/someone/x' } },
+	] });
+	assert.deepEqual(out.sessions, [
+		{ id: 'a', title: 'Plain', mode: 'ask' },
+		{ id: 'b', title: 'Isolated', mode: 'agent', worktree: { branch: 'stormcoder/chat-b' } },
+		{ id: 'c', title: 'Damaged', worktree: { branch: '' } },
+	]);
+	assert.ok(!JSON.stringify(out).includes('someone'), 'no part of the path is sent');
+}
+
 console.log('test-remote-redaction: all assertions passed');
