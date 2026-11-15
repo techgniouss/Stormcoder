@@ -280,7 +280,7 @@ export const AGENT_TOOLS: ToolSpec[] = [
 	},
 	{
 		name: 'show_page',
-		description: 'Show the user a self-contained HTML page in the chat: a chart, table, diagram or mockup. Use it when a picture answers better than text, or when asked for one. One complete HTML document with inline <style> and <script> only. Nothing is loaded from the network: no CDN scripts, fonts or remote images (inline SVG and data: images work). Links do nothing. Under 500 KB.',
+		description: 'Show the user a self-contained, static HTML page in the chat: a chart, table, diagram or mockup. Use it when a picture answers better than text, or when asked for one. One complete HTML document with inline <style> and inline SVG. Scripts do not run, so draw charts as SVG and use CSS for layout and hover. Nothing is loaded from the network: no remote stylesheets, fonts or images (data: images work). Links do nothing. Under 500 KB.',
 		parameters: {
 			type: 'object',
 			properties: {
@@ -829,7 +829,7 @@ export const MAX_SHOWN_PAGE_BYTES = 512 * 1024;
 /**
  * `show_page`: puts an HTML page the model wrote into the chat. Approved like a file write
  * (asked about unless edits are auto-approved). The page itself is rendered by the host in a
- * frame with no origin and no network (see `host/pages.ts`); this function only decides
+ * frame with no scripts, no origin and no network (see `host/pages.ts`); this function only decides
  * whether there is a page to show.
  */
 async function showPage(title: string, html: string, approver: ToolApprover, g: Guardrails): Promise<ToolResult> {
@@ -849,7 +849,7 @@ async function showPage(title: string, html: string, approver: ToolApprover, g: 
 			kind: 'write',
 			signature: 'show_page',
 			title: `Show the page "${name}"?`,
-			detail: `An HTML page written by the model, ${Math.max(1, Math.round(bytes / 1024))} KB. It is shown in a sealed frame: it cannot reach the network, your files or the rest of the app.`,
+			detail: `An HTML page written by the model, ${Math.max(1, Math.round(bytes / 1024))} KB. It is shown in a sealed frame: no scripts run in it, and it cannot reach the network, your files or the rest of the app.`,
 			preview: html.slice(0, 4_000),
 			previewLanguage: 'html',
 		});

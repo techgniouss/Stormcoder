@@ -285,6 +285,13 @@ if (!app.requestSingleInstanceLock()) {
 		if (process.platform === 'win32') {
 			app.setAppUserModelId('dev.stormcoder.app');
 		}
+		// Second wall behind the page policy (host/pages.ts): a request made from inside a page
+		// the agent wrote, and any frame load that is not the app's own, is cancelled before it
+		// leaves the machine. The app's frames only ever load the asset scheme.
+		session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (details, callback) => {
+			const from = details.frame?.url ?? '';
+			callback({ cancel: details.resourceType === 'subFrame' || from.startsWith(`${ASSET_SCHEME}://app/page/`) });
+		});
 		// The UI needs no camera, microphone, geolocation or notification access; refuse every request.
 		session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
 		session.defaultSession.setPermissionCheckHandler(() => false);

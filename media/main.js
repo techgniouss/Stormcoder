@@ -598,8 +598,9 @@
 
 	/**
 	 * A page the agent wrote (`show_page`), shown in the transcript. The frame is sealed: no
-	 * origin of its own, no network, no way to reach this document (the host serves it with
-	 * the policy in host/pages.ts, and `sandbox` here says the same). It is loaded by id from
+	 * scripts, no origin of its own, no network, no way to reach this document (the host
+	 * serves it with the policy in host/pages.ts, and the empty `sandbox` here says the same:
+	 * an empty value grants nothing). It is loaded by id from
 	 * the app's own page route; the HTML never passes through this script. Outside the
 	 * desktop shell there is no such route, so only the title is shown.
 	 * @param {{ id: string, title: string }} page
@@ -620,7 +621,7 @@
 		if (base && /^[0-9a-f]{16}$/.test(String(page.id))) {
 			const frame = document.createElement('iframe');
 			frame.className = 'page-frame';
-			frame.setAttribute('sandbox', 'allow-scripts');
+			frame.setAttribute('sandbox', '');
 			frame.setAttribute('referrerpolicy', 'no-referrer');
 			frame.setAttribute('loading', 'lazy');
 			frame.title = String(page.title || 'Page');

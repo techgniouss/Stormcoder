@@ -11,11 +11,14 @@ const root = path.resolve(import.meta.dirname, '..');
 /** Starts a mock model. `reply(request)` returns text, or `{ tool: { name, args } }` for a tool call. */
 export async function startMock(reply, { chunkDelay = 0 } = {}) {
 	const seen = [];
+	/** Every GET's path, so a test can assert that something did not phone home. */
+	const gets = [];
 	const server = http.createServer((req, res) => {
 		let body = '';
 		req.on('data', c => body += c);
 		req.on('end', async () => {
 			if (req.method === 'GET') {
+				gets.push(req.url ?? '');
 				res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: ['mock-model', 'qwen3-coder-480b', 'llama-3.3-70b-instruct', 'deepseek-r1-distill', 'mistral-large-2', 'gpt-oss-120b', 'gemma-3-27b-it', 'kimi-k2-instruct', 'glm-4.6', 'phi-4-reasoning', 'command-r-plus', 'nemotron-70b', 'yi-lightning'].map(id => ({ id })) }));
 				return;
 			}
@@ -41,7 +44,7 @@ export async function startMock(reply, { chunkDelay = 0 } = {}) {
 		});
 	});
 	await new Promise(r => server.listen(0, '127.0.0.1', r));
-	return { port: server.address().port, seen, close: () => server.close() };
+	return { port: server.address().port, seen, gets, close: () => server.close() };
 }
 
 /** Starts the dev host on a temp project and data dir, configured to use the mock model. */

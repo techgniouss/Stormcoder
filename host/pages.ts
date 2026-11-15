@@ -5,10 +5,11 @@
 
 /**
  * Visual replies: a page the agent wrote, shown inside a chat. The page is text a model
- * produced, possibly after reading something untrusted, so it is treated as hostile: it
- * runs in a frame with no origin of its own and no way to reach the network, the app or the
- * chat around it. This module is the one place those limits are written down; the Electron
- * app and the browser dev host both serve pages with exactly these headers.
+ * produced, possibly after reading something untrusted, so it is treated as hostile: it is
+ * a static document (markup, inline style, inline SVG) in a frame with no origin of its own,
+ * no scripts and no way to reach the network, the app or the chat around it. This module is
+ * the one place those limits are written down; the Electron app and the browser dev host
+ * both serve pages with exactly these headers.
  */
 
 /** The largest page that is stored or served. */
@@ -17,17 +18,19 @@ export const MAX_PAGE_BYTES = 512 * 1024;
 /**
  * The policy a page is served with.
  *
- *  - `sandbox allow-scripts`: scripts run, but the page has an opaque origin, so no cookies,
- *    no storage, no same-origin access to the app, no forms, no popups, no top navigation.
- *    Sent as a header, so it holds even if the page is opened outside the chat's own frame.
- *  - `default-src 'none'` with only inline script and style, and images and fonts from
- *    `data:`: nothing is fetched from anywhere, which is what stops a page from sending out
- *    whatever a model was talked into putting in it.
+ *  - `sandbox` with no permissions: no scripts, and an opaque origin, so no cookies, no
+ *    storage, no same-origin access to the app, no forms, no popups, no top navigation. Sent
+ *    as a header, so it holds even if the page is opened outside the chat's own frame.
+ *  - No scripts is deliberate, not an oversight. A content policy does not govern every
+ *    way a script can reach the network (WebRTC is outside it), so a page that could run
+ *    script could send out whatever a model was talked into putting in it. A chart is
+ *    inline SVG and CSS; that is enough, and it cannot leak.
+ *  - `default-src 'none'` with inline style, and images and fonts from `data:` only: nothing
+ *    is fetched from anywhere, by markup or by a stylesheet.
  */
 export const PAGE_CSP = [
-	`sandbox allow-scripts`,
+	`sandbox`,
 	`default-src 'none'`,
-	`script-src 'unsafe-inline'`,
 	`style-src 'unsafe-inline'`,
 	`img-src data:`,
 	`font-src data:`,
