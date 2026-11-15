@@ -14,12 +14,12 @@ import { describeRestore, FileWrite, RunCheckpoint } from './agent/checkpoint';
 import { CACHED_COMPACT_TRIGGER, COMPACT_MARKER, COMPACT_TRIGGER, SUMMARY_MAX_TOKENS, canCompact, compactMessages, shouldCompact } from './agent/compaction';
 import { contextTurn, estimateTokens, needsCompactPrompt, unfittableRequest, withSystemPrompt } from './agent/context';
 import { contextWindowFor, requestBudgets } from './agent/contextWindow';
-import { APPROVAL_POLICIES, ApprovalPolicy, applyApprovalFloor, Guardrails, loadGuardrails, parseApprovalPolicy, RunOrigin } from './agent/guardrails';
+import { APPROVAL_POLICIES, ApprovalPolicy, applyApprovalFloor, checkPath, Guardrails, loadGuardrails, parseApprovalPolicy, RunOrigin } from './agent/guardrails';
 import { ApprovalRequest, ApprovalResult, ToolApprover, UserQuestion, stopBackgroundCommands } from './agent/tools';
 import { AutoOrchestrator, describePinnedModelError, fallbackNote, isModelError, nextCandidate, reviewSystem } from './auto/orchestrator';
 import { EngineHost, buildTranscriptSeed, parseTarget, readEngineSetting } from './engine/engineHost';
 import type { EngineCallbacks } from './engine/claudeEngine';
-import { reportUsage } from './usage/usageLog';
+import { reportUsage, USAGE_FILE, UsageLog, usageReport } from './usage/usageLog';
 import { MAX_AUDIO_BYTES, defaultVoiceModel, transcribe, voiceProvider } from './voice/transcribe';
 import { AUTO_ROLES, AutoRole, RoleAssignment, RoleRouter } from './auto/router';
 import { WebAuthManager } from './auth';
@@ -71,6 +71,10 @@ export type InlineKind = 'explain' | 'fix' | 'doc' | 'optimize' | 'tests' | 'edi
 
 /** Sentinel provider id selecting the role-routed "Auto" pipeline instead of one provider. */
 const AUTO_PROVIDER = '__auto__';
+
+/** `changesRequest`: the most files listed, and the longest any one file's diff may be. */
+const CHANGES_MAX_FILES = 30;
+const CHANGES_FILE_CHARS = 6_000;
 
 /** Workspace-state key for the engine session id of each chat (see `engineSessions`). */
 const ENGINE_SESSIONS_KEY = 'stormcoder.engineSessions';
@@ -2215,6 +2219,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			case 'transcribe':
 				await this.handleTranscribe(message, origin);
 				break;
+			case 'changesRequest':
+				await this.postChanges(message.sessionId, origin);
+				break;
+			case 'usageRequest':
+				this.bus.postTo(origin, { type: 'usageReport', report: usageReport(new UsageLog(path.join(this.context.globalStorageUri.fsPath, USAGE_FILE))) });
+				break;
 			case 'enhancePrompt':
 				await this.handleEnhancePrompt(message, origin);
 				break;
@@ -3401,6 +3411,41 @@ ${context.content}` }
 		// otherwise keep showing the turns that no longer exist.
 		this.bus.postExcept(origin, { type: 'transcript', sessionId, ...this.sessionStore.windowedMessages(sessionId) });
 		await this.handleSend({ ...message, editIndex: undefined }, origin);
+	}
+
+	// ---- Changes, for a client that has no Changes view ----------------------------------
+
+	/**
+	 * Answers `changesRequest`: what the working tree of a chat's folder (its worktree, or the
+	 * project) changed since the last commit, one entry per file, for the client that asked
+	 * and no other. Read-only. It exists for the phone, which can approve a write but has no
+	 * Changes view to see what the run then did.
+	 *
+	 * What leaves the desktop is bounded and filtered here, before the remote sink's own
+	 * scrubbing: at most {@link CHANGES_MAX_FILES} files, each cut short, and a file the
+	 * guardrails would not let the agent write (`.env`, keys, memory) is named but not shown.
+	 */
+	private async postChanges(sessionId: string | undefined, origin: string): Promise<void> {
+		const reply = (files: { path: string; text: string }[], note?: string) => this.bus.postTo(origin, { type: 'changes', sessionId: sessionId ?? '', files, note: note ?? '' });
+		const worktree = sessionId ? this.sessionStore.getSession(sessionId)?.worktree : undefined;
+		const folder = worktree && fs.existsSync(worktree.path) ? worktree.path : projectFolders()?.[0]?.uri.fsPath;
+		if (!folder) {
+			return reply([], 'No project folder is open on the desktop.');
+		}
+		let sections: DiffSection[];
+		try {
+			sections = await workingTreeSections(folder, { maxChars: CHANGES_FILE_CHARS, maxNewFiles: 10, maxNewFileBytes: CHANGES_FILE_CHARS, timeoutMs: 8_000 });
+		} catch (err) {
+			return reply([], err instanceof Error && /not a git repository|not inside/i.test(err.message) ? 'This folder is not a git repository, so there is nothing to compare against.' : 'The changes could not be read.');
+		}
+		const guardrails = loadGuardrails();
+		const root = vscode.Uri.file(folder);
+		const files = sections.slice(0, CHANGES_MAX_FILES).map(section => {
+			const name = /^diff --git a\/(.+?) b\//.exec(section.key)?.[1] ?? section.key.replace(/^new file /, '');
+			const shown = checkPath(root, name, true, guardrails).ok;
+			return { path: name, text: shown ? section.text : 'This file is protected, so its contents are not shown on a paired device.\n' };
+		});
+		reply(files, sections.length > CHANGES_MAX_FILES ? `${sections.length - CHANGES_MAX_FILES} more changed files are not listed. Review them on the desktop.` : sections.length ? '' : 'No uncommitted changes.');
 	}
 
 	// ---- Voice input ---------------------------------------------------------------------

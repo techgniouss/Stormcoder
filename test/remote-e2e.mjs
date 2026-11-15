@@ -13,7 +13,7 @@
 // mid-stream with the transcript intact, secrets redacted on the wire, and revoking the device.
 import { launchChromium } from './browser.mjs';
 import { startHost, startMock } from './harness.mjs';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -190,6 +190,22 @@ const host = await startHost({
 	env: windows ? { NODE_OPTIONS: `--require ${JSON.stringify(fakePreload.split(path.sep).join('/'))}` } : {},
 });
 const project = host.project;
+// A git repository with one commit, so the phone's Changes view has something to compare against,
+// and a protected file with a secret in it that must never be shown there.
+const git = (...args) => execFileSync('git', args, { cwd: project, encoding: 'utf8' });
+git('init', '-q', '-b', 'main');
+git('config', 'user.name', 'Test');
+git('config', 'user.email', 'test@example.com');
+git('add', '-A');
+git('commit', '-q', '-m', 'first');
+fs.writeFileSync(path.join(project, '.env'), 'DATABASE_PASSWORD=hunter2-not-for-phones' + String.fromCharCode(10));
+// Token counts as the providers would have reported them, for the phone's Usage view.
+{
+	const pad = n => String(n).padStart(2, '0');
+	const d = new Date();
+	fs.mkdirSync(path.join(host.data, 'storage'), { recursive: true });
+	fs.appendFileSync(path.join(host.data, 'storage', 'usage.jsonl'), JSON.stringify({ day: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, provider: 'openai', model: 'gpt-seeded', input: 1500, output: 250, cacheRead: 500, cacheWrite: 0 }) + String.fromCharCode(10));
+}
 const settingsFile = path.join(host.data, 'settings.json');
 const proxy = await startProxy(relayPort);
 const phoneOrigin = `http://127.0.0.1:${proxy.port}`;
@@ -238,6 +254,19 @@ try {
 	const context = await browser.newContext({
 		viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true,
 		userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+	});
+	// A stand-in for the browser's speech recognition, which a headless browser does not have:
+	// it "hears" one fixed phrase shortly after it is started.
+	await context.addInitScript(() => {
+		window.SpeechRecognition = window.webkitSpeechRecognition = class {
+			start() {
+				setTimeout(() => {
+					this.onresult?.({ resultIndex: 0, results: [Object.assign([{ transcript: 'spoken on the phone' }], { isFinal: true })] });
+					this.onend?.();
+				}, 150);
+			}
+			stop() { this.onend?.(); }
+		};
 	});
 	const phone = await context.newPage();
 	phone.on('pageerror', e => phoneErrors.push(e.message));
@@ -304,6 +333,9 @@ try {
 	await phone.fill('#composer', '');
 
 	step('phone: a message sent while disconnected waits, then goes out on reconnect');
+	// In a chat of its own, closed afterwards, so the main chat's transcript is what it was.
+	await phone.tap('#newSessionBtn');
+	await until('the new chat to open', async () => (await phone.locator('.tab').count()) === 2, 15000);
 	proxy.down();
 	await phone.locator('#status', { hasText: /Reconnecting|Connecting/ }).waitFor({ timeout: 15000 });
 	await send('written while offline');
@@ -319,6 +351,9 @@ try {
 	await until('the outbox chip to go away', async () => (await phone.locator('.outbox-chip').count()) === 0, 10000);
 	assert.equal(seen.filter(r => r.messages?.at(-1)?.content === 'written while offline').length <= 1, true, 'it is sent once');
 	await stopGone(20000);
+	await phone.tap('.tab-active .tab-close');
+	await until('the temporary chat to close', async () => (await phone.locator('.tab').count()) === 0, 15000);
+	await phone.locator('.msg-user', { hasText: 'hello phone' }).waitFor({ timeout: 15000 });
 
 	// ---- Agent: write + approval allow --------------------------------------------------------------
 	step('phone: Agent run, approval card (Allow), tool card, file on disk');
@@ -340,6 +375,39 @@ try {
 	await desktopShows('Wrote remote-e2e.txt.');
 
 	// ---- Approval deny -------------------------------------------------------------------------
+	// ---- Changes, Usage, Dictation ------------------------------------------------------------------
+	step('phone: review what the run changed (read-only, protected file withheld)');
+	await phone.tap('#historyBtn');
+	await phone.tap('#changesBtn');
+	await phone.locator('#infoPanel:not([hidden]) .change-file', { hasText: 'remote-e2e.txt' }).waitFor({ timeout: 15000 });
+	const changed = await phone.locator('#infoBody').innerText();
+	assert.match(changed, /remote-e2e\.txt/);
+	assert.ok(await phone.locator('#infoBody .change-diff .add').count() > 0, 'added lines are marked');
+	assert.match(changed, /\.env/, 'the protected file is named');
+	assert.match(changed, /protected, so its contents are not shown/);
+	assert.ok(!changed.includes('hunter2-not-for-phones'), 'and its contents never reach the phone');
+	assert.ok(!(await phone.content()).includes('hunter2-not-for-phones'));
+	await phone.tap('#infoCloseBtn');
+
+	step('phone: usage by provider and model');
+	await phone.tap('#historyBtn');
+	await phone.tap('#usageBtn');
+	await phone.locator('#infoPanel:not([hidden]) .usage-row', { hasText: 'openai / gpt-seeded' }).waitFor({ timeout: 15000 });
+	assert.match(await phone.locator('.usage-row', { hasText: 'gpt-seeded' }).innerText(), /2000 in, 250 out/);
+	await phone.tap('#infoCloseBtn');
+
+	step('phone: dictation lands in the composer, after saying once where the voice goes');
+	await phone.locator('#micBtn:not([hidden])').waitFor();
+	await phone.fill('#composer', 'note:');
+	await phone.tap('#micBtn');
+	await phone.locator('.notice', { hasText: 'Dictation uses this browser' }).waitFor({ timeout: 10000 });
+	assert.equal(await phone.inputValue('#composer'), 'note:', 'the first tap only explains');
+	await phone.tap('#micBtn');
+	await until('the dictated words to arrive', async () => (await phone.inputValue('#composer')) === 'note: spoken on the phone', 10000);
+	assert.equal(await phone.locator('#micBtn').getAttribute('aria-pressed'), 'false');
+	assert.ok(!seen.some(r => JSON.stringify(r.messages).includes('spoken on the phone')), 'dictating sends nothing');
+	await phone.fill('#composer', '');
+
 	step('phone: approval card (Deny)');
 	await send('SCN:deny write denied.txt');
 	const approval2 = phone.locator('.prompt-card.prompt-approval.prompt-open');

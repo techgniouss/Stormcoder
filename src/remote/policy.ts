@@ -55,6 +55,10 @@ export const REMOTE_ALLOWED: readonly string[] = [
 	'setQueue',
 	'sync',
 	'fetchTranscript',
+	// Read-only views the phone has no other way to see: what the working tree changed (bounded,
+	// protected files withheld, secrets scrubbed by the sink) and the token counts by model.
+	'changesRequest',
+	'usageRequest',
 	// The Undo button: the same effect as `/undo`, which is allowed remotely (see runSlash).
 	'undoRun',
 	// Host-side slash-command dispatch (Phase 6a): everything it can do (mode/provider

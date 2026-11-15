@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Remote control: the phone app catches up with the desktop.
+  - **Drafts and an offline outbox.** What is typed but not sent is kept per chat on the phone. A message sent with no connection waits above the composer (a dashed chip), survives a restart, and goes out in order when the connection is back. A message this device just sent is no longer taken off the screen by a catch-up transcript that was built a moment before it.
+  - **Changes** (History > Changes, or the button beside Undo): what the working tree changed, read-only. Bounded, scrubbed of credential shapes, and a file the guardrails protect (environment files, keys) is named but never shown. Staging and committing stay on the desktop.
+  - **Usage** (History > Usage): tokens by provider and model, as on the desktop.
+  - **Dictation**: a Dictate button where the browser has speech recognition. The voice is handled by the browser and does not pass through Stormcoder, the relay or the desktop; this is said once before first use.
+  - **Notifications** open the chat that raised them when tapped. A worktree chat's tab shows a badge with its branch.
+  - Tests: additions to `test/remote-e2e.mjs` (which now also runs on Windows) and `scripts/test-remote-redaction.mjs`. Not exercised: tapping a real push notification, and dictation with a real recogniser.
 - Nine additions taken from a review of T3 Code (`docs/superpowers/specs/2026-11-14-t3-ideas-batch1-design.md`, `2026-11-15-t3-ideas-batch2-design.md`).
   - **Desktop notifications** when a run is waiting for an approval or an answer and the window is not in front (`stormcoder.notifications`: `off`, `attention`, `all`). The text is fixed and never carries a command, path or question.
   - **Folded tool calls**: three or more finished calls in a row fold into one line; a running or failed call never folds (`stormcoder.chat.toolCalls`: `grouped`, `all`, `hideSuccessful`).

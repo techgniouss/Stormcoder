@@ -108,6 +108,13 @@ const els = {
 	stopBtn: document.getElementById('stopBtn'),
 	newSessionBtn: document.getElementById('newSessionBtn'),
 	historyBtn: document.getElementById('historyBtn'),
+	changesBtn: document.getElementById('changesBtn'),
+	usageBtn: document.getElementById('usageBtn'),
+	infoPanel: document.getElementById('infoPanel'),
+	infoTitle: document.getElementById('infoTitle'),
+	infoBody: document.getElementById('infoBody'),
+	infoCloseBtn: document.getElementById('infoCloseBtn'),
+	micBtn: /** @type {HTMLButtonElement} */ (document.getElementById('micBtn')),
 	historyCloseBtn: document.getElementById('historyCloseBtn'),
 	historyPanel: document.getElementById('historyPanel'),
 	historyList: document.getElementById('historyList'),
@@ -282,6 +289,20 @@ function saveLocalWork(key) {
 	try { localStorage.setItem(`openvsRelay.${key}.${roomId}`, JSON.stringify(key === 'drafts' ? drafts : outbox)); } catch { /* storage full or unavailable: the text is still on screen */ }
 }
 
+/**
+ * The chat whose transcript this device asked for on (re)connecting and has not received yet.
+ * Its outbox waits for that transcript; see {@link flushOutbox}. Cleared when the transcript
+ * arrives, or after a few seconds if it never does.
+ */
+let catchingUp = '';
+let catchingUpTimer = 0;
+
+function beginCatchUp(sessionId) {
+	clearTimeout(catchingUpTimer);
+	catchingUp = sessionId || '';
+	if (catchingUp) { catchingUpTimer = setTimeout(() => { catchingUp = ''; flushOutbox(); }, 6000); }
+}
+
 /** Remembers (or, when empty, forgets) what is in the composer for a chat. */
 function saveDraft(sessionId, text) {
 	if (!sessionId) { return; }
@@ -313,6 +334,9 @@ function addToOutbox(sessionId, text) {
  * sent anywhere sensible; it is dropped, and the chat on screen is told what was dropped.
  */
 function flushOutbox() {
+	// Only over a live, secured link to a desktop that is there. A send into anything less is
+	// reported as sent and then dropped by the desktop.
+	if (!ws || ws.readyState !== WebSocket.OPEN || !e2eKeys || !welcomeSeen || hostOnline === false) { return; }
 	let changed = false;
 	for (const [sessionId, list] of Object.entries(outbox)) {
 		const session = sessions.find(s => s.id === sessionId);
@@ -326,6 +350,9 @@ function flushOutbox() {
 			continue;
 		}
 		if (session.streaming || !list.length) { continue; }
+		// The chat on screen is being caught up after a reconnect: its transcript is on the way
+		// and replaces what is shown, so a message sent ahead of it would vanish from view.
+		if (sessionId === catchingUp) { continue; }
 		if (dispatchSend(session, list[0])) {
 			list.shift();
 			if (!list.length) { delete outbox[sessionId]; }
@@ -337,6 +364,11 @@ function flushOutbox() {
 		renderQueueChips();
 	}
 }
+
+// The chat list and the caught-up transcript arriving are what normally send the outbox. If
+// neither does it (the desktop was closed when the link came back, say), nothing else would
+// retry until the next run finished, so a waiting message is retried quietly while there is one.
+setInterval(() => { if (Object.keys(outbox).length && sessions.length) { flushOutbox(); } }, 2500);
 
 function loadDevice(room) {
 	try {
@@ -931,7 +963,11 @@ function renderUndoBar(session) {
 			button.textContent = 'Undoing…';
 		}
 	});
-	bar.append(label, button);
+	const review = document.createElement('button');
+	review.type = 'button';
+	review.textContent = 'Changes';
+	review.addEventListener('click', openChanges);
+	bar.append(label, button, review);
 	els.messages.appendChild(bar);
 }
 
@@ -1286,6 +1322,171 @@ function renderHistoryList() {
 	}
 }
 
+// ---- Changes and Usage ----------------------------------------------------------------------
+// Two read-only views the desktop has and the phone did not: what the working tree changed
+// (so an approved write can be looked at from here), and the token counts by model. Each is
+// asked for when opened; the desktop answers this device alone. Everything is drawn with
+// textContent: a diff is file content and is shown as text, never as markup.
+
+/** Which view the info panel is waiting on an answer for, so a late answer is not shown in the wrong one. */
+let infoView = '';
+
+function openInfoPanel(view, title) {
+	if (!els.infoPanel || !els.infoBody || !els.infoTitle) { return; }
+	infoView = view;
+	els.infoTitle.textContent = title;
+	els.infoBody.replaceChildren(el('p', 'info-note', 'Asking the desktop…'));
+	els.infoPanel.hidden = false;
+	closeHistoryPanel();
+}
+
+function closeInfoPanel() {
+	if (els.infoPanel) { els.infoPanel.hidden = true; }
+	infoView = '';
+}
+
+function openChanges() {
+	const session = activeSession();
+	openInfoPanel('changes', 'Changes');
+	if (!sendApp({ type: 'changesRequest', sessionId: session ? session.id : '' })) {
+		els.infoBody.replaceChildren(el('p', 'info-note', 'Not connected. Try again once reconnected.'));
+	}
+}
+
+function openUsage() {
+	openInfoPanel('usage', 'Usage');
+	if (!sendApp({ type: 'usageRequest' })) {
+		els.infoBody.replaceChildren(el('p', 'info-note', 'Not connected. Try again once reconnected.'));
+	}
+}
+
+/** Draws a `changes` answer: each file's name and its diff, added and removed lines tinted. */
+function renderChanges(msg) {
+	if (infoView !== 'changes' || !els.infoBody) { return; }
+	els.infoBody.replaceChildren();
+	const files = Array.isArray(msg.files) ? msg.files : [];
+	for (const file of files) {
+		const block = el('div', 'change');
+		block.appendChild(el('p', 'change-file', String(file && file.path || '')));
+		const pre = el('pre', 'change-diff');
+		for (const line of String(file && file.text || '').split('\n')) {
+			const kind = /^\+(?!\+\+ )/.test(line) ? 'add' : /^-(?!-- )/.test(line) ? 'del' : /^@@/.test(line) ? 'hunk' : '';
+			pre.appendChild(el('span', kind, line || ' '));
+		}
+		block.appendChild(pre);
+		els.infoBody.appendChild(block);
+	}
+	if (typeof msg.note === 'string' && msg.note) { els.infoBody.appendChild(el('p', 'info-note', msg.note)); }
+	if (files.length) { els.infoBody.appendChild(el('p', 'info-note', 'Read-only. Long files are cut short and protected files are not shown; stage and commit on the desktop.')); }
+}
+
+/** 1234567 -> "1.23M", 45678 -> "45.7k", 912 -> "912". */
+function compactCount(n) {
+	const v = Number(n) || 0;
+	if (v >= 1e6) { return (v / 1e6).toFixed(2) + 'M'; }
+	if (v >= 1e4) { return (v / 1e3).toFixed(1) + 'k'; }
+	return String(Math.round(v));
+}
+
+/** Draws a `usageReport` answer: a period switch, four totals, a row per provider and model. */
+function renderUsage(report, period = 'week') {
+	if (infoView !== 'usage' || !els.infoBody) { return; }
+	els.infoBody.replaceChildren();
+	const tabs = el('div', 'usage-periods');
+	for (const [key, label] of [['today', 'Today'], ['week', '7 days'], ['month', '30 days']]) {
+		const b = el('button', '', label);
+		b.type = 'button';
+		b.setAttribute('aria-selected', String(key === period));
+		b.addEventListener('click', () => renderUsage(report, key));
+		tabs.appendChild(b);
+	}
+	els.infoBody.appendChild(tabs);
+	const summary = report && typeof report === 'object' ? report[period] : undefined;
+	if (!summary || !summary.requests) {
+		els.infoBody.appendChild(el('p', 'info-note', 'No usage recorded for this period yet.'));
+		return;
+	}
+	const totals = el('div', 'usage-totals');
+	const hit = typeof summary.cacheHitRate === 'number' ? Math.round(summary.cacheHitRate * 100) + '%' : 'n/a';
+	for (const [value, label] of [[compactCount(summary.input + summary.cacheRead + summary.cacheWrite), 'Prompt tokens'], [compactCount(summary.output), 'Output tokens'], [hit, 'Served from cache'], [String(summary.requests), 'Requests']]) {
+		const cell = el('div');
+		cell.appendChild(el('b', '', value));
+		cell.appendChild(el('span', '', label));
+		totals.appendChild(cell);
+	}
+	els.infoBody.appendChild(totals);
+	const rows = el('div');
+	for (const r of Array.isArray(summary.rows) ? summary.rows : []) {
+		const row = el('div', 'usage-row');
+		row.appendChild(el('span', 'usage-model', `${r.provider} / ${r.model}`));
+		row.appendChild(el('span', 'usage-count', `${compactCount(r.input + r.cacheRead + r.cacheWrite)} in, ${compactCount(r.output)} out`));
+		rows.appendChild(row);
+	}
+	els.infoBody.appendChild(rows);
+	els.infoBody.appendChild(el('p', 'info-note', 'Token counts as each provider reported them to the desktop. Nothing is estimated.'));
+}
+
+// ---- Dictation ----------------------------------------------------------------------------------
+// Speaks into the composer using the browser's own speech recognition, where it has one. The
+// audio never goes through Stormcoder, the relay or the desktop; where it does go is up to the
+// browser (some send it to their vendor's service), which is said once, before the first use.
+// What is heard lands in the composer for review: nothing is sent until Send is tapped.
+
+const SpeechRecognitionImpl = /** @type {any} */ (window).SpeechRecognition || /** @type {any} */ (window).webkitSpeechRecognition;
+const DICTATION_NOTICE_KEY = 'openvsRelay.dictationNoticeShown';
+/** @type {any} the recognition in progress, if any */
+let dictating = null;
+
+function setDictating(on) {
+	if (!els.micBtn) { return; }
+	els.micBtn.setAttribute('aria-pressed', String(on));
+	els.micBtn.setAttribute('aria-label', on ? 'Stop dictating' : 'Dictate');
+}
+
+function toggleDictation() {
+	const session = activeSession();
+	if (dictating) { try { dictating.stop(); } catch { /* already stopping */ } return; }
+	if (!SpeechRecognitionImpl || !session || !els.composer) { return; }
+	let told = false;
+	try { told = localStorage.getItem(DICTATION_NOTICE_KEY) === '1'; } catch { /* treat as not told */ }
+	if (!told) {
+		// Said once, and the first tap only says it: the next tap starts listening.
+		note(session, 'info', 'Dictation uses this browser\'s speech recognition. Your voice is handled by the browser, which may send it to its maker\'s service; it does not pass through Stormcoder or your desktop. Tap Dictate again to start.');
+		try { localStorage.setItem(DICTATION_NOTICE_KEY, '1'); } catch { /* it will be said again next time */ }
+		return;
+	}
+	const recognition = new SpeechRecognitionImpl();
+	recognition.lang = navigator.language || 'en-US';
+	recognition.interimResults = false;
+	recognition.continuous = false;
+	recognition.onresult = event => {
+		let heard = '';
+		for (let i = event.resultIndex; i < event.results.length; i++) {
+			if (event.results[i].isFinal) { heard += event.results[i][0].transcript; }
+		}
+		heard = heard.trim();
+		if (!heard || !els.composer) { return; }
+		const before = els.composer.value;
+		els.composer.value = before + (before && !/\s$/.test(before) ? ' ' : '') + heard;
+		saveDraft(activeSessionId, els.composer.value);
+		autosizeComposer();
+	};
+	recognition.onerror = event => {
+		const why = event && event.error;
+		if (why === 'not-allowed' || why === 'service-not-allowed') { note(session, 'error', 'The browser did not allow the microphone. Allow it for this site to dictate.'); }
+		else if (why !== 'no-speech' && why !== 'aborted') { note(session, 'error', 'Dictation stopped: the browser could not recognise speech just now.'); }
+	};
+	recognition.onend = () => { dictating = null; setDictating(false); };
+	try {
+		recognition.start();
+		dictating = recognition;
+		setDictating(true);
+	} catch {
+		dictating = null;
+		setDictating(false);
+	}
+}
+
 function openHistoryPanel() {
 	if (!els.historyPanel) { return; }
 	renderHistoryList();
@@ -1537,8 +1738,30 @@ function setStatus(text, className, scope) {
  * @param {string} text
  * @param {number} [imageCount] images the host merges into this turn (an ordinary send only)
  */
+/** How long a turn this device just sent is kept on screen without the desktop's copy of it. */
+const UNCONFIRMED_MS = 20_000;
+
+/**
+ * Puts back the turns this device sent that a transcript does not hold yet. The desktop never
+ * echoes a turn to the device that sent it, and a transcript asked for a moment before the send
+ * (a reconnect's catch-up) is built without it: applied as it is, it would take the message
+ * off the screen while its reply streams in underneath. A turn stays "unconfirmed" until a
+ * transcript does hold it (anywhere in the window: a run adds many entries after the turn that
+ * started it), its run has finished, or for {@link UNCONFIRMED_MS} at most.
+ * @param {any} session
+ * @param {any[]} page the transcript window just received
+ * @returns {any[]} `page`, with the still-unconfirmed turns after it
+ */
+function withUnconfirmed(session, page) {
+	const now = Date.now();
+	session.unconfirmed = (session.unconfirmed || []).filter(u => now - u.at < UNCONFIRMED_MS && !page.some(m => m && m.role === 'user' && m.content === u.entry.content));
+	return session.unconfirmed.length ? page.concat(session.unconfirmed.map(u => u.entry)) : page;
+}
+
 function echoUserTurn(session, text, imageCount = 0) {
-	pushEntry(session, { role: 'user', content: text, imageCount });
+	const entry = { role: 'user', content: text, imageCount };
+	(session.unconfirmed = session.unconfirmed || []).push({ at: Date.now(), entry });
+	pushEntry(session, entry);
 	if (session.id === activeSessionId) {
 		// Sending (or steering) a turn always lands the view on it, the same as every native
 		// chat app — even if the user had scrolled up to reread something first.
@@ -1971,6 +2194,7 @@ function handleAppMessage(msg) {
 					gap: !!prev.gap,
 					from: prev.from ?? 0,
 					messages: prev.messages || [],
+					unconfirmed: prev.unconfirmed || [],
 				};
 			});
 			// Drop pending edits for sessions this snapshot no longer lists (closed elsewhere).
@@ -2018,13 +2242,18 @@ function handleAppMessage(msg) {
 				break;
 			}
 			s.loadingEarlier = false;
-			s.messages = page;
+			s.messages = withUnconfirmed(s, page);
 			s.from = from;
 			// The authoritative transcript supersedes this device's live tool rows.
 			for (const key of [...liveTools.keys()]) {
 				if (key.startsWith(`${s.id}:`)) { liveTools.delete(key); }
 			}
 			if (s.id === activeSessionId) { renderAll(); }
+			// This chat is caught up: what waited for it while offline can go out now.
+			if (s.id === catchingUp) {
+				beginCatchUp('');
+				flushOutbox();
+			}
 			break;
 		}
 		case 'runStart': {
@@ -2147,6 +2376,8 @@ function handleAppMessage(msg) {
 					if (s.id === activeSessionId) { note(s, 'info', 'Not connected — your queued message will send once reconnected.'); }
 				}
 			}
+			// The run is over, so the desktop's transcript holds the turn that started it.
+			s.unconfirmed = [];
 			// And the next message that waited while this device was offline, if any.
 			flushOutbox();
 			renderTabs();
@@ -2156,6 +2387,12 @@ function handleAppMessage(msg) {
 			}
 			break;
 		}
+		case 'changes':
+			renderChanges(msg);
+			break;
+		case 'usageReport':
+			renderUsage(msg.report);
+			break;
 		case 'error': {
 			const s = msg.sessionId ? sessions.find(x => x.id === msg.sessionId) : activeSession();
 			note(s, 'error', String(msg.message || 'Something went wrong.'));
@@ -2311,6 +2548,8 @@ function handleAppMessage(msg) {
  */
 function bootstrapApp() {
 	sendApp({ type: 'ready' });
+	// The chat on screen is about to be replaced by the desktop's copy of it.
+	beginCatchUp(activeSessionId);
 	resyncOwnSession();
 	sendApp({ type: 'listSkills' });
 	sendApp({ type: 'listMcp' });
@@ -2706,6 +2945,13 @@ if (els.stopBtn) { els.stopBtn.addEventListener('click', stopRun); }
 if (els.newSessionBtn) { els.newSessionBtn.addEventListener('click', createSession); }
 if (els.historyBtn) { els.historyBtn.addEventListener('click', openHistoryPanel); }
 if (els.historyCloseBtn) { els.historyCloseBtn.addEventListener('click', closeHistoryPanel); }
+if (els.changesBtn) { els.changesBtn.addEventListener('click', openChanges); }
+if (els.usageBtn) { els.usageBtn.addEventListener('click', openUsage); }
+if (els.infoCloseBtn) { els.infoCloseBtn.addEventListener('click', closeInfoPanel); }
+if (els.micBtn && SpeechRecognitionImpl) {
+	els.micBtn.hidden = false;
+	els.micBtn.addEventListener('click', toggleDictation);
+}
 if (els.composer) {
 	els.composer.addEventListener('input', () => { updateSlashMenu(); autosizeComposer(); saveDraft(activeSessionId, els.composer.value); });
 	// Enter sends only where there's a real keyboard and pointer (a tablet with a keyboard, a

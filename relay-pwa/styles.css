@@ -1184,3 +1184,44 @@ h5.md-heading, h6.md-heading { font-size: 14px; color: var(--text-2); }
 	border: 1px solid var(--border);
 	border-radius: 8px;
 }
+
+/* Changes and Usage: two read-only views opened from the History panel. */
+.history-views { display: flex; gap: 8px; padding: 0 16px 10px; }
+.view-btn {
+	flex: 1; min-height: 40px;
+	font: inherit; font-size: var(--fs-small); font-weight: 600;
+	color: var(--text); background: transparent;
+	border: 1px solid var(--border-strong); border-radius: 10px;
+}
+.view-btn:active { background: var(--active-bg); }
+.info-body { gap: 14px; }
+.info-note { margin: 0; color: var(--muted); font-size: var(--fs-small); }
+.change-file { margin: 0 0 4px; font-size: var(--fs-small); font-weight: 600; overflow-wrap: anywhere; }
+.change-diff {
+	margin: 0; padding: 8px 0;
+	font-family: var(--mono); font-size: 12px; line-height: 1.45;
+	white-space: pre; overflow-x: auto;
+	border: 1px solid var(--border); border-radius: 8px;
+}
+.change-diff span { display: block; padding: 0 10px; min-width: max-content; }
+.change-diff .add { background: var(--diff-add-bg, rgba(64, 160, 96, .16)); }
+.change-diff .del { background: var(--diff-del-bg, rgba(208, 80, 80, .16)); }
+.change-diff .hunk { color: var(--muted); }
+.usage-periods { display: flex; gap: 6px; }
+.usage-periods button {
+	flex: 1; min-height: 36px;
+	font: inherit; font-size: var(--fs-small);
+	color: var(--muted); background: transparent;
+	border: 1px solid var(--border); border-radius: 10px;
+}
+.usage-periods button[aria-selected="true"] { color: var(--text); border-color: var(--border-strong); background: var(--active-bg); }
+.usage-totals { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.usage-totals div { display: flex; flex-direction: column; }
+.usage-totals b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.usage-totals span { color: var(--muted); font-size: var(--fs-small); }
+.usage-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); font-size: var(--fs-small); }
+.usage-row .usage-model { overflow-wrap: anywhere; }
+.usage-row .usage-count { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* The Dictate button while it is listening. */
+#micBtn[aria-pressed="true"] { color: var(--pill-negative-ink); }

@@ -3985,6 +3985,11 @@
 				els.input.focus();
 				break;
 			}
+			case 'changes':
+			case 'usageReport':
+				// Answers to a paired phone's request, sent to the device that asked. This panel
+				// never asks: the desktop has its own Changes view and Usage sheet.
+				break;
 			case 'dictation':
 				renderMic('idle');
 				if (typeof msg.text === 'string' && msg.text) {

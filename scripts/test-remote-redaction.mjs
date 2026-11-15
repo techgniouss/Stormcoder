@@ -168,4 +168,22 @@ assert.equal(
 	assert.ok(!JSON.stringify(out).includes('someone'), 'no part of the path is sent');
 }
 
+// A `changes` reply is file content: credential shapes are scrubbed from every file, each file
+// is bounded, and so is the whole reply.
+{
+	const key = 'sk-' + 'a'.repeat(40);
+	const out = redactForRemote({ type: 'changes', sessionId: 's', note: '', files: [
+		{ path: 'config.js', text: `+const apiKey = "${key}";` },
+		{ path: 'big.txt', text: '+x'.repeat(40_000) },
+		...Array.from({ length: 12 }, (_, n) => ({ path: `f${n}.txt`, text: '+y'.repeat(4_000) })),
+		{ path: 7, text: null },
+	] });
+	assert.ok(!JSON.stringify(out).includes(key), 'a key in a diff is not sent');
+	assert.equal(out.files.length, 15, 'every file is still named');
+	assert.ok(Buffer.byteLength(out.files[1].text) < 9_000, 'one file is bounded');
+	const total = out.files.reduce((n, f) => n + Buffer.byteLength(f.text), 0);
+	assert.ok(total < 44 * 1024, `the whole reply is bounded (${total} bytes)`);
+	assert.deepEqual(out.files.at(-1), { path: '', text: '' }, 'a malformed entry becomes an empty one');
+}
+
 console.log('test-remote-redaction: all assertions passed');

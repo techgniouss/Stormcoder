@@ -146,6 +146,9 @@ function scrubValue(value: unknown, depth = 0): unknown {
 	return out;
 }
 
+/** The most a `changes` reply's file texts may add up to, in bytes. */
+const REMOTE_CHANGES_BYTES = 40 * 1024;
+
 /** Truncates `text` to at most `maxChars` characters, marking the cut with an ellipsis. Chars, not bytes — push notification bodies are short by nature, so the byte-precision `truncateUtf8` below uses for large tool output would be overkill here. */
 function truncateForPush(text: string, maxChars: number): string {
 	return text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text;
@@ -280,6 +283,22 @@ export function redactForRemote(message: Record<string, unknown> & { type: strin
 	}
 	if (message.type === 'error' && typeof clone.message === 'string') {
 		clone.message = scrubValue(clone.message);
+	}
+	// A diff is file content: every file's text is scrubbed of credential shapes and bounded,
+	// and the whole reply is bounded, so a large change cannot become a large upload.
+	if (message.type === 'changes' && Array.isArray(clone.files)) {
+		let budget = REMOTE_CHANGES_BYTES;
+		clone.files = clone.files.map(entry => {
+			const file = (entry ?? {}) as { path?: unknown; text?: unknown };
+			const name = scrubSecrets(typeof file.path === 'string' ? file.path : '').slice(0, 300);
+			let text = scrubSecrets(typeof file.text === 'string' ? file.text : '');
+			const room = Math.max(0, Math.min(budget, REMOTE_TRUNCATE_BYTES));
+			if (Buffer.byteLength(text, 'utf8') > room) {
+				text = truncateUtf8(text, room) + TRUNCATION_SUFFIX;
+			}
+			budget -= Buffer.byteLength(text, 'utf8');
+			return { path: name, text };
+		});
 	}
 	// A worktree chat's folder is a path on the desktop (it names the user's account folder). A
 	// phone is told that the chat has a worktree and which branch, never where it is.

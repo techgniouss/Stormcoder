@@ -64,6 +64,7 @@
 				<button id="attachImageBtn" class="tool-btn" type="button" aria-label="Attach image"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15.5 8.5h.01"/></svg><span class="tool-label">Image</span></button>
 				<button id="attachActiveBtn" class="tool-btn" type="button" aria-label="Attach the open file"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6v18h12V7l-4-4zM14 3v4h4M10 12l-2 2 2 2M14 12l2 2-2 2"/></svg><span class="tool-label">File</span></button>
 				<button id="enhanceBtn" class="tool-btn" type="button" aria-label="Enhance prompt"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM18.5 15l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z"/></svg><span class="tool-label">Improve</span></button>
+				<button id="micBtn" class="tool-btn" type="button" aria-label="Dictate" aria-pressed="false" hidden><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span class="tool-label">Dictate</span></button>
 				<span class="spacer"></span>
 				<button id="stopBtn" class="round-btn stop-btn" type="button" aria-label="Stop" hidden><svg class="icon icon-fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7z"/></svg></button>
 				<button id="sendBtn" class="round-btn send-btn" type="button" aria-label="Send"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/></svg></button>
@@ -86,10 +87,22 @@
 	</footer>
 </div>
 
+<div id="infoPanel" class="history-panel" role="dialog" aria-modal="true" aria-labelledby="infoTitle" hidden>
+	<div class="history-header">
+		<h2 id="infoTitle" class="history-title"></h2>
+		<button id="infoCloseBtn" class="icon-btn" type="button" aria-label="Close"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+	</div>
+	<div id="infoBody" class="history-list info-body"></div>
+</div>
+
 <div id="historyPanel" class="history-panel" role="dialog" aria-modal="true" aria-labelledby="historyTitle" hidden>
 	<div class="history-header">
 		<h2 id="historyTitle" class="history-title">History</h2>
 		<button id="historyCloseBtn" class="icon-btn" type="button" aria-label="Close history"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+	</div>
+	<div class="history-views">
+		<button id="changesBtn" class="view-btn" type="button">Changes</button>
+		<button id="usageBtn" class="view-btn" type="button">Usage</button>
 	</div>
 	<div id="historyList" class="history-list"></div>
 	<div class="history-footer">
