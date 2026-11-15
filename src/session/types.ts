@@ -141,6 +141,12 @@ export interface SessionState {
 	provider?: string;
 	model?: string;
 	/**
+	 * This chat's own git worktree, when it was started in one: the agent's tools are confined
+	 * to `path` instead of the project folder for every run of this chat. Absent for an
+	 * ordinary chat. `path` is a local detail and is never sent to a remote client.
+	 */
+	worktree?: SessionWorktree;
+	/**
 	 * Images assembled from a remote client's chunked `attachImage` upload (Phase 6c),
 	 * awaiting the session's next `send`. The host, not any one client, owns this queue — the
 	 * point of the Phase 2 ownership flip was moving state like this off the client, and a
@@ -152,6 +158,12 @@ export interface SessionState {
 	 * {@link SessionSummary} from, even though the type itself does not forbid it.
 	 */
 	pendingImages?: TranscriptImage[];
+}
+
+/** Where a worktree chat works: the folder, and the branch checked out in it. */
+export interface SessionWorktree {
+	readonly path: string;
+	readonly branch: string;
 }
 
 /**

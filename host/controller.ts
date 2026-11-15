@@ -352,9 +352,31 @@ export class Controller {
 	 * repository needs a trusted one. Failures come back as `{ ok: false, kind, error }` so the
 	 * view can show git's own words and choose what to offer next.
 	 */
+	/**
+	 * The folder git calls apply to: the active chat's worktree when it has one, the project
+	 * otherwise. The engine names the folder, so it is checked here: only a directory inside
+	 * the app's own worktrees root is accepted in the project's place.
+	 */
+	private async gitFolder(project: string): Promise<string> {
+		let named: unknown;
+		try {
+			named = await runCommand('stormcoder.activeFolder');
+		} catch {
+			return project;
+		}
+		if (typeof named !== 'string' || !named) {
+			return project;
+		}
+		const root = path.resolve(this.opts.userDataDir, 'worktrees');
+		const rel = path.relative(root, path.resolve(named));
+		const inside = rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
+		return inside ? path.resolve(named) : project;
+	}
+
 	private async gitCall(op: string, args: unknown[]): Promise<{ ok: true; value: unknown } | { ok: false; error: string; kind: string }> {
-		const folder = this.state.folder;
-		const trusted = !!folder && this.state.trusted.includes(folder);
+		const project = this.state.folder;
+		const trusted = !!project && this.state.trusted.includes(project);
+		const folder = project ? await this.gitFolder(project) : undefined;
 		const list = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
 		try {
 			if (!folder) {

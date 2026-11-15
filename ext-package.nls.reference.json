@@ -5,6 +5,7 @@
   "views.chat.name": "Stormcoder",
   "commands.focus": "Focus Stormcoder",
   "commands.newChat": "New Chat",
+  "commands.newWorktreeChat": "New Chat in a Worktree",
   "commands.configureProvider": "Configure Provider / API Key",
   "commands.engine.choose": "Choose Agent Engine (Built-in or Claude Code)",
   "commands.engine.installClaude": "Install Claude Code Engine",

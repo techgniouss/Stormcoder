@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { archiveSession, mergeHistory as mergeHistoryList } from './history';
-import { ChatMode, HistoryEntry, SessionDeps, SessionState, SessionTodo, TranscriptEntry, TranscriptImage, TranscriptWindow } from './types';
+import { ChatMode, HistoryEntry, SessionDeps, SessionState, SessionTodo, SessionWorktree, TranscriptEntry, TranscriptImage, TranscriptWindow } from './types';
 
 /** {@link SessionStore.windowedMessages}'s default tail length when a caller passes no options. */
 export const DEFAULT_TAIL_TURNS = 30;
@@ -531,6 +531,14 @@ export class SessionStore {
 		const session = this.getSession(sessionId);
 		if (session) {
 			session.queue = queue;
+		}
+	}
+
+	/** Records (or, with `undefined`, forgets) the git worktree a chat works in. */
+	setWorktree(sessionId: string, worktree: SessionWorktree | undefined): void {
+		const session = this.getSession(sessionId);
+		if (session) {
+			session.worktree = worktree;
 		}
 	}
 

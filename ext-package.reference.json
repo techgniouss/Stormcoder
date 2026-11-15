@@ -80,6 +80,11 @@
         "icon": "$(add)"
       },
       {
+        "command": "stormcoder.newWorktreeChat",
+        "title": "%commands.newWorktreeChat%",
+        "category": "Stormcoder"
+      },
+      {
         "command": "stormcoder.configureProvider",
         "title": "%commands.configureProvider%",
         "category": "Stormcoder",

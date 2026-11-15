@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { projectFolders } from './projectFolders';
 import * as vscode from 'vscode';
 
 /** A named instruction pack that can be activated to steer the assistant for a task. */
@@ -85,7 +86,7 @@ export class SkillRegistry {
 			}
 		}
 
-		const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+		const root = projectFolders()?.[0]?.uri;
 		if (root) {
 			for (const dir of SKILLS_DIRS) {
 				for (const skill of await this.readSkillFiles(root, dir)) {

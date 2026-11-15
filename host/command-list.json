@@ -1,5 +1,10 @@
 [
 	{
+		"id": "stormcoder.newWorktreeChat",
+		"title": "New Chat in a Worktree",
+		"group": "Command"
+	},
+	{
 		"id": "stormcoder.configureProvider",
 		"title": "Configure Provider / API Key",
 		"group": "Command"

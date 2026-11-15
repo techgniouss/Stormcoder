@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { projectFolders } from './projectFolders';
 import * as vscode from 'vscode';
 
 const MAX_RULES_CHARS = 12_000;
@@ -32,7 +33,9 @@ export class RulesProvider {
 		// named in the heading when there is more than one, so the model can tell whose
 		// rules it is reading. (`detectVerificationCommands` already probes all folders;
 		// this brings rule discovery in line with it.)
-		const folders = vscode.workspace.workspaceFolders ?? [];
+		// The project's rules, also for a chat working in its own worktree: `.stormcoder/` is
+		// not checked in, so a worktree has no copy of it.
+		const folders = projectFolders() ?? [];
 		for (const folder of folders) {
 			for (const name of fileNames) {
 				if (!isInsideFolder(name)) {

@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { projectFolders } from '../projectFolders';
 import { createHash } from 'crypto';
 import * as vscode from 'vscode';
 import { ToolSpec } from '../providers/types';
@@ -379,7 +380,7 @@ export class McpManager implements McpToolset, vscode.Disposable {
 				command: cfg.command!,
 				args: cfg.args,
 				env: mapValues(cfg.env),
-				cwd: cfg.cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+				cwd: cfg.cwd ?? projectFolders()?.[0]?.uri.fsPath,
 			} satisfies McpStdioConfig);
 		this.connecting.add(client);
 		try {
@@ -569,7 +570,7 @@ export class McpManager implements McpToolset, vscode.Disposable {
 			problems.push('stormcoder.mcp.servers: ignored (it must be an object keyed by server id).');
 		}
 
-		const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+		const root = projectFolders()?.[0]?.uri;
 		if (root) {
 			for (const file of PROJECT_FILES) {
 				const read = await this.tryReadJson(vscode.Uri.joinPath(root, file));

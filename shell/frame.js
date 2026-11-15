@@ -269,6 +269,7 @@
 		copy: COPY_ICON, plus: 'M8 3v10M3 8h10', close: 'M4 4l8 8M12 4l-8 8', all: 'M3 3h10v10H3zM5.5 6h5M5.5 8h5M5.5 10h3',
 		quote: 'M3.5 3.5v9M6.5 5h6M6.5 8h6M6.5 11h4',
 		edit: 'M3 13l1-3.5 7-7 2.5 2.5-7 7zM9.5 4l2.5 2.5',
+		branch: 'M5 2.5v7M5 12.5a1.5 1.5 0 1 0 0 .01zM11 3.5a1.5 1.5 0 1 0 0 .01zM11 5v1.5a2.5 2.5 0 0 1-2.5 2.5H5',
 	};
 
 	/**
@@ -297,12 +298,13 @@
 		const selection = String(window.getSelection() || '').trim();
 		/** @type {any[]} */
 		const items = [];
-		const tab = /** @type {HTMLElement | null} */ (t.closest('.chat-tab'));
+		const tab = /** @type {HTMLElement | null} */ (t.closest('.chat-tab, .tab-add'));
 		const pre = t.closest('pre');
 		const msg = t.closest('.message');
 		if (tab) {
 			items.push({ label: 'New chat', icon: CTX.plus, onSelect: () => { const add = document.querySelector('.tab-add'); if (add) { /** @type {HTMLElement} */ (add).click(); } } });
-			items.push({ label: 'Close chat', icon: CTX.close, onSelect: () => { const x = tab.querySelector('.tab-close'); if (x) { /** @type {HTMLElement} */ (x).click(); } } });
+			items.push({ label: 'New chat in a worktree', icon: CTX.branch, onSelect: () => window.dispatchEvent(new CustomEvent('stormcoder-new-worktree-chat')) });
+			if (tab.classList.contains('chat-tab')) { items.push({ label: 'Close chat', icon: CTX.close, onSelect: () => { const x = tab.querySelector('.tab-close'); if (x) { /** @type {HTMLElement} */ (x).click(); } } }); }
 		} else {
 			if (selection) { items.push({ label: 'Copy selection', icon: CTX.copy, shortcut: ['Ctrl', 'C'], onSelect: () => { void copyText(selection); } }); }
 			if (selection && msg && msg.classList.contains('assistant')) {

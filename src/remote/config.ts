@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { projectFolders } from '../projectFolders';
 import { createHash, createHmac, randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 
@@ -57,7 +58,7 @@ export function getIdleDisableHours(): number {
  * remote client could influence.
  */
 export function getWorkspaceKey(): string | undefined {
-	const identity = vscode.workspace.workspaceFile?.toString() ?? vscode.workspace.workspaceFolders?.[0]?.uri.toString();
+	const identity = vscode.workspace.workspaceFile?.toString() ?? projectFolders()?.[0]?.uri.toString();
 	if (!identity) {
 		return undefined;
 	}

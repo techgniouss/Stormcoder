@@ -41,7 +41,10 @@ import { ModelCatalog } from './providers/modelCatalog';
 import { ChatImage, ChatMessage, ChatProvider, entrySupportsTools, isAbortError, modelSupportsVision, streamChatWithContinuation } from './providers/types';
 import { defaultChromeProfilePath } from './providers/webCookie/chromeCookies';
 import { AttachImageChunk, UploadAssembler, readPickedImages, sanitizeInlineImages } from './remote/attachments';
-import { DiffSection, changedSections, renderSections, workingTreeSections } from './git/repo';
+import { DiffSection, addWorktree, changedSections, removeWorktree, renderSections, workingTreeSections, worktreeBranchName, worktreeDirty } from './git/repo';
+import { projectFolders } from './projectFolders';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
 import { QueueDrainGate } from './session/queueDrain';
 import { appendRules, COMPACT_RULES_CHARS, RulesProvider } from './rules';
 
@@ -297,6 +300,8 @@ interface WebviewToHost {
 	editIndex?: number;
 	/** `createSession` only: `false` opens the chat without making it the host's active one (a phone opening its own chat). */
 	activate?: boolean;
+	/** `createSession` only, desktop only: start the chat in its own git worktree. */
+	worktree?: boolean;
 	/** `setRemoteEnabled` only: the Settings switch's new position. */
 	enabled?: boolean;
 	/** `listModels` only: bypass the cached catalog and fetch again (the ⟳ button). */
@@ -743,7 +748,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
 	/** The first workspace folder, where project memory lives. */
 	private memoryRoot(): vscode.Uri | undefined {
-		return vscode.workspace.workspaceFolders?.[0]?.uri;
+		return projectFolders()?.[0]?.uri;
 	}
 
 	/** The project's memory store, when memory is on and the folder is one the user trusts (a cloned repository's memory file is text anyone could have written). */
@@ -1099,6 +1104,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			mode: session.mode,
 			provider: session.provider,
 			model: session.model,
+			worktree: session.worktree,
 		};
 	}
 
@@ -1500,7 +1506,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 	 * run may be about to write the same files again. An earlier run can be undone after a
 	 * later one: any file the later run changed again is left alone, and the report says so.
 	 */
-	private async undoLastRun(sessionId: string, origin: string, runId?: string): Promise<void> {
+	private undoLastRun(sessionId: string, origin: string, runId?: string): Promise<void> {
+		// Restoring files resolves their paths against the workspace, which for a worktree
+		// chat has to be its worktree, exactly as it was when the run wrote them.
+		return this.inSessionFolder(sessionId, runId, () => this.restoreLastRun(sessionId, origin, runId));
+	}
+
+	private async restoreLastRun(sessionId: string, origin: string, runId?: string): Promise<void> {
 		const reply = (message: string) => this.bus.postTo(origin, { type: 'info', sessionId, message });
 		if (this.activeRequests.has(sessionId)) {
 			reply('Undo: stop the running request first — it may still be changing files.');
@@ -1641,11 +1653,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				}
 				break;
 			case 'send':
-				if (message.editIndex !== undefined) {
-					await this.handleEditPrompt(message, origin);
-				} else {
-					await this.handleSend(message, origin);
-				}
+				await this.inSessionFolder(message.sessionId, message.runId, () => message.editIndex !== undefined
+					? this.handleEditPrompt(message, origin)
+					: this.handleSend(message, origin));
 				break;
 			case 'promptResponse':
 				this.resolvePrompt(message, origin);
@@ -1675,6 +1685,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				}
 				break;
 			case 'createSession': {
+				if (message.worktree === true) {
+					await this.createWorktreeSession(message.mode ?? 'ask', origin);
+					break;
+				}
 				// `activate: false` is how a phone opens a chat without switching the desktop
 				// away from the one it's in — each device keeps its own tab (see pwa/app.js).
 				const created = this.sessionStore.createSession(message.activate !== false, message.mode ?? 'ask');
@@ -1699,7 +1713,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				if (!message.sessionId) {
 					break;
 				}
+				const closing = this.sessionStore.getSession(message.sessionId);
+				const release = await this.worktreeOnClose(closing, origin);
+				if (release === 'cancel') {
+					break;
+				}
 				const result = this.sessionStore.closeSession(message.sessionId);
+				if (release === 'remove' && closing?.worktree) {
+					this.removeSessionWorktree(closing.worktree.path);
+				}
 				this.checkpoints.delete(message.sessionId);
 				this.queueDrains.sessionClosed(message.sessionId);
 				if (result.abortSessionId) {
@@ -3333,6 +3355,125 @@ ${context.content}` }
 		await this.handleSend({ ...message, editIndex: undefined }, origin);
 	}
 
+	// ---- Per-chat worktrees --------------------------------------------------------------
+
+	/** Where this project's chat worktrees live: `<user data>/worktrees/<project key>`. */
+	private worktreeHome(project: string): string {
+		const key = crypto.createHash('sha1').update(path.resolve(project).toLowerCase()).digest('hex').slice(0, 16);
+		return path.join(path.dirname(this.context.globalStorageUri.fsPath), 'worktrees', key);
+	}
+
+	/**
+	 * Runs one chat's work with that chat's worktree as the workspace, so the agent's tools,
+	 * its commands and the guardrails' confinement all apply to the worktree and not to the
+	 * project folder (see the host's `workspace.runInFolder`). A chat without a worktree runs
+	 * as it always has. A worktree whose folder has gone is not silently replaced by the
+	 * project: the run is refused, because working in the project is exactly what this chat
+	 * was started to avoid.
+	 */
+	private async inSessionFolder(sessionId: string | undefined, runId: string | undefined, task: () => Promise<void>): Promise<void> {
+		const worktree = sessionId ? this.sessionStore.getSession(sessionId)?.worktree : undefined;
+		if (!worktree) {
+			return task();
+		}
+		if (!fs.existsSync(worktree.path)) {
+			const post = this.sessionPost(sessionId as string, runId);
+			post({ type: 'error', message: `This chat's worktree folder is missing (${worktree.path}). Its work, if committed, is on branch ${worktree.branch}. Start a new chat to continue.` });
+			post({ type: 'done' });
+			this.postTranscript(sessionId as string);
+			return;
+		}
+		return vscode.workspace.runInFolder(worktree.path, task);
+	}
+
+	/**
+	 * "New chat in a worktree": creates a git worktree of the open project on a new branch
+	 * and a chat that works in it. Desktop only, and only in a trusted folder that is a git
+	 * repository with at least one commit; anything else is explained and no chat is opened,
+	 * since an ordinary chat in its place would work in the project folder unannounced.
+	 */
+	private async createWorktreeSession(mode: ChatMode, origin: string): Promise<void> {
+		const refuse = (text: string) => this.bus.postTo(origin, { type: 'info', message: text });
+		const project = projectFolders()?.[0]?.uri.fsPath;
+		if (origin !== WEBVIEW_SINK_ID) {
+			return refuse('A chat in its own worktree can only be started from the desktop app.');
+		}
+		if (!project || !vscode.workspace.isTrusted) {
+			return refuse('Open a project folder you trust to start a chat in its own worktree.');
+		}
+		if (this.engineActive) {
+			return refuse('Chats in their own worktree are not available with the Claude Code engine yet.');
+		}
+		const created = this.sessionStore.createSession(true, mode);
+		try {
+			const worktree = await addWorktree(project, path.join(this.worktreeHome(project), created.id), worktreeBranchName('', created.id));
+			this.sessionStore.setWorktree(created.id, worktree);
+		} catch (err) {
+			this.sessionStore.closeSession(created.id);
+			this.persistSessionState();
+			this.postSessions();
+			this.postTranscript(this.sessionStore.getActiveId());
+			return refuse(`Could not create a worktree: ${err instanceof Error ? err.message : String(err)}`);
+		}
+		this.persistSessionState();
+		this.postSessions();
+		this.postTranscript(created.id);
+		const worktree = this.sessionStore.getSession(created.id)?.worktree;
+		this.sessionPost(created.id)({ type: 'info', message: `This chat works in its own git worktree on branch ${worktree?.branch}. Its changes stay out of your project folder until you merge that branch.` });
+	}
+
+	/**
+	 * Decides what happens to a chat's worktree when the chat is closed. A clean, idle
+	 * worktree is removed (its branch stays). One with uncommitted changes, or with a run
+	 * still winding down, is always kept on disk; from the desktop the user is told where and
+	 * can cancel the close instead.
+	 */
+	private async worktreeOnClose(session: SessionState | undefined, origin: string): Promise<'none' | 'keep' | 'remove' | 'cancel'> {
+		const worktree = session?.worktree;
+		if (!session || !worktree || !fs.existsSync(worktree.path)) {
+			return 'none';
+		}
+		let dirty = true;
+		try {
+			dirty = session.streaming || await worktreeDirty(worktree.path);
+		} catch {
+			// Unknown is treated as "has work in it".
+		}
+		if (!dirty) {
+			return 'remove';
+		}
+		if (origin !== WEBVIEW_SINK_ID) {
+			return 'keep';
+		}
+		const close = 'Close and Keep the Folder';
+		const choice = await vscode.window.showWarningMessage(
+			`This chat's worktree has uncommitted changes on ${worktree.branch}. Closing the chat keeps the folder, so nothing is lost: ${worktree.path}`,
+			{ modal: true }, close);
+		return choice === close ? 'keep' : 'cancel';
+	}
+
+	/** Removes a closed chat's clean worktree folder in the background; its branch stays. */
+	private removeSessionWorktree(dir: string): void {
+		const project = projectFolders()?.[0]?.uri.fsPath;
+		if (!project) {
+			return;
+		}
+		removeWorktree(project, dir).catch(err => {
+			this.sessionOutput.appendLine(`[worktree] could not remove ${dir}: ${err instanceof Error ? err.message : String(err)}`);
+		});
+	}
+
+	/** The active chat's worktree folder, if it has one: what the Changes view should show. */
+	activeWorktreeFolder(): string | undefined {
+		const worktree = this.sessionStore.getSession(this.sessionStore.getActiveId())?.worktree;
+		return worktree && fs.existsSync(worktree.path) ? worktree.path : undefined;
+	}
+
+	/** Starts a chat in its own worktree, as the composer's own "New chat in a worktree" does. */
+	async newWorktreeChat(): Promise<void> {
+		await this.createWorktreeSession(this.sessionStore.getSession(this.sessionStore.getActiveId())?.mode ?? 'ask', WEBVIEW_SINK_ID);
+	}
+
 	/** Whether the Claude Code engine, not the built-in agent, runs chats in this app session. */
 	get engineActive(): boolean {
 		return this.engineHost.enabled;
@@ -4831,7 +4972,7 @@ ${context.content}` }
 			memoryRecentRuns: cfg.get<number>('memory.recentRuns') ?? 5,
 			toolCalls: cfg.get<string>('chat.toolCalls') ?? 'grouped',
 			// Shown on a paired phone ("Connected · project"): which desktop and folder it is driving.
-			workspaceName: (vscode.workspace.workspaceFolders?.[0]?.name ?? '').slice(0, 60),
+			workspaceName: (projectFolders()?.[0]?.name ?? '').slice(0, 60),
 		});
 		await this.postSkills();
 		this.pushAvailableModels(providers);

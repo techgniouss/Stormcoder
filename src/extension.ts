@@ -99,6 +99,9 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand('stormcoder.focus', () =>
 			vscode.commands.executeCommand('stormcoder.view.focus')),
 		vscode.commands.registerCommand('stormcoder.newChat', () => viewProvider.newChat()),
+		vscode.commands.registerCommand('stormcoder.newWorktreeChat', () => viewProvider.newWorktreeChat()),
+		// Internal: the folder the Changes view should show (the active chat's worktree, if any).
+		vscode.commands.registerCommand('stormcoder.activeFolder', () => viewProvider.activeWorktreeFolder()),
 		vscode.commands.registerCommand('stormcoder.openSettings', () => viewProvider.openSettingsWindow()),
 		vscode.commands.registerCommand('stormcoder.selectProvider', () => selectProvider(registry, viewProvider)),
 		vscode.commands.registerCommand('stormcoder.engine.choose', () => chooseEngine(viewProvider).catch(reportEngineCommandFailure)),

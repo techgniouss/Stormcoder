@@ -35,7 +35,7 @@
 	 * @typedef {{ role: string, label?: string, provider?: string, model?: string, source?: string }} AutoPhase
 	 * @typedef {{ role: 'user'|'assistant', content: string, images?: {mimeType:string,data:string}[], kind?: 'info'|'error'|'auto', phases?: AutoPhase[], fromAgentSession?: {id:string,title:string}, fromEditor?: boolean }} Msg
 	 * @typedef {{ content: string, status: 'pending'|'in_progress'|'completed' }} Todo
-	 * @typedef {{ id: string, title: string, messages: Msg[], streaming: boolean, pending: string|null, queue: string[], todos?: Todo[], runId?: string, runMode?: string, steerable?: boolean, compactSummary?: string, compactedUpTo?: number, mode?: string, undo?: { runId: string, files: string[] } }} Session
+	 * @typedef {{ id: string, title: string, messages: Msg[], streaming: boolean, pending: string|null, queue: string[], todos?: Todo[], runId?: string, runMode?: string, steerable?: boolean, compactSummary?: string, compactedUpTo?: number, mode?: string, undo?: { runId: string, files: string[] }, worktree?: { path: string, branch: string } }} Session
 	 */
 	/**
 	 * All chat tabs — the RENDERING CACHE, not the source of truth. Session ownership lives
@@ -1039,7 +1039,7 @@
 			const active = s.id === activeSessionId;
 			const tab = document.createElement('div');
 			tab.className = 'chat-tab' + (active ? ' active' : '') + (s.streaming ? ' busy' : '');
-			tab.title = s.title || 'New chat';
+			tab.title = s.worktree ? `${s.title || 'New chat'} (worktree: ${s.worktree.branch})` : (s.title || 'New chat');
 			tab.dataset.sid = s.id;
 			// Roving tabindex: the selected tab is the one Tab stop; arrows move within the strip.
 			tab.tabIndex = active ? 0 : -1;
@@ -1047,7 +1047,7 @@
 			tab.setAttribute('aria-selected', String(active));
 			// The close control is a real button outside the tab's tab order (Delete on the tab
 			// closes it from the keyboard), not a focusable link nested in role=tab.
-			tab.innerHTML = `<span class="tab-dot"></span><span class="tab-title">${escapeHtml(s.title || 'New chat')}</span>`
+			tab.innerHTML = `<span class="tab-dot"></span><span class="tab-title">${escapeHtml(s.title || 'New chat')}</span>${s.worktree ? '<span class="tab-wt">worktree</span>' : ''}`
 				+ `<button type="button" class="tab-close" tabindex="-1" title="Close chat (saved to History)" aria-label="Close chat: ${escapeHtml(s.title || 'New chat')}">${icon('close', 12)}</button>`;
 			tab.addEventListener('click', () => switchSession(s.id));
 			tab.addEventListener('keydown', (e) => {
@@ -2986,6 +2986,12 @@
 		chip.textContent = 'Editing an earlier message: sending replaces it and everything after. Click to cancel.';
 		chip.title = 'Cancel editing (Esc)';
 	}
+
+	// "New chat in a worktree" from the desktop shell's tab menu (shell/frame.js). The host
+	// creates the worktree and the chat together, or explains why it cannot.
+	window.addEventListener('stormcoder-new-worktree-chat', () => {
+		vscode.postMessage({ type: 'createSession', activate: true, mode: curMode(), worktree: true });
+	});
 
 	// The desktop shell's message menu asks for these (shell/frame.js); a plain event keeps
 	// this file free of any dependency on the shell.

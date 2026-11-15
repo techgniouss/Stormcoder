@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { ChatMode, HistoryEntry, SessionDeps, SessionMemento, SessionState, TranscriptEntry, Thenable } from './types';
+import { ChatMode, HistoryEntry, SessionDeps, SessionMemento, SessionState, SessionWorktree, TranscriptEntry, Thenable } from './types';
 
 /** Workspace-state key this store's persisted payload is saved under. */
 export const PERSISTENCE_KEY = 'stormcoder.sessions';
@@ -76,6 +76,7 @@ export interface PersistedSession {
 	readonly mode: ChatMode;
 	readonly provider?: string;
 	readonly model?: string;
+	readonly worktree?: SessionWorktree;
 }
 
 /** The full payload saved under {@link PERSISTENCE_KEY}. */
@@ -121,6 +122,7 @@ export function buildPersistedState(
 			mode: s.mode,
 			provider: s.provider,
 			model: s.model,
+			worktree: s.worktree,
 		})),
 		activeSessionId,
 		// Archived conversations are never re-sent to a model, so their image bytes buy
@@ -151,6 +153,10 @@ export function restoredSessions(saved: PersistedState | undefined): SessionStat
 		mode: s.mode,
 		provider: s.provider,
 		model: s.model,
+		// Saved state is read back as data: a damaged entry must not become a folder to work in.
+		worktree: s.worktree && typeof s.worktree.path === 'string' && typeof s.worktree.branch === 'string' && s.worktree.path && s.worktree.branch
+			? { path: s.worktree.path, branch: s.worktree.branch }
+			: undefined,
 		streaming: false,
 		pending: null,
 		todos: [],

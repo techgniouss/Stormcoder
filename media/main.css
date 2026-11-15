@@ -1946,3 +1946,14 @@ details[open] > .tool-summary::before,
 	cursor: pointer;
 }
 .stash-chip:hover { color: var(--vscode-foreground); }
+
+/* ---- Worktree chats ----
+   Marks a tab whose chat works in its own git worktree instead of the project folder. */
+.tab-wt {
+	flex: none;
+	margin-left: 6px; padding: 0 5px;
+	font-size: 0.72em;
+	color: var(--vscode-descriptionForeground);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 8px;
+}
