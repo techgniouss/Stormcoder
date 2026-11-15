@@ -125,5 +125,23 @@ assert.match(byPath['ünï.txt'], /\+not ascii/);
 	await assert.rejects(g.changedFileDiffs(plain, limits, () => true));
 }
 
+// A folder in the project that is a junction (or a link) to somewhere else: whatever git lists
+// through it, nothing outside the project is read.
+{
+	const outside = path.join(tmp, 'outside');
+	fs.mkdirSync(outside);
+	fs.writeFileSync(path.join(outside, 'private.txt'), `${SECRET}-outside\n`);
+	const linked = path.join(tmp, 'linked');
+	fs.mkdirSync(linked);
+	execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: linked });
+	fs.writeFileSync(path.join(linked, 'own.txt'), 'own\n');
+	fs.symlinkSync(outside, path.join(linked, 'door'), 'junction');
+	const out = await g.changedFileDiffs(linked, limits, () => true);
+	assert.match(out.files.find(f => f.path === 'own.txt').text, /\+own/);
+	for (const f of out.files) {
+		assert.ok(!String(f.text).includes(SECRET), `${f.path} shows nothing from outside the project`);
+	}
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log('test-changes-paths: all assertions passed');

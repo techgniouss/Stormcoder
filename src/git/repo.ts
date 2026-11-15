@@ -927,6 +927,22 @@ export async function changedPaths(cwd: string, timeoutMs?: number): Promise<{ t
 	return { tracked: [...new Set(tracked)], untracked: await list(['ls-files', '--others', '--exclude-standard', '-z']), hasHead };
 }
 
+/**
+ * Whether `file` is really inside `realRoot` once every link and junction on the way to it is
+ * resolved. The last part of the path is not resolved (a link there is reported, not followed),
+ * and a folder that no longer exists (a deleted file's) counts as inside: nothing is read there.
+ */
+async function staysInside(realRoot: string, file: string): Promise<boolean> {
+	let dir: string;
+	try {
+		dir = await fs.promises.realpath(path.dirname(file));
+	} catch {
+		return true;
+	}
+	const rel = path.relative(realRoot, dir);
+	return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 /** One changed file: its path, and its diff, or `undefined` when the caller chose not to read it. */
 export interface FileChange {
 	readonly path: string;
@@ -959,6 +975,7 @@ export async function changedFileDiffs(cwd: string, limits: FileChangeLimits, ma
 	const all = [...tracked.map(p => ({ p, isNew: false })), ...untracked.filter(p => !tracked.includes(p)).map(p => ({ p, isNew: true }))];
 	const cap = (text: string): string => (text.length > limits.maxChars ? `${text.slice(0, limits.maxChars)}\n… [cut short, ${text.length} characters]\n` : text);
 	const flags = ['--no-color', '--no-ext-diff', '--no-textconv', '--no-renames'];
+	const realRoot = await fs.promises.realpath(root);
 	const files: FileChange[] = [];
 	for (const { p, isNew } of all.slice(0, limits.maxFiles)) {
 		if (!mayShow(p)) {
@@ -968,13 +985,19 @@ export async function changedFileDiffs(cwd: string, limits: FileChangeLimits, ma
 		try {
 			// A path that would leave the repository is never read, whatever git listed.
 			safeRelPath(p);
+			const file = path.join(root, p);
+			// A folder on the way that is a link or a junction to somewhere else (git on Windows
+			// walks through junctions) must not make a file outside the project part of the reply.
+			if (!await staysInside(realRoot, file)) {
+				files.push({ path: p, text: 'This file is outside the project (not shown).\n' });
+				continue;
+			}
 			if (!isNew) {
 				// `--literal-pathspecs`: the path is a name, never a pattern.
 				const one = (args: string[]) => ok(['--literal-pathspecs', 'diff', ...args, ...flags, '--', p], root, undefined, limits.timeoutMs);
 				files.push({ path: p, text: cap(hasHead ? await one(['HEAD']) : (await one(['--cached'])) + (await one([]))) });
 				continue;
 			}
-			const file = path.join(root, p);
 			// lstat, not stat: a link in the project must not make a file elsewhere part of the diff.
 			const stat = await fs.promises.lstat(file);
 			if (stat.isSymbolicLink()) {
