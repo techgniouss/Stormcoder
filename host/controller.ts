@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as repo from '../src/git/repo';
 import { USAGE_FILE, UsageLog, usageReport } from '../src/usage/usageLog';
+import { voiceProvider } from '../src/voice/transcribe';
 import { configureHost, HostEnvironment, readJsonFile, UiEvent, ViewId, writeJsonFile } from './env';
 import { attentionFor, AttentionKind, attentionLevel, AttentionThrottle } from './attention';
 import { isPageId, MAX_PAGE_BYTES } from './pages';
@@ -184,6 +185,15 @@ export class Controller {
 	/** The HTML currently registered for a view, served by the asset protocol. */
 	getViewHtml(view: string): string | undefined {
 		return this.viewHtml.get(view as ViewId);
+	}
+
+	/** Whether voice input is switched on, which is the only time the microphone may be granted. */
+	voiceEnabled(): boolean {
+		try {
+			return voiceProvider(workspace.getConfiguration('stormcoder').get('voice.provider')) !== 'off';
+		} catch {
+			return false;
+		}
 	}
 
 	/**

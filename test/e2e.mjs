@@ -44,7 +44,7 @@ try { new RTCPeerConnection({ iceServers: [{ urls: 'stun:127.0.0.1:${mock.port}'
 	return alreadyWrote ? 'Done: hello.txt written.' : 'Hello from the mock model.';
 });
 const seen = mock.seen;
-const host = await startHost({ mockPort: mock.port, settings: { 'stormcoder.memory.autoPropose': true } });
+const host = await startHost({ mockPort: mock.port, settings: { 'stormcoder.memory.autoPropose': true, 'stormcoder.voice.provider': 'custom' } });
 const project = host.project;
 fs.mkdirSync(path.join(project, '.stormcoder'), { recursive: true });
 fs.writeFileSync(path.join(project, '.stormcoder/memory.md'), '- [gotcha] The build needs the moon phase set. (2026-10-01)\n');
@@ -98,6 +98,30 @@ try {
 	await chat.locator('#input').press('Control+Shift+S');
 	assert.equal(await chat.locator('#input').inputValue(), 'first draft');
 	assert.equal(await chat.locator('#stashChip').count(), 0, 'nothing is left parked');
+	await chat.locator('#input').fill('');
+
+	// 1b2. Voice input: with a provider chosen, the microphone button records, the recording is
+	// transcribed by that provider, and the text lands in the box. Nothing is sent as a message.
+	await chat.locator('#micButton:not(.hidden)').waitFor();
+	await chat.locator('#input').fill('note:');
+	await chat.locator('#micButton').click();
+	await chat.locator('#micButton.recording').waitFor({ timeout: 10000 });
+	await new Promise(r => setTimeout(r, 700));
+	await chat.locator('#micButton').click();
+	for (let i = 0; i < 100 && await chat.locator('#input').inputValue() === 'note:'; i++) { await new Promise(r => setTimeout(r, 100)); }
+	assert.equal(await chat.locator('#input').inputValue(), 'note: hello from the mock transcriber');
+	const heard = mock.heard;
+	assert.equal(heard.length, 1, 'one recording was sent');
+	assert.equal(heard[0].model, 'whisper-1');
+	assert.equal(heard[0].hasFile, true);
+	assert.equal(await chat.locator('#messages > .message.user').count(), 1, 'dictating sends no message');
+	// Escape while recording throws the recording away.
+	await chat.locator('#micButton').click();
+	await chat.locator('#micButton.recording').waitFor({ timeout: 10000 });
+	await page.keyboard.press('Escape');
+	await chat.locator('#micButton:not(.recording):not(.busy)').waitFor();
+	await new Promise(r => setTimeout(r, 400));
+	assert.equal(mock.heard.length, 1, 'a discarded recording is not sent');
 	await chat.locator('#input').fill('');
 
 	// 1c. Edit and resend: an earlier prompt loads into the box, Escape leaves the chat alone,

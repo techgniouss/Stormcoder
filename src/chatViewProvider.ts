@@ -20,6 +20,7 @@ import { AutoOrchestrator, describePinnedModelError, fallbackNote, isModelError,
 import { EngineHost, buildTranscriptSeed, parseTarget, readEngineSetting } from './engine/engineHost';
 import type { EngineCallbacks } from './engine/claudeEngine';
 import { reportUsage } from './usage/usageLog';
+import { MAX_AUDIO_BYTES, defaultVoiceModel, transcribe, voiceProvider } from './voice/transcribe';
 import { AUTO_ROLES, AutoRole, RoleAssignment, RoleRouter } from './auto/router';
 import { WebAuthManager } from './auth';
 import { githubAccountLabel, tokenEmailLabel } from './accountLabels';
@@ -319,8 +320,13 @@ interface WebviewToHost {
 	total?: number;
 	/** One base64-text slice of an `attachImage` upload's encoded image. */
 	chunk?: string;
-	/** The image's MIME type, carried on at least one `attachImage` chunk (in practice chunk 0). */
+	/**
+	 * The image's MIME type, carried on at least one `attachImage` chunk (in practice chunk 0).
+	 * On `transcribe`, the recording's type as the browser's recorder reported it.
+	 */
 	mimeType?: string;
+	/** `transcribe` only, desktop only: one recording from the composer's microphone, base64. */
+	audio?: string;
 	/** The device `revokeDevice` targets — see `src/remote/policy.ts`'s `REMOTE_DENIED` entry for why a remote client may never send this itself. */
 	deviceId?: string;
 }
@@ -2178,6 +2184,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 					await this.runInline(message.command as InlineKind, message.text || undefined);
 				}
 				break;
+			case 'transcribe':
+				await this.handleTranscribe(message, origin);
+				break;
 			case 'enhancePrompt':
 				await this.handleEnhancePrompt(message, origin);
 				break;
@@ -3353,6 +3362,43 @@ ${context.content}` }
 		// otherwise keep showing the turns that no longer exist.
 		this.bus.postExcept(origin, { type: 'transcript', sessionId, ...this.sessionStore.windowedMessages(sessionId) });
 		await this.handleSend({ ...message, editIndex: undefined }, origin);
+	}
+
+	// ---- Voice input ---------------------------------------------------------------------
+
+	/**
+	 * Turns one recording from the composer's microphone into text and hands it back to the
+	 * composer (`dictation`), where the user reviews it before sending anything. The audio
+	 * goes to the provider named in `stormcoder.voice.provider`, once, and is not kept or
+	 * logged. Desktop only: the recording comes from this machine's microphone.
+	 */
+	private async handleTranscribe(message: WebviewToHost, origin: string): Promise<void> {
+		const reply = (result: { text: string } | { error: string }) => this.bus.postTo(origin, { type: 'dictation', ...result });
+		if (origin !== WEBVIEW_SINK_ID) {
+			return;
+		}
+		const cfg = vscode.workspace.getConfiguration('stormcoder');
+		const providerId = voiceProvider(cfg.get<string>('voice.provider'));
+		if (providerId === 'off') {
+			return reply({ error: 'Voice input is switched off. Choose a provider under stormcoder.voice.provider in settings.json.' });
+		}
+		// Base64 is 4 characters for every 3 bytes: refuse an oversized recording before decoding it.
+		if (typeof message.audio !== 'string' || !message.audio || message.audio.length > Math.ceil(MAX_AUDIO_BYTES / 3) * 4 + 4) {
+			return reply({ error: 'The recording was empty or too long to transcribe.' });
+		}
+		try {
+			const apiKey = await this.registry.getApiKey(providerId);
+			const text = await transcribe({
+				baseUrl: this.registry.getBaseUrl(providerId),
+				apiKey: apiKey || undefined,
+				model: (cfg.get<string>('voice.model') ?? '').trim() || defaultVoiceModel(providerId),
+				audio: Buffer.from(message.audio, 'base64'),
+				mimeType: message.mimeType ?? '',
+			});
+			reply(text ? { text } : { error: 'Nothing was heard in that recording.' });
+		} catch (err) {
+			reply({ error: err instanceof Error ? err.message : String(err) });
+		}
 	}
 
 	// ---- Visual replies ------------------------------------------------------------------
@@ -5097,6 +5143,7 @@ ${context.content}` }
 			memoryEnabled: cfg.get<boolean>('memory.enabled') !== false,
 			memoryRecentRuns: cfg.get<number>('memory.recentRuns') ?? 5,
 			toolCalls: cfg.get<string>('chat.toolCalls') ?? 'grouped',
+			voice: voiceProvider(cfg.get<string>('voice.provider')) !== 'off',
 			// Shown on a paired phone ("Connected · project"): which desktop and folder it is driving.
 			workspaceName: (projectFolders()?.[0]?.name ?? '').slice(0, 60),
 		});

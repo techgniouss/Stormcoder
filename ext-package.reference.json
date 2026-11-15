@@ -1046,6 +1046,28 @@
           ],
           "markdownDescription": "%config.chat.toolCalls%"
         },
+        "stormcoder.voice.provider": {
+          "type": "string",
+          "default": "off",
+          "enum": [
+            "off",
+            "openai",
+            "groq",
+            "custom"
+          ],
+          "enumDescriptions": [
+            "%config.voice.provider.off%",
+            "%config.voice.provider.openai%",
+            "%config.voice.provider.groq%",
+            "%config.voice.provider.custom%"
+          ],
+          "markdownDescription": "%config.voice.provider%"
+        },
+        "stormcoder.voice.model": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "%config.voice.model%"
+        },
         "stormcoder.notifications": {
           "type": "string",
           "default": "attention",

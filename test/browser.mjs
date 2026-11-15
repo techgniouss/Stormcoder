@@ -19,7 +19,8 @@ function findInstalled() {
 }
 
 export async function launchChromium() {
-	const args = ['--no-sandbox'];
+	// A synthetic microphone that is granted without a prompt, for the voice input test.
+	const args = ['--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'];
 	try {
 		return await chromium.launch({ args });
 	} catch {

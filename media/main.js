@@ -205,6 +205,7 @@
 		input: /** @type {HTMLTextAreaElement} */ ($('input')),
 		slashMenu: $('slashMenu'),
 		enhanceButton: /** @type {HTMLButtonElement} */ ($('enhanceButton')),
+		micButton: /** @type {HTMLButtonElement} */ ($('micButton')),
 		sendButton: /** @type {HTMLButtonElement} */ ($('sendButton')),
 		stopButton: /** @type {HTMLButtonElement} */ ($('stopButton')),
 		skillChip: $('skillChip'),
@@ -3413,6 +3414,78 @@
 		addImageFiles(/** @type {File[]} */ (imageItems.map(item => item.getAsFile()).filter(Boolean)));
 	});
 	els.enhanceButton.addEventListener('click', enhance);
+
+	// ---- Voice input ------------------------------------------------------------
+	// Click the microphone to record, click again to finish. The recording goes to the host,
+	// which has it transcribed by the provider chosen in settings; the text comes back into
+	// the box (`dictation`) for review. Nothing here sends a message. The button exists only
+	// while voice input is switched on, and only the desktop app grants the microphone.
+
+	/** The longest single recording; the host refuses anything over its own size cap too. */
+	const MAX_DICTATION_MS = 5 * 60 * 1000;
+	/** @type {{ recorder: MediaRecorder, stream: MediaStream, chunks: Blob[], timer: number, discard: boolean } | null} */
+	let dictation = null;
+
+	/** Shows whether voice input is available, and what the button is doing. */
+	function renderMic(state) {
+		els.micButton.classList.toggle('recording', state === 'recording');
+		els.micButton.classList.toggle('busy', state === 'busy');
+		els.micButton.disabled = state === 'busy';
+		els.micButton.setAttribute('aria-pressed', String(state === 'recording'));
+		els.micButton.title = state === 'recording' ? 'Finish dictating (Esc discards)' : state === 'busy' ? 'Transcribing…' : 'Dictate (click to start, click again to finish)';
+	}
+
+	/** Stops the recording. `discard` throws it away; otherwise it is sent to be transcribed. */
+	function stopDictation(discard) {
+		if (!dictation) { return; }
+		dictation.discard = discard;
+		clearTimeout(dictation.timer);
+		try { dictation.recorder.stop(); } catch { finishDictation(); }
+	}
+
+	/** Releases the microphone and, unless discarded, hands the recording to the host. */
+	function finishDictation() {
+		const d = dictation;
+		dictation = null;
+		if (!d) { return; }
+		for (const track of d.stream.getTracks()) { track.stop(); }
+		const blob = new Blob(d.chunks, { type: d.recorder.mimeType || 'audio/webm' });
+		if (d.discard || !blob.size) { renderMic('idle'); return; }
+		renderMic('busy');
+		const reader = new FileReader();
+		reader.onload = () => {
+			const url = String(reader.result || '');
+			vscode.postMessage({ type: 'transcribe', audio: url.slice(url.indexOf(',') + 1), mimeType: blob.type });
+		};
+		reader.onerror = () => { renderMic('idle'); showNotice('Could not read the recording.', true); };
+		reader.readAsDataURL(blob);
+	}
+
+	async function startDictation() {
+		if (dictation || els.micButton.disabled) { return; }
+		if (!navigator.mediaDevices || typeof MediaRecorder === 'undefined') {
+			showNotice('Voice input is not available here.', true);
+			return;
+		}
+		let stream;
+		try {
+			stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+		} catch {
+			showNotice('The microphone could not be opened. Check that one is connected and that Stormcoder may use it.', true);
+			return;
+		}
+		const recorder = new MediaRecorder(stream);
+		const state = { recorder, stream, chunks: /** @type {Blob[]} */ ([]), timer: 0, discard: false };
+		recorder.addEventListener('dataavailable', e => { if (e.data && e.data.size) { state.chunks.push(e.data); } });
+		recorder.addEventListener('stop', finishDictation);
+		state.timer = window.setTimeout(() => stopDictation(false), MAX_DICTATION_MS);
+		dictation = state;
+		recorder.start();
+		renderMic('recording');
+	}
+
+	els.micButton.addEventListener('click', () => { if (dictation) { stopDictation(false); } else { void startDictation(); } });
+	document.addEventListener('keydown', e => { if (e.key === 'Escape' && dictation) { e.preventDefault(); stopDictation(true); } }, true);
 	els.sendButton.addEventListener('click', send);
 	els.stopButton.addEventListener('click', () => vscode.postMessage({ type: 'stop', sessionId: activeSessionId }));
 	els.input.addEventListener('input', () => { autoSize(); updateSlashMenu(); });
@@ -3620,6 +3693,10 @@
 					};
 				}
 				if (msg.toolCalls === 'grouped' || msg.toolCalls === 'all' || msg.toolCalls === 'hideSuccessful') { toolCallsMode = msg.toolCalls; }
+				if (typeof msg.voice === 'boolean') {
+					els.micButton.classList.toggle('hidden', !msg.voice);
+					if (!msg.voice) { stopDictation(true); }
+				}
 				if (typeof msg.systemPrompt === 'string') { generalConfig.systemPrompt = msg.systemPrompt; }
 				if (typeof msg.maxTokens === 'number') { generalConfig.maxTokens = msg.maxTokens; }
 				if (typeof msg.rules === 'string') { generalConfig.rules = msg.rules; }
@@ -3888,6 +3965,17 @@
 				els.input.focus();
 				break;
 			}
+			case 'dictation':
+				renderMic('idle');
+				if (typeof msg.text === 'string' && msg.text) {
+					const at = els.input.selectionStart ?? els.input.value.length;
+					const lead = at > 0 && !/\s$/.test(els.input.value.slice(0, at)) ? ' ' : '';
+					insertText(els.input, lead + msg.text);
+					els.input.focus();
+				} else if (typeof msg.error === 'string') {
+					showNotice(msg.error, true);
+				}
+				break;
 			case 'enhancedPrompt':
 				endEnhance();
 				els.input.value = msg.text || els.input.value;

@@ -10,6 +10,8 @@ import { pathToFileURL } from 'url';
 import { AttentionKind, attentionText } from '../host/attention';
 import { Controller } from '../host/controller';
 import { MISSING_PAGE, PAGE_HEADERS } from '../host/pages';
+import { ASSET_ORIGIN } from '../host/vscode';
+import { allowsMicrophone } from '../src/voice/transcribe';
 import { readJsonFile, writeJsonFile } from '../host/env';
 import { createSecretCodec, keychainAvailable } from './secrets';
 import { prepareViewHtml } from './viewHtml';
@@ -292,9 +294,17 @@ if (!app.requestSingleInstanceLock()) {
 			const from = details.frame?.url ?? '';
 			callback({ cancel: details.resourceType === 'subFrame' || from.startsWith(`${ASSET_SCHEME}://app/page/`) });
 		});
-		// The UI needs no camera, microphone, geolocation or notification access; refuse every request.
-		session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
-		session.defaultSession.setPermissionCheckHandler(() => false);
+		// Every permission is refused, with one exception: the microphone, for the chat view only,
+		// audio only, and only while voice input is switched on in settings (off by default).
+		// `allowsMicrophone` holds the rule; a page the agent wrote and the camera never qualify.
+		session.defaultSession.setPermissionRequestHandler((_wc, permission, callback, details) => {
+			const media = details as { requestingUrl?: string; mediaTypes?: string[] };
+			callback(allowsMicrophone({ permission, url: media.requestingUrl, mediaTypes: media.mediaTypes, voiceOn: controller.voiceEnabled(), assetOrigin: ASSET_ORIGIN }));
+		});
+		session.defaultSession.setPermissionCheckHandler((_wc, permission, _origin, details) => {
+			const media = details as { requestingUrl?: string; mediaType?: string };
+			return allowsMicrophone({ permission, url: media.requestingUrl, mediaTypes: media.mediaType ? [media.mediaType] : [], voiceOn: controller.voiceEnabled(), assetOrigin: ASSET_ORIGIN });
+		});
 		controller = new Controller({
 			appRoot,
 			userDataDir,

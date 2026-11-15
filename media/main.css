@@ -1979,3 +1979,9 @@ details[open] > .tool-summary::before,
 .page-grow:hover { color: var(--vscode-foreground); }
 .page-frame { display: block; width: 100%; height: 380px; border: 0; background: Canvas; }
 .message.page.tall .page-frame { height: 78vh; }
+
+/* ---- Voice input ----
+   The microphone button while it is recording: the error colour, since a live microphone is
+   something to notice. */
+#micButton.recording { color: var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground)); }
+#micButton.busy { opacity: 0.6; }

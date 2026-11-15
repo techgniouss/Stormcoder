@@ -90,7 +90,7 @@ assert.ok(hostSends.size > 20, `expected the host's outbound message set to be f
  *  - `memoryState` — the reply to the Memory panel's requests (`memoryList`, `memoryAdd`, …), all
  *                    `REMOTE_DENIED`: memory is managed on the desktop, so a phone never asks for it.
  */
-const EXCLUDED_FROM_PWA = new Set(['selectProvider', 'newChat', 'inline', 'editProposal', 'context', 'pickedImages', 'memoryState', 'page']);
+const EXCLUDED_FROM_PWA = new Set(['selectProvider', 'newChat', 'inline', 'editProposal', 'context', 'pickedImages', 'memoryState', 'page', 'dictation']);
 
 for (const excluded of EXCLUDED_FROM_PWA) {
 	assert.ok(hostSends.has(excluded), `"${excluded}" is in the exclusion list but the host no longer sends it — remove it from EXCLUDED_FROM_PWA`);

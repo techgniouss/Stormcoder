@@ -140,6 +140,8 @@
 		"stormcoder.mcp.servers": {},
 		"stormcoder.skills": [],
 		"stormcoder.chat.toolCalls": "grouped",
+		"stormcoder.voice.provider": "off",
+		"stormcoder.voice.model": "",
 		"stormcoder.notifications": "attention",
 		"stormcoder.memory.enabled": true,
 		"stormcoder.memory.autoPropose": false,
@@ -664,6 +666,26 @@
 				"%config.chat.toolCalls.hideSuccessful%"
 			],
 			"description": "%config.chat.toolCalls%"
+		},
+		"stormcoder.voice.provider": {
+			"type": "string",
+			"enum": [
+				"off",
+				"openai",
+				"groq",
+				"custom"
+			],
+			"enumDescriptions": [
+				"%config.voice.provider.off%",
+				"%config.voice.provider.openai%",
+				"%config.voice.provider.groq%",
+				"%config.voice.provider.custom%"
+			],
+			"description": "%config.voice.provider%"
+		},
+		"stormcoder.voice.model": {
+			"type": "string",
+			"description": "%config.voice.model%"
 		},
 		"stormcoder.notifications": {
 			"type": "string",

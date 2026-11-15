@@ -213,6 +213,9 @@ export const CHAT_APP_HTML = `
 						<button id="imageButton" class="icon-button" title="Attach images (or paste a screenshot)">
 							<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M1.5 11.5l3.5-3.5 3 3 2-2 4.5 4.5"/><circle cx="11" cy="5.8" r="1.2"/></svg>
 						</button>
+						<button id="micButton" class="icon-button hidden" title="Dictate (click to start, click again to finish)" aria-pressed="false">
+							<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5v2"/></svg>
+						</button>
 						<button id="enhanceButton" class="icon-button" title="Enhance prompt with AI">
 							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1l1.5 4L14 6.5 9.5 8 8 12 6.5 8 2 6.5 6.5 5 8 1zm5 9l.75 2 2 .75-2 .75L13 15.5l-.75-2-2-.75 2-.75L13 10z"/></svg>
 						</button>

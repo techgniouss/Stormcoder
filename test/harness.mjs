@@ -13,6 +13,8 @@ export async function startMock(reply, { chunkDelay = 0 } = {}) {
 	const seen = [];
 	/** Every GET's path, so a test can assert that something did not phone home. */
 	const gets = [];
+	/** Every speech-to-text upload: its model, whether it carried a file, and its key header. */
+	const heard = [];
 	const server = http.createServer((req, res) => {
 		let body = '';
 		req.on('data', c => body += c);
@@ -20,6 +22,13 @@ export async function startMock(reply, { chunkDelay = 0 } = {}) {
 			if (req.method === 'GET') {
 				gets.push(req.url ?? '');
 				res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: ['mock-model', 'qwen3-coder-480b', 'llama-3.3-70b-instruct', 'deepseek-r1-distill', 'mistral-large-2', 'gpt-oss-120b', 'gemma-3-27b-it', 'kimi-k2-instruct', 'glm-4.6', 'phi-4-reasoning', 'command-r-plus', 'nemotron-70b', 'yi-lightning'].map(id => ({ id })) }));
+				return;
+			}
+			if (String(req.url).endsWith('/audio/transcriptions')) {
+				// Speech-to-text: a multipart upload, answered with fixed text. Recorded so a test
+				// can see that a recording (and which model) was actually sent.
+				heard.push({ model: /name="model"\r\n\r\n([^\r]+)/.exec(body)?.[1], hasFile: /name="file"; filename="speech\.\w+"/.test(body), authorization: req.headers.authorization });
+				res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ text: 'hello from the mock transcriber' }));
 				return;
 			}
 			const json = JSON.parse(body || '{}');
@@ -44,7 +53,7 @@ export async function startMock(reply, { chunkDelay = 0 } = {}) {
 		});
 	});
 	await new Promise(r => server.listen(0, '127.0.0.1', r));
-	return { port: server.address().port, seen, gets, close: () => server.close() };
+	return { port: server.address().port, seen, gets, heard, close: () => server.close() };
 }
 
 /** Starts the dev host on a temp project and data dir, configured to use the mock model. */
