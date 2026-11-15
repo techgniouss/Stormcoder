@@ -832,3 +832,69 @@ export function renderSections(sections: readonly DiffSection[], maxChars = DEFA
 export async function workingTreeDiff(cwd: string, limits: WorkingTreeDiffLimits = DEFAULT_DIFF_LIMITS): Promise<string> {
 	return renderSections(await workingTreeSections(cwd, limits), limits.maxChars);
 }
+
+// ---- Per-chat worktrees --------------------------------------------------------------------
+
+/** A chat's own checkout of the repository: where it is, and the branch it is on. */
+export interface Worktree {
+	readonly path: string;
+	readonly branch: string;
+}
+
+/**
+ * The branch a chat's worktree is created on: `stormcoder/<words from the title>-<id>`. Only
+ * lowercase letters, digits and dashes survive from the title, so the name is always a valid
+ * ref whatever the user typed; the id keeps two chats with the same title apart.
+ */
+export function worktreeBranchName(title: string, id: string): string {
+	const slug = (text: string, max: number) => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, max).replace(/-+$/, '');
+	const words = slug(title, 32) || 'chat';
+	const tail = slug(id, 8) || 'x';
+	return `stormcoder/${words}-${tail}`;
+}
+
+/**
+ * Creates a worktree of the repository containing `cwd` at `dir`, on a new branch `branch`
+ * cut from the current `HEAD`. `dir` must not exist yet. Throws a {@link GitError} when
+ * `cwd` is not in a repository, the repository has no commit to branch from, or the branch
+ * already exists.
+ */
+export async function addWorktree(cwd: string, dir: string, branch: string): Promise<Worktree> {
+	const root = await repoRoot(cwd);
+	if (!root) {
+		throw new GitError('A worktree needs a git repository. This folder is not one.', 'failed');
+	}
+	if ((await run(['rev-parse', '--verify', '--quiet', 'HEAD'], root)).code !== 0) {
+		throw new GitError('A worktree needs at least one commit to start from.', 'nothing');
+	}
+	if ((await run(['check-ref-format', '--branch', branch], root)).code !== 0) {
+		throw new GitError(`Not a valid branch name: ${branch}`, 'failed');
+	}
+	if (fs.existsSync(dir)) {
+		throw new GitError('The worktree folder already exists.', 'path');
+	}
+	fs.mkdirSync(path.dirname(dir), { recursive: true });
+	await ok(['worktree', 'add', '-b', branch, dir, 'HEAD'], root);
+	return { path: path.resolve(dir), branch };
+}
+
+/** Whether a worktree has anything uncommitted: changed, staged or untracked files. */
+export async function worktreeDirty(dir: string): Promise<boolean> {
+	return (await ok(['status', '--porcelain', '--untracked-files=normal'], dir)).trim().length > 0;
+}
+
+/**
+ * Removes a worktree's folder and keeps its branch. Never forced: git refuses when the
+ * worktree has uncommitted changes, and that refusal is passed on. A folder that is already
+ * gone is only pruned from git's records.
+ */
+export async function removeWorktree(cwd: string, dir: string): Promise<void> {
+	const root = await repoRoot(cwd);
+	if (!root) {
+		throw new GitError('A worktree needs a git repository. This folder is not one.', 'failed');
+	}
+	if (fs.existsSync(dir)) {
+		await ok(['worktree', 'remove', dir], root);
+	}
+	await run(['worktree', 'prune'], root);
+}

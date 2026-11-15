@@ -266,5 +266,57 @@ if (process.platform !== 'win32') {
 	}
 }
 
+// A run scoped to a worktree: inside it the worktree is the workspace, for everything the
+// task awaits and for parallel runs independently; outside it, and for `projectFolders`
+// always, the project is. Only a folder under the app's own worktrees root is accepted.
+{
+	env.configureHost(baseEnv);
+	const root = vs.worktreesRoot();
+	assert.equal(root, path.join(data, 'worktrees'));
+	const wtA = path.join(root, 'k', 'a');
+	const wtB = path.join(root, 'k', 'b');
+	fs.mkdirSync(path.join(wtA, 'src'), { recursive: true });
+	fs.mkdirSync(wtB, { recursive: true });
+	fs.writeFileSync(path.join(wtA, 'src', 'only-in-a.ts'), 'a');
+	const folder = () => vs.workspace.workspaceFolders?.[0]?.uri.fsPath;
+	const tick = () => new Promise(r => setTimeout(r, 5));
+
+	assert.equal(folder(), project);
+	const seen = await Promise.all([
+		vs.workspace.runInFolder(wtA, async () => {
+			const before = folder();
+			await tick();
+			const files = (await vs.workspace.findFiles('**/*.ts')).map(u => vs.workspace.asRelativePath(u));
+			// A callback scheduled inside the run still belongs to it.
+			const later = await new Promise(r => setTimeout(() => r(folder()), 5));
+			return { before, after: folder(), later, files, project: vs.workspace.projectFolders[0].uri.fsPath, name: vs.workspace.name };
+		}),
+		vs.workspace.runInFolder(wtB, async () => { await tick(); await tick(); return folder(); }),
+		(async () => { await tick(); return folder(); })(),
+	]);
+	assert.deepEqual(seen[0], { before: wtA, after: wtA, later: wtA, files: ['src/only-in-a.ts'], project, name: 'a' });
+	assert.equal(seen[1], wtB);
+	assert.equal(seen[2], project, 'code outside a run is not affected by runs in flight');
+	assert.equal(folder(), project);
+	// The project's own files are outside the workspace during a scoped run.
+	vs.workspace.runInFolder(wtA, () => {
+		assert.equal(vs.workspace.getWorkspaceFolder(vs.Uri.file(path.join(project, 'src', 'a.ts'))), undefined);
+		assert.equal(vs.workspace.asRelativePath(path.join(project, 'src', 'a.ts')), path.join(project, 'src', 'a.ts'));
+	});
+	// A throw inside the task leaves no scope behind.
+	assert.throws(() => vs.workspace.runInFolder(wtA, () => { throw new Error('inner'); }), /inner/);
+	assert.equal(folder(), project);
+
+	// Anything that is not a folder inside the worktrees root is refused.
+	for (const bad of [root, project, tmp, path.join(root, '..', 'project'), path.join(root, '..'), path.join(data, 'worktrees-evil', 'x'), '/', '']) {
+		assert.throws(() => vs.workspace.runInFolder(bad, () => 1), /worktree the app created/, `refuses ${bad}`);
+	}
+	// And so is any scope at all when no project is open.
+	env.configureHost({ ...baseEnv, workspaceFolder: undefined });
+	assert.throws(() => vs.workspace.runInFolder(wtA, () => 1), /worktree the app created/);
+	assert.equal(vs.workspace.projectFolders, undefined);
+	env.configureHost(baseEnv);
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log('test-host: all assertions passed');

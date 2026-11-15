@@ -15,6 +15,7 @@
  * "nothing is open" rather than failing.
  */
 
+import { AsyncLocalStorage } from 'async_hooks';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -754,9 +755,24 @@ function isInside(root: string, file: string): boolean {
 	return rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
 }
 
-function workspaceFolderList(): WorkspaceFolder[] {
-	const dir = host().workspaceFolder;
+/**
+ * The folder one chat's run works in instead of the open project: that chat's git worktree.
+ * Held per async call chain, so parallel runs each see their own folder and everything
+ * outside a run sees the project.
+ */
+const folderScope = new AsyncLocalStorage<string>();
+
+/** Where the app keeps per-chat git worktrees. Nothing else may stand in for the project. */
+export function worktreesRoot(): string {
+	return path.join(host().userDataDir, 'worktrees');
+}
+
+function folderList(dir: string | undefined): WorkspaceFolder[] {
 	return dir ? [{ uri: Uri.file(dir), name: path.basename(dir), index: 0 }] : [];
+}
+
+function workspaceFolderList(): WorkspaceFolder[] {
+	return folderList(folderScope.getStore() ?? host().workspaceFolder);
 }
 
 const noopEvent: Event<never> = () => new Disposable();
@@ -765,6 +781,32 @@ export const workspace = {
 	get workspaceFolders(): WorkspaceFolder[] | undefined {
 		const list = workspaceFolderList();
 		return list.length ? list : undefined;
+	},
+	/**
+	 * The open project, whatever run is in flight. For what lives only in the project folder
+	 * and is not checked in, so is absent from a worktree: memory, `.stormcoder/` rules,
+	 * skills, MCP configuration.
+	 */
+	get projectFolders(): WorkspaceFolder[] | undefined {
+		const list = folderList(host().workspaceFolder);
+		return list.length ? list : undefined;
+	},
+	/**
+	 * Runs `task` with `folder` as the workspace: `workspaceFolders`, `findFiles`,
+	 * `asRelativePath` and so every path check, command directory and sandbox root built on
+	 * them see that folder and nothing else, for `task` and everything it awaits. The agent
+	 * stays confined to exactly one folder; this only chooses which.
+	 *
+	 * `folder` must be a directory inside {@link worktreesRoot}, and a project must be open:
+	 * the scope exists for per-chat worktrees and cannot be pointed anywhere else.
+	 */
+	runInFolder<T>(folder: string, task: () => T): T {
+		const resolved = path.resolve(folder);
+		const root = path.resolve(worktreesRoot());
+		if (!host().workspaceFolder || resolved === root || !isInside(root, resolved)) {
+			throw new Error('A run can only be scoped to a worktree the app created.');
+		}
+		return folderScope.run(resolved, task);
 	},
 	get name(): string | undefined { return workspaceFolderList()[0]?.name; },
 	get isTrusted(): boolean { return host().workspaceTrusted; },
@@ -826,6 +868,8 @@ export const workspace = {
 	// to its own sweep, which is what runs here.
 } as {
 	workspaceFolders: WorkspaceFolder[] | undefined;
+	projectFolders: WorkspaceFolder[] | undefined;
+	runInFolder<T>(folder: string, task: () => T): T;
 	name: string | undefined;
 	isTrusted: boolean;
 	workspaceFile: Uri | undefined;
