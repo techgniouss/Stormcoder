@@ -303,6 +303,15 @@ if (process.platform !== 'win32') {
 		assert.equal(vs.workspace.getWorkspaceFolder(vs.Uri.file(path.join(project, 'src', 'a.ts'))), undefined);
 		assert.equal(vs.workspace.asRelativePath(path.join(project, 'src', 'a.ts')), path.join(project, 'src', 'a.ts'));
 	});
+	// Work started from inside one chat's run for a chat that has no worktree is put back in the
+	// project, for itself and everything it awaits, without disturbing the run it came from.
+	const nested = await vs.workspace.runInFolder(wtA, async () => {
+		const other = vs.workspace.runInProject(async () => { await tick(); return folder(); });
+		const inner = vs.workspace.runInFolder(wtB, async () => { await tick(); return folder(); });
+		return { mine: folder(), other: await other, inner: await inner, after: folder() };
+	});
+	assert.deepEqual(nested, { mine: wtA, other: project, inner: wtB, after: wtA });
+	assert.equal(vs.workspace.runInProject(() => folder()), project, 'outside any run it is a plain call');
 	// A throw inside the task leaves no scope behind.
 	assert.throws(() => vs.workspace.runInFolder(wtA, () => { throw new Error('inner'); }), /inner/);
 	assert.equal(folder(), project);

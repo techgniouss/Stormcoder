@@ -4,7 +4,19 @@ Five larger features. Each one moves a line the app currently enforces in code (
 agent is confined to, what a folder-less chat may do, what the page may load, whether the page may
 use the microphone), so each needs a decision before it is built. Recommended choices are marked.
 
-Status: proposed, not built.
+Status: built. Where the build differs from this design:
+
+- **Several models** is `/compare <prompt>` with a multi-pick of the current provider's models,
+  not shift-click in the model menu.
+- **Scratch chats** are a folder named by date and time; the agent may work in it (it is a
+  trusted, empty folder the app made). There is no separate "Turn into project": it already is one.
+- **Visual replies** are static. Scripts do not run in a page at all, after a security review
+  pointed out that a content policy does not cover WebRTC. Pages are kept in the app's storage
+  folder, not under `.stormcoder/pages/`, and local images are not embedded for the model.
+- **Voice input** is as designed. The Electron permission rule is unit-tested; the microphone
+  prompt itself has only been exercised in a browser with a fake device.
+- **Worktrees**: a clean worktree is removed when its chat closes; one with uncommitted changes
+  is always kept.
 
 ## 5. Worktree per chat (opt-in, decided)
 

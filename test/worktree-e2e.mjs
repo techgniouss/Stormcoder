@@ -85,6 +85,15 @@ try {
 	await runAgent('create kept.txt');
 	assert.equal(fs.existsSync(path.join(worktree, 'kept.txt')), true);
 
+	// 4b. A run started by a slash command is confined to the worktree as well.
+	await chat.locator('#input').fill('/agent create slash.txt');
+	await chat.locator('#input').press('Enter');
+	for (let i = 0; i < 200 && !fs.existsSync(path.join(worktree, 'slash.txt')) && !fs.existsSync(path.join(project, 'slash.txt')); i++) { await new Promise(r => setTimeout(r, 100)); }
+	assert.equal(fs.existsSync(path.join(project, 'slash.txt')), false, 'a slash-started run does not write to the project folder');
+	assert.equal(fs.existsSync(path.join(worktree, 'slash.txt')), true);
+	await chat.locator('#sendButton:not(.hidden)').waitFor({ timeout: 15000 });
+	fs.rmSync(path.join(worktree, 'slash.txt'));
+
 	// 5. The ordinary chat still works in the project folder, while the other tab has a worktree.
 	await chat.locator('.chat-tab').first().click();
 	await chat.locator('.chat-tab.active:not(:has(.tab-wt))').waitFor();

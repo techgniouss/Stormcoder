@@ -808,6 +808,14 @@ export const workspace = {
 		}
 		return folderScope.run(resolved, task);
 	},
+	/**
+	 * Runs `task` with the open project as the workspace, whatever scope the caller is in.
+	 * For work that belongs to a chat without a worktree but is started from inside another
+	 * chat's run (one agent messaging another): it must not inherit that run's folder.
+	 */
+	runInProject<T>(task: () => T): T {
+		return folderScope.exit(task);
+	},
 	get name(): string | undefined { return workspaceFolderList()[0]?.name; },
 	get isTrusted(): boolean { return host().workspaceTrusted; },
 	get workspaceFile(): Uri | undefined { return undefined; },
@@ -870,6 +878,7 @@ export const workspace = {
 	workspaceFolders: WorkspaceFolder[] | undefined;
 	projectFolders: WorkspaceFolder[] | undefined;
 	runInFolder<T>(folder: string, task: () => T): T;
+	runInProject<T>(task: () => T): T;
 	name: string | undefined;
 	isTrusted: boolean;
 	workspaceFile: Uri | undefined;

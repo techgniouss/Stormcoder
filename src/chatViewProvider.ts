@@ -1659,9 +1659,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				}
 				break;
 			case 'send':
-				await this.inSessionFolder(message.sessionId, message.runId, () => message.editIndex !== undefined
-					? this.handleEditPrompt(message, origin)
-					: this.handleSend(message, origin));
+				if (message.editIndex !== undefined) {
+					await this.handleEditPrompt(message, origin);
+				} else {
+					await this.handleSend(message, origin);
+				}
 				break;
 			case 'promptResponse':
 				this.resolvePrompt(message, origin);
@@ -2781,7 +2783,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		};
 	}
 
+	/** Sends already running inside their chat's folder; see the top of {@link handleSend}. */
+	private readonly scopedSends = new WeakSet<WebviewToHost>();
+
 	private async handleSend(message: WebviewToHost, origin: string): Promise<void> {
+		// Every run starts here, whoever asked for it: the composer, a queued follow-up, a
+		// slash command (`/agent …`, `/init`, `/review`), a paired phone, another chat's agent.
+		// So this is where a worktree chat's run is put in its worktree, and any other chat's
+		// in the project, once, before anything resolves a path.
+		if (!this.scopedSends.has(message)) {
+			this.scopedSends.add(message);
+			return this.inSessionFolder(message.sessionId, message.runId, () => this.handleSend(message, origin));
+		}
 		const requestedMode: ChatMode = message.mode ?? 'ask';
 		const sessionId = message.sessionId || 'default';
 		// A second client's drain of the same queue after the same `done` (see QueueDrainGate):
@@ -3460,8 +3473,12 @@ ${context.content}` }
 	 */
 	private async inSessionFolder(sessionId: string | undefined, runId: string | undefined, task: () => Promise<void>): Promise<void> {
 		const worktree = sessionId ? this.sessionStore.getSession(sessionId)?.worktree : undefined;
+		// A host without scopes (the unit tests' stub) has one workspace and nothing to choose.
+		const ws = vscode.workspace as typeof vscode.workspace & { runInProject?: <T>(task: () => T) => T };
 		if (!worktree) {
-			return task();
+			// Explicitly the project, not "whatever is in force": this run may have been started
+			// from inside another chat's run, and must not inherit that chat's worktree.
+			return ws.runInProject ? ws.runInProject(task) : task();
 		}
 		if (!fs.existsSync(worktree.path)) {
 			const post = this.sessionPost(sessionId as string, runId);
@@ -3470,7 +3487,19 @@ ${context.content}` }
 			this.postTranscript(sessionId as string);
 			return;
 		}
-		return vscode.workspace.runInFolder(worktree.path, task);
+		try {
+			return await vscode.workspace.runInFolder(worktree.path, task);
+		} catch (err) {
+			// The host refuses a folder that is not one of the app's worktrees (saved state is
+			// data, and could name anything). The run does not happen; it never moves to the project.
+			if (err instanceof Error && /worktree the app created/.test(err.message)) {
+				const post = this.sessionPost(sessionId as string, runId);
+				post({ type: 'error', message: `This chat's worktree (${worktree.path}) is not a folder the app created, so the run was refused.` });
+				post({ type: 'done' });
+				return;
+			}
+			throw err;
+		}
 	}
 
 	/**
@@ -3628,8 +3657,8 @@ ${context.content}` }
 		say(`Sent to ${started.length} model${started.length === 1 ? '' : 's'}, each in its own worktree chat. Their tabs are open beside this one.`);
 		for (const id of started) {
 			this.postTranscript(id);
-			// Not awaited: the runs go side by side, each scoped to its own worktree.
-			void this.inSessionFolder(id, undefined, () => this.sendFollowUp(id, undefined, prompt.trim(), origin))
+			// Not awaited: the runs go side by side, each put in its own worktree by handleSend.
+			void this.sendFollowUp(id, undefined, prompt.trim(), origin)
 				.catch(err => this.sessionOutput.appendLine(`[compare] ${id}: ${err instanceof Error ? err.message : String(err)}`));
 		}
 	}
