@@ -152,6 +152,8 @@ self.addEventListener('push', event => {
 		let title = 'Stormcoder';
 		let body = 'Stormcoder needs your attention.';
 		let tag = 'stormcoder-pending';
+		// Which chat raised it, so a tap can open that chat. An id only; never shown.
+		let sessionId = '';
 		try {
 			const headers = auth && auth.token ? { Authorization: `Bearer ${auth.token}` } : {};
 			const room = auth && auth.room ? `?room=${encodeURIComponent(auth.room)}` : '';
@@ -163,24 +165,31 @@ self.addEventListener('push', event => {
 					title = first.title || title;
 					body = first.body || body;
 					tag = first.tag || tag;
+					sessionId = typeof first.sessionId === 'string' ? first.sessionId.slice(0, 200) : '';
 				}
 			}
 		} catch {
 			// Offline or the fetch failed — still show a generic notification so the user knows
 			// something happened rather than staying silent.
 		}
-		await self.registration.showNotification(title, { body, tag, icon: '/icon-192.png', badge: '/icon-192.png' });
+		await self.registration.showNotification(title, { body, tag, icon: '/icon-192.png', badge: '/icon-192.png', data: { sessionId } });
 	})());
 });
 
 self.addEventListener('notificationclick', event => {
 	event.notification.close();
+	const sessionId = event.notification.data && typeof event.notification.data.sessionId === 'string' ? event.notification.data.sessionId : '';
 	event.waitUntil(
 		self.clients.matchAll({ type: 'window' }).then(clients => {
 			for (const client of clients) {
-				if ('focus' in client) { return client.focus(); }
+				if ('focus' in client) {
+					// The app is open: tell it which chat, then bring it forward.
+					if (sessionId) { client.postMessage({ type: 'openSession', sessionId }); }
+					return client.focus();
+				}
 			}
-			return self.clients.openWindow('/');
+			// The app is closed: it reads the chat to open from the address it starts at.
+			return self.clients.openWindow(sessionId ? `/?open=${encodeURIComponent(sessionId)}` : '/');
 		}),
 	);
 });

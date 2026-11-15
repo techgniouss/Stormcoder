@@ -146,15 +146,32 @@ const seen = mock.seen;
 // ---- Desktop ------------------------------------------------------------------------------------
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'sc-remote-'));
-const fakeCloudflared = path.join(work, 'cloudflared');
-fs.writeFileSync(fakeCloudflared, [
+// On Windows a script cannot be started as a program, so the stand-in is a copy of node itself
+// named cloudflared.exe; a preload (named in NODE_OPTIONS, which the host passes down to what it
+// starts) makes that copy, and only that copy, say what the stand-in script says and then wait.
+const windows = process.platform === 'win32';
+const fakeScript = path.join(work, 'cloudflared');
+const fakeCloudflared = windows ? path.join(work, 'cloudflared.exe') : fakeScript;
+const fakePreload = path.join(work, 'as-cloudflared.cjs');
+if (windows) {
+	fs.copyFileSync(process.execPath, fakeCloudflared);
+	fs.writeFileSync(fakePreload, [
+		`if (require('node:path').basename(process.execPath).toLowerCase() === 'cloudflared.exe') {`,
+		`	const say = line => require('node:fs').writeSync(2, line + String.fromCharCode(10));`,
+		`	say('INF |  https://e2e-fake.trycloudflare.com  |');`,
+		`	say('INF Registered tunnel connection connIndex=0');`,
+		`	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);`,
+		`}`,
+	].join('\n'));
+}
+fs.writeFileSync(fakeScript, [
 	'#!/usr/bin/env node',
 	'// Stand-in for cloudflared: announces a quick-tunnel address and says the connector registered.',
 	'console.error("INF |  https://e2e-fake.trycloudflare.com  |");',
 	'console.error("INF Registered tunnel connection connIndex=0");',
 	'setInterval(() => {}, 1 << 30);',
 ].join('\n'));
-fs.chmodSync(fakeCloudflared, 0o755);
+fs.chmodSync(fakeScript, 0o755);
 const relayPort = await freePort();
 
 const host = await startHost({
@@ -170,6 +187,7 @@ const host = await startHost({
 		'secrets.txt': `AWS=${SECRETS.aws}\nGITHUB=${SECRETS.gh}\nOPENAI=${SECRETS.sk}\npassword = ${SECRETS.pw}\nplain line stays\n`,
 		'notes.md': '# notes\n',
 	},
+	env: windows ? { NODE_OPTIONS: `--require ${JSON.stringify(fakePreload.split(path.sep).join('/'))}` } : {},
 });
 const project = host.project;
 const settingsFile = path.join(host.data, 'settings.json');
@@ -276,6 +294,31 @@ try {
 	const desktopChat = desktop.frameLocator('#view-chat');
 	const desktopShows = (text, timeout = 15000) => until(`the desktop to show "${text}"`, async () => (await desktopChat.locator('#messages').textContent().catch(() => '')).includes(text), timeout);
 	await desktopShows('Hello from the mock model.');
+
+	// ---- Drafts and the offline outbox ----------------------------------------------------------------
+	step('phone: an unsent draft survives a reload');
+	await phone.fill('#composer', 'half-written thought');
+	await phone.reload();
+	await phone.locator('#status.status-ok').waitFor({ timeout: 30000 });
+	await until('the draft to come back', async () => (await phone.inputValue('#composer')) === 'half-written thought', 15000);
+	await phone.fill('#composer', '');
+
+	step('phone: a message sent while disconnected waits, then goes out on reconnect');
+	proxy.down();
+	await phone.locator('#status', { hasText: /Reconnecting|Connecting/ }).waitFor({ timeout: 15000 });
+	await send('written while offline');
+	await phone.locator('.outbox-chip', { hasText: 'Waiting to send: written while offline' }).waitFor({ timeout: 10000 });
+	assert.equal(await phone.inputValue('#composer'), '', 'the composer is cleared: the message is kept in the outbox');
+	assert.equal(await phone.locator('.msg-user', { hasText: 'written while offline' }).count(), 0, 'it is not shown as sent');
+	assert.ok(!seen.some(r => JSON.stringify(r.messages).includes('written while offline')), 'and nothing reached the model');
+	assert.match(await phone.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('openvsRelay.outbox.')).map(k => localStorage.getItem(k)).join('')), /written while offline/, 'it is kept on the device');
+	await proxy.up();
+	await phone.locator('#status.status-ok').waitFor({ timeout: 30000 });
+	await phone.locator('.msg-user', { hasText: 'written while offline' }).waitFor({ timeout: 20000 });
+	await until('the model to receive the offline message', () => seen.some(r => JSON.stringify(r.messages).includes('written while offline')), 20000);
+	await until('the outbox chip to go away', async () => (await phone.locator('.outbox-chip').count()) === 0, 10000);
+	assert.equal(seen.filter(r => r.messages?.at(-1)?.content === 'written while offline').length <= 1, true, 'it is sent once');
+	await stopGone(20000);
 
 	// ---- Agent: write + approval allow --------------------------------------------------------------
 	step('phone: Agent run, approval card (Allow), tool card, file on disk');
@@ -559,6 +602,7 @@ try {
 	proxy.close();
 	host.stop();
 	mock.close();
-	fs.rmSync(work, { recursive: true, force: true });
+	// On Windows the stand-in tunnel is a running program inside this folder for a moment longer.
+	try { fs.rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); } catch { /* left for the OS temp cleaner */ }
 }
 process.exit(failed ? 1 : 0);

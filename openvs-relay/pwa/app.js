@@ -246,6 +246,98 @@ function storageKey(room) {
 	return `openvsRelay.device.${room}`;
 }
 
+// ---- Drafts and the offline outbox ------------------------------------------------------------
+// What is typed but not sent is kept per chat, on this device only, so it survives a reload, a
+// switch to another chat, or the app being closed. A message sent while there is no connection is
+// not lost and not pretended to be sent: it waits in an outbox, shown above the composer, and goes
+// out when the connection is back. Both are kept in localStorage under the room they belong to.
+
+/** The most messages one chat's outbox holds; more than this while offline is a draft, not a queue. */
+const MAX_OUTBOX = 20;
+/** @type {Record<string, string>} sessionId -> unsent composer text */
+let drafts = {};
+/** @type {Record<string, string[]>} sessionId -> messages written while disconnected, oldest first */
+let outbox = {};
+
+function loadLocalWork(room) {
+	const read = key => {
+		try {
+			const value = JSON.parse(localStorage.getItem(`openvsRelay.${key}.${room}`) || '{}');
+			return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+		} catch { return {}; }
+	};
+	drafts = {};
+	for (const [id, text] of Object.entries(read('drafts'))) {
+		if (typeof text === 'string' && text) { drafts[id] = text; }
+	}
+	outbox = {};
+	for (const [id, list] of Object.entries(read('outbox'))) {
+		const kept = Array.isArray(list) ? list.filter(t => typeof t === 'string' && t.trim()).slice(0, MAX_OUTBOX) : [];
+		if (kept.length) { outbox[id] = kept; }
+	}
+}
+
+function saveLocalWork(key) {
+	if (!roomId) { return; }
+	try { localStorage.setItem(`openvsRelay.${key}.${roomId}`, JSON.stringify(key === 'drafts' ? drafts : outbox)); } catch { /* storage full or unavailable: the text is still on screen */ }
+}
+
+/** Remembers (or, when empty, forgets) what is in the composer for a chat. */
+function saveDraft(sessionId, text) {
+	if (!sessionId) { return; }
+	if (text) { drafts[sessionId] = text; } else { delete drafts[sessionId]; }
+	saveLocalWork('drafts');
+}
+
+/** Puts a chat's remembered draft into the composer. */
+function restoreDraft(sessionId) {
+	if (!els.composer) { return; }
+	els.composer.value = (sessionId && drafts[sessionId]) || '';
+	autosizeComposer();
+}
+
+/** Holds a message written while disconnected. False when that chat's outbox is full. */
+function addToOutbox(sessionId, text) {
+	const list = outbox[sessionId] || (outbox[sessionId] = []);
+	if (list.length >= MAX_OUTBOX) { return false; }
+	list.push(text);
+	saveLocalWork('outbox');
+	return true;
+}
+
+/**
+ * Sends what waited while disconnected: for each chat that still exists and is idle, its
+ * oldest waiting message, as an ordinary send. The rest follow one at a time as each run
+ * finishes (the `done` handler calls this again), so they arrive in the order they were
+ * written and never pile into one run. A message whose chat was closed meanwhile cannot be
+ * sent anywhere sensible; it is dropped, and the chat on screen is told what was dropped.
+ */
+function flushOutbox() {
+	let changed = false;
+	for (const [sessionId, list] of Object.entries(outbox)) {
+		const session = sessions.find(s => s.id === sessionId);
+		if (!session) {
+			if (sessions.length) {
+				const active = activeSession();
+				if (active) { note(active, 'info', `A message written offline for a chat that has since been closed was not sent: "${list[0].slice(0, 80)}"${list.length > 1 ? ` (and ${list.length - 1} more)` : ''}`); }
+				delete outbox[sessionId];
+				changed = true;
+			}
+			continue;
+		}
+		if (session.streaming || !list.length) { continue; }
+		if (dispatchSend(session, list[0])) {
+			list.shift();
+			if (!list.length) { delete outbox[sessionId]; }
+			changed = true;
+		}
+	}
+	if (changed) {
+		saveLocalWork('outbox');
+		renderQueueChips();
+	}
+}
+
 function loadDevice(room) {
 	try {
 		const raw = localStorage.getItem(storageKey(room));
@@ -768,6 +860,12 @@ function renderTabs() {
 			closeSession(session.id);
 		});
 		tab.appendChild(title);
+		// A chat that works in its own git worktree on the desktop: say so, and on which branch.
+		if (session.worktree && typeof session.worktree === 'object') {
+			const badge = el('span', 'tab-wt', 'worktree');
+			badge.title = typeof session.worktree.branch === 'string' ? session.worktree.branch : '';
+			tab.appendChild(badge);
+		}
 		// Only the chat being read can be closed, so a thumb aimed at another tab cannot close it.
 		if (session.id === activeSessionId) { tab.appendChild(close); }
 		els.tabs.appendChild(tab);
@@ -1101,11 +1199,31 @@ function renderQueueChips() {
 	const session = activeSession();
 	els.queueChips.replaceChildren();
 	const queue = (session && session.queue) || [];
-	if (!queue.length) {
+	const waiting = (session && outbox[session.id]) || [];
+	if (!queue.length && !waiting.length) {
 		els.queueChips.hidden = true;
 		return;
 	}
 	els.queueChips.hidden = false;
+	// Written while disconnected: not sent yet, and said so.
+	waiting.forEach((text, index) => {
+		const chip = el('span', 'queue-chip outbox-chip');
+		chip.title = text;
+		chip.appendChild(icon('clock'));
+		chip.appendChild(el('span', 'queue-chip-text', `Waiting to send: ${text}`));
+		const remove = el('button');
+		remove.type = 'button';
+		remove.setAttribute('aria-label', 'Remove waiting message');
+		remove.appendChild(icon('x'));
+		remove.addEventListener('click', () => {
+			waiting.splice(index, 1);
+			if (!waiting.length) { delete outbox[session.id]; }
+			saveLocalWork('outbox');
+			renderQueueChips();
+		});
+		chip.appendChild(remove);
+		els.queueChips.appendChild(chip);
+	});
 	queue.forEach((text, index) => {
 		const chip = el('span', 'queue-chip');
 		chip.title = text;
@@ -1558,7 +1676,14 @@ function sendMessage() {
 		return;
 	}
 	if (!dispatchSend(session, text)) {
-		note(session, 'error', 'Not connected — nothing was sent. Your message is still in the composer; send it again once reconnected.');
+		// No connection. Images are uploaded as they are attached and cannot wait here, so a
+		// message with attachments stays in the composer; plain text waits in the outbox.
+		if (pendingImageCount(session.id) || !text.trim() || !addToOutbox(session.id, text)) {
+			note(session, 'error', 'Not connected — nothing was sent. Your message is still in the composer; send it again once reconnected.');
+			return;
+		}
+		clearComposer();
+		renderQueueChips();
 		return;
 	}
 	clearComposer();
@@ -1568,6 +1693,7 @@ function sendMessage() {
 function clearComposer() {
 	if (!els.composer) { return; }
 	els.composer.value = '';
+	saveDraft(activeSessionId, '');
 	autosizeComposer();
 }
 
@@ -1678,9 +1804,22 @@ function createSession() {
  * chat's current transcript and run state (`sync` answers this device alone).
  * @param {string} id
  */
+/**
+ * The chat a tapped notification asked for, until the chat list arrives and it can be shown.
+ * It comes from the service worker (the app was open) or from `?open=` (it was not).
+ */
+let openOnArrival = '';
+
+/** Shows the chat a notification was about, now if it is known, else when the list arrives. */
+function openFromNotification(sessionId) {
+	if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 200) { return; }
+	if (sessions.some(s => s.id === sessionId)) { switchSession(sessionId); } else { openOnArrival = sessionId; }
+}
+
 function switchSession(id) {
 	if (id === activeSessionId || !sessions.some(s => s.id === id)) { return; }
 	activeSessionId = id;
+	restoreDraft(id);
 	renderTabs();
 	renderAll();
 	sendApp({ type: 'sync', sessionId: id });
@@ -1839,9 +1978,18 @@ function handleAppMessage(msg) {
 			for (const id of [...pendingQueues.keys()]) {
 				if (!liveIds.has(id)) { pendingQueues.delete(id); }
 			}
+			// A tapped notification named a chat: show it, once it is known to exist.
+			if (openOnArrival && sessions.some(s => s.id === openOnArrival)) {
+				nextActive = openOnArrival;
+				openOnArrival = '';
+			}
+			const shownChanged = nextActive !== activeSessionId;
 			activeSessionId = nextActive;
+			if (shownChanged) { restoreDraft(activeSessionId); }
 			renderTabs();
-			if (activeChanged) {
+			// The connection is up and the chats are known: send what waited while offline.
+			flushOutbox();
+			if (activeChanged || shownChanged) {
 				// A different conversation: its rows are the only thing worth a full rebuild.
 				renderAll();
 			} else {
@@ -1999,6 +2147,8 @@ function handleAppMessage(msg) {
 					if (s.id === activeSessionId) { note(s, 'info', 'Not connected — your queued message will send once reconnected.'); }
 				}
 			}
+			// And the next message that waited while this device was offline, if any.
+			flushOutbox();
 			renderTabs();
 			if (s.id === activeSessionId) {
 				renderChrome();
@@ -2429,8 +2579,27 @@ function startApp() {
 	if (els.pairScreen) { els.pairScreen.hidden = true; }
 	if (els.app) { els.app.hidden = false; }
 	setStatus(e2eKeys ? 'Connecting…' : SECURING_TEXT, 'status-warn');
+	// This room's unsent drafts and anything written while offline.
+	loadLocalWork(roomId);
+	renderQueueChips();
+	// A notification was tapped while the app was closed: it names the chat to open.
+	try {
+		const asked = new URLSearchParams(location.search).get('open');
+		if (asked) {
+			openFromNotification(asked);
+			history.replaceState(null, '', location.pathname);
+		}
+	} catch { /* no address to read */ }
 	registerServiceWorker();
 	connect();
+}
+
+// A notification was tapped while the app was open: the service worker says which chat.
+if ('serviceWorker' in navigator) {
+	navigator.serviceWorker.addEventListener('message', event => {
+		const data = event.data;
+		if (data && data.type === 'openSession') { openFromNotification(data.sessionId); }
+	});
 }
 
 /**
@@ -2538,7 +2707,7 @@ if (els.newSessionBtn) { els.newSessionBtn.addEventListener('click', createSessi
 if (els.historyBtn) { els.historyBtn.addEventListener('click', openHistoryPanel); }
 if (els.historyCloseBtn) { els.historyCloseBtn.addEventListener('click', closeHistoryPanel); }
 if (els.composer) {
-	els.composer.addEventListener('input', () => { updateSlashMenu(); autosizeComposer(); });
+	els.composer.addEventListener('input', () => { updateSlashMenu(); autosizeComposer(); saveDraft(activeSessionId, els.composer.value); });
 	// Enter sends only where there's a real keyboard and pointer (a tablet with a keyboard, a
 	// desktop browser); on a touch keyboard Enter stays a newline, as in every mobile chat app.
 	// Shift+Enter is a newline everywhere.
