@@ -755,12 +755,6 @@ export interface WorkingTreeDiffLimits {
 	readonly maxNewFileBytes: number;
 	/** Deadline for each git command, in ms; the process is killed when it passes. Defaults to git's usual one. */
 	readonly timeoutMs?: number;
-	/**
-	 * Show a renamed file as one deleted and one added, each under its own name, instead of
-	 * one section naming both. For a caller that decides per file what may be shown: a
-	 * section then belongs to exactly one path. See {@link changedPaths}.
-	 */
-	readonly noRenames?: boolean;
 }
 
 const DEFAULT_DIFF_LIMITS: WorkingTreeDiffLimits = { maxChars: 60_000, maxNewFiles: 20, maxNewFileBytes: 20_000 };
@@ -778,7 +772,7 @@ export interface DiffSection {
  */
 export async function workingTreeSections(cwd: string, limits: WorkingTreeDiffLimits = DEFAULT_DIFF_LIMITS): Promise<DiffSection[]> {
 	const root = await requireRoot(cwd);
-	const flags = ['--no-color', '--no-ext-diff', '--no-textconv', ...(limits.noRenames ? ['--no-renames'] : [])];
+	const flags = ['--no-color', '--no-ext-diff', '--no-textconv'];
 	let tracked: string;
 	try {
 		tracked = await ok(['diff', 'HEAD', ...flags], root, undefined, limits.timeoutMs);
@@ -787,7 +781,10 @@ export async function workingTreeSections(cwd: string, limits: WorkingTreeDiffLi
 		tracked = (await ok(['diff', '--cached', ...flags], root, undefined, limits.timeoutMs)) + (await ok(['diff', ...flags], root, undefined, limits.timeoutMs));
 	}
 	const cap = (text: string): string => (text.length > limits.maxChars ? `${text.slice(0, limits.maxChars)}\n… [file diff truncated, ${text.length} characters]\n` : text);
-	const sections: DiffSection[] = tracked.split(/^(?=diff --git )/m)
+	// Only after a real newline. `^` with the m flag also matches after a lone carriage return
+	// or a Unicode line separator, which a file's own text can contain: a line of content must
+	// never be able to open a section under a header of its choosing.
+	const sections: DiffSection[] = tracked.split(/(?<=\n)(?=diff --git )/)
 		.filter(chunk => chunk.startsWith('diff --git '))
 		.map(chunk => ({ key: chunk.slice(0, chunk.indexOf('\n') >= 0 ? chunk.indexOf('\n') : undefined), text: cap(chunk) }));
 	const fresh = (await ok(['ls-files', '--others', '--exclude-standard'], root, undefined, limits.timeoutMs)).split('\n').filter(Boolean);
@@ -908,37 +905,89 @@ export async function removeWorktree(cwd: string, dir: string): Promise<void> {
 	await run(['worktree', 'prune'], root);
 }
 
-// ---- Which file a diff section is about ------------------------------------------------------
+// ---- The working tree's changes, one file at a time ------------------------------------------
 
 /**
  * The paths the working tree changed since the last commit, exactly as git stores them: taken
  * from NUL-separated output, so no quoting, escaping or `a/… b/…` header has to be parsed.
- * Renames are listed as the old path and the new one. Includes untracked files.
+ * A rename is listed as the old path and the new one. `untracked` are the files git does not
+ * track yet.
  */
-export async function changedPaths(cwd: string, timeoutMs?: number): Promise<string[]> {
+export async function changedPaths(cwd: string, timeoutMs?: number): Promise<{ tracked: string[]; untracked: string[]; hasHead: boolean }> {
 	const root = await requireRoot(cwd);
 	const list = async (args: string[]): Promise<string[]> => (await ok(args, root, undefined, timeoutMs)).split('\0').filter(Boolean);
 	let tracked: string[];
+	let hasHead = true;
 	try {
 		tracked = await list(['diff', 'HEAD', '--name-only', '-z', '--no-renames']);
 	} catch {
+		hasHead = false;
 		tracked = [...await list(['diff', '--cached', '--name-only', '-z', '--no-renames']), ...await list(['diff', '--name-only', '-z', '--no-renames'])];
 	}
-	return [...new Set([...tracked, ...await list(['ls-files', '--others', '--exclude-standard', '-z'])])];
+	return { tracked: [...new Set(tracked)], untracked: await list(['ls-files', '--others', '--exclude-standard', '-z']), hasHead };
+}
+
+/** One changed file: its path, and its diff, or `undefined` when the caller chose not to read it. */
+export interface FileChange {
+	readonly path: string;
+	readonly text: string | undefined;
+}
+
+/** Limits for {@link changedFileDiffs}. */
+export interface FileChangeLimits {
+	/** Most files returned; the rest are counted in `more`. */
+	readonly maxFiles: number;
+	/** Longest diff of one file, in characters; the rest is replaced by a marker. */
+	readonly maxChars: number;
+	/** Deadline for each git command, in ms. */
+	readonly timeoutMs?: number;
 }
 
 /**
- * The one path a section from {@link workingTreeSections} (with `noRenames`) is about, or
- * `undefined` when that cannot be said for certain. The section's header is never parsed: it
- * is compared, whole, with the header each known path would produce. A name git had to quote
- * (a quote, a control character) or any header that matches no known path therefore yields
- * `undefined`, and a caller deciding what may be shown must then withhold the section.
+ * What the working tree changed since the last commit, one entry per file, for a caller that
+ * must decide file by file what may be shown (the phone's Changes view). Each file's diff is
+ * asked of git on its own, by its exact path, so which file a piece of text belongs to is
+ * never worked out from the text: nothing a file contains can make its lines appear under
+ * another file's name. A rename is two entries, the old path deleted and the new one added.
+ *
+ * `mayShow` is asked before a file is read at all; for a path it refuses, `text` is
+ * `undefined` and the file's contents never enter this process's output.
  */
-export function pathOfSection(key: string, paths: readonly string[]): string | undefined {
-	for (const candidate of paths) {
-		if (key === `diff --git a/${candidate} b/${candidate}` || key === `new file ${candidate}`) {
-			return candidate;
+export async function changedFileDiffs(cwd: string, limits: FileChangeLimits, mayShow: (path: string) => boolean): Promise<{ files: FileChange[]; more: number }> {
+	const root = await requireRoot(cwd);
+	const { tracked, untracked, hasHead } = await changedPaths(root, limits.timeoutMs);
+	const all = [...tracked.map(p => ({ p, isNew: false })), ...untracked.filter(p => !tracked.includes(p)).map(p => ({ p, isNew: true }))];
+	const cap = (text: string): string => (text.length > limits.maxChars ? `${text.slice(0, limits.maxChars)}\n… [cut short, ${text.length} characters]\n` : text);
+	const flags = ['--no-color', '--no-ext-diff', '--no-textconv', '--no-renames'];
+	const files: FileChange[] = [];
+	for (const { p, isNew } of all.slice(0, limits.maxFiles)) {
+		if (!mayShow(p)) {
+			files.push({ path: p, text: undefined });
+			continue;
+		}
+		try {
+			// A path that would leave the repository is never read, whatever git listed.
+			safeRelPath(p);
+			if (!isNew) {
+				// `--literal-pathspecs`: the path is a name, never a pattern.
+				const one = (args: string[]) => ok(['--literal-pathspecs', 'diff', ...args, ...flags, '--', p], root, undefined, limits.timeoutMs);
+				files.push({ path: p, text: cap(hasHead ? await one(['HEAD']) : (await one(['--cached'])) + (await one([]))) });
+				continue;
+			}
+			const file = path.join(root, p);
+			// lstat, not stat: a link in the project must not make a file elsewhere part of the diff.
+			const stat = await fs.promises.lstat(file);
+			if (stat.isSymbolicLink()) {
+				files.push({ path: p, text: 'New symbolic link (not followed).\n' });
+			} else if (!stat.isFile() || stat.size > limits.maxChars) {
+				files.push({ path: p, text: `New file, ${stat.size} bytes (not shown).\n` });
+			} else {
+				const text = await fs.promises.readFile(file, 'utf8');
+				files.push({ path: p, text: text.includes('\u0000') ? 'New binary file (not shown).\n' : `New file\n${text.split('\n').map(line => `+${line}`).join('\n')}\n` });
+			}
+		} catch {
+			files.push({ path: p, text: 'This file could not be read.\n' });
 		}
 	}
-	return undefined;
+	return { files, more: Math.max(0, all.length - limits.maxFiles) };
 }

@@ -150,7 +150,9 @@ try {
 
 	// 1d. The right-click menus: quoting selected reply text, editing your own message, and the
 	// tab strip's worktree entry.
-	const menuItems = () => chat.locator('.sc-menu .sc-item').allInnerTexts();
+	// A menu that is closing is still in the page for the length of its animation.
+	const menuItems = () => chat.locator('.sc-menu:not(.closing) .sc-item').allInnerTexts();
+	const menuGone = async () => { for (let i = 0; i < 50 && await chat.locator('.sc-menu:not(.closing)').count(); i++) { await new Promise(r => setTimeout(r, 100)); } };
 	const reply = chat.locator('#messages > .message.assistant .body').first();
 	await reply.evaluate(el => { const r = document.createRange(); r.selectNodeContents(el); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); });
 	await reply.click({ button: 'right' });
@@ -160,9 +162,12 @@ try {
 	await chat.locator('#messages > .message.user .body').first().click({ button: 'right' });
 	assert.ok((await menuItems()).some(t => t.includes('Edit and resend')), 'your own message offers Edit and resend');
 	await page.keyboard.press('Escape');
+	await menuGone();
 	await chat.locator('.tab-add').click({ button: 'right' });
+	await chat.locator('.sc-menu:not(.closing) .sc-item', { hasText: 'New chat in a worktree' }).waitFor({ timeout: 5000 });
 	assert.deepEqual((await menuItems()).map(t => t.trim()), ['New chat', 'New chat in a worktree'], 'the + button has no Close entry');
 	await page.keyboard.press('Escape');
+	await menuGone();
 	await chat.locator('#input').fill('');
 
 	// 2. An Agent turn runs the tool loop and writes into the project folder.

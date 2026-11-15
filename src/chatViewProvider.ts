@@ -42,7 +42,7 @@ import { ModelCatalog } from './providers/modelCatalog';
 import { ChatImage, ChatMessage, ChatProvider, entrySupportsTools, isAbortError, modelSupportsVision, streamChatWithContinuation } from './providers/types';
 import { defaultChromeProfilePath } from './providers/webCookie/chromeCookies';
 import { AttachImageChunk, UploadAssembler, readPickedImages, sanitizeInlineImages } from './remote/attachments';
-import { DiffSection, addWorktree, changedPaths, changedSections, pathOfSection, removeWorktree, renderSections, workingTreeSections, worktreeBranchName, worktreeDirty } from './git/repo';
+import { DiffSection, addWorktree, changedFileDiffs, changedSections, removeWorktree, renderSections, workingTreeSections, worktreeBranchName, worktreeDirty } from './git/repo';
 import { projectFolders } from './projectFolders';
 import { pageIdsIn, prunePages } from './pages/prune';
 import * as crypto from 'crypto';
@@ -3424,8 +3424,9 @@ ${context.content}` }
 	 * What leaves the desktop is bounded and filtered here, before the remote sink's own
 	 * scrubbing: at most {@link CHANGES_MAX_FILES} files, each cut short, and a file the
 	 * guardrails would not let the agent write (`.env`, keys, memory) is named but not shown.
-	 * A file whose name cannot be established with certainty is not shown either. Nothing is
-	 * read in a folder the user has not trusted.
+	 * A protected file is not read at all. Each file's diff is asked of git on its own, so no
+	 * file's contents can appear under another file's name. Nothing is read in a folder the
+	 * user has not trusted.
 	 */
 	private async postChanges(sessionId: string | undefined, origin: string): Promise<void> {
 		const reply = (files: { path: string; text: string }[], note?: string) => this.bus.postTo(origin, { type: 'changes', sessionId: sessionId ?? '', files, note: note ?? '' });
@@ -3439,32 +3440,18 @@ ${context.content}` }
 		if (!vscode.workspace.isTrusted) {
 			return reply([], 'This folder is not trusted on the desktop, so its changes are not read. Trust it there first.');
 		}
-		let sections: DiffSection[];
-		let paths: string[];
+		const guardrails = loadGuardrails();
+		const root = vscode.Uri.file(folder);
+		let changes: Awaited<ReturnType<typeof changedFileDiffs>>;
 		try {
-			paths = await changedPaths(folder, 8_000);
-			sections = await workingTreeSections(folder, { maxChars: CHANGES_FILE_CHARS, maxNewFiles: 10, maxNewFileBytes: CHANGES_FILE_CHARS, timeoutMs: 8_000, noRenames: true });
+			// One diff per file, asked of git by its exact path, and a protected file is not read
+			// at all: which file a piece of text belongs to is never worked out from the text.
+			changes = await changedFileDiffs(folder, { maxFiles: CHANGES_MAX_FILES, maxChars: CHANGES_FILE_CHARS, timeoutMs: 8_000 }, name => checkPath(root, name, true, guardrails).ok);
 		} catch (err) {
 			return reply([], err instanceof Error && /not a git repository|not inside/i.test(err.message) ? 'This folder is not a git repository, so there is nothing to compare against.' : 'The changes could not be read.');
 		}
-		const guardrails = loadGuardrails();
-		const root = vscode.Uri.file(folder);
-		const files = sections.slice(0, CHANGES_MAX_FILES).map(section => {
-			if (section.key === 'more new files') {
-				return { path: 'More new files', text: section.text };
-			}
-			// Which file this is, is never read out of the diff's header (a rename, or a name
-			// with a space or a quote in it, makes that ambiguous). The header is matched whole
-			// against the paths git itself listed; no match means not shown.
-			const name = pathOfSection(section.key, paths);
-			if (name === undefined) {
-				return { path: 'A changed file', text: 'The name of this file could not be read with certainty, so it is not shown on a paired device.\n' };
-			}
-			return checkPath(root, name, true, guardrails).ok
-				? { path: name, text: section.text }
-				: { path: name, text: 'This file is protected, so its contents are not shown on a paired device.\n' };
-		});
-		reply(files, sections.length > CHANGES_MAX_FILES ? `${sections.length - CHANGES_MAX_FILES} more changed files are not listed. Review them on the desktop.` : sections.length ? '' : 'No uncommitted changes.');
+		const files = changes.files.map(file => ({ path: file.path, text: file.text ?? 'This file is protected, so its contents are not shown on a paired device.\n' }));
+		reply(files, changes.more ? `${changes.more} more changed files are not listed. Review them on the desktop.` : files.length ? '' : 'No uncommitted changes.');
 	}
 
 	// ---- Voice input ---------------------------------------------------------------------
