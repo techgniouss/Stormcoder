@@ -136,7 +136,10 @@ interface RunResult {
 /** Runs git and resolves with its output and exit code; rejects only when git cannot be started. */
 function run(args: string[], cwd: string, input?: string, timeout = TIMEOUT_MS): Promise<RunResult> {
 	return new Promise((resolve, reject) => {
-		const child = execFile('git', ['-c', 'color.ui=false', ...args], {
+		// `core.fsmonitor` in a repository's own config names a program git runs on status and
+		// diff. A repository is content someone else may have written, so it is switched off for
+		// every call made here, read-only ones included.
+		const child = execFile('git', ['-c', 'color.ui=false', '-c', 'core.fsmonitor=false', ...args], {
 			cwd,
 			maxBuffer: MAX_BUFFER,
 			windowsHide: true,
@@ -752,6 +755,12 @@ export interface WorkingTreeDiffLimits {
 	readonly maxNewFileBytes: number;
 	/** Deadline for each git command, in ms; the process is killed when it passes. Defaults to git's usual one. */
 	readonly timeoutMs?: number;
+	/**
+	 * Show a renamed file as one deleted and one added, each under its own name, instead of
+	 * one section naming both. For a caller that decides per file what may be shown: a
+	 * section then belongs to exactly one path. See {@link changedPaths}.
+	 */
+	readonly noRenames?: boolean;
 }
 
 const DEFAULT_DIFF_LIMITS: WorkingTreeDiffLimits = { maxChars: 60_000, maxNewFiles: 20, maxNewFileBytes: 20_000 };
@@ -769,7 +778,7 @@ export interface DiffSection {
  */
 export async function workingTreeSections(cwd: string, limits: WorkingTreeDiffLimits = DEFAULT_DIFF_LIMITS): Promise<DiffSection[]> {
 	const root = await requireRoot(cwd);
-	const flags = ['--no-color', '--no-ext-diff', '--no-textconv'];
+	const flags = ['--no-color', '--no-ext-diff', '--no-textconv', ...(limits.noRenames ? ['--no-renames'] : [])];
 	let tracked: string;
 	try {
 		tracked = await ok(['diff', 'HEAD', ...flags], root, undefined, limits.timeoutMs);
@@ -897,4 +906,39 @@ export async function removeWorktree(cwd: string, dir: string): Promise<void> {
 		await ok(['worktree', 'remove', dir], root);
 	}
 	await run(['worktree', 'prune'], root);
+}
+
+// ---- Which file a diff section is about ------------------------------------------------------
+
+/**
+ * The paths the working tree changed since the last commit, exactly as git stores them: taken
+ * from NUL-separated output, so no quoting, escaping or `a/… b/…` header has to be parsed.
+ * Renames are listed as the old path and the new one. Includes untracked files.
+ */
+export async function changedPaths(cwd: string, timeoutMs?: number): Promise<string[]> {
+	const root = await requireRoot(cwd);
+	const list = async (args: string[]): Promise<string[]> => (await ok(args, root, undefined, timeoutMs)).split('\0').filter(Boolean);
+	let tracked: string[];
+	try {
+		tracked = await list(['diff', 'HEAD', '--name-only', '-z', '--no-renames']);
+	} catch {
+		tracked = [...await list(['diff', '--cached', '--name-only', '-z', '--no-renames']), ...await list(['diff', '--name-only', '-z', '--no-renames'])];
+	}
+	return [...new Set([...tracked, ...await list(['ls-files', '--others', '--exclude-standard', '-z'])])];
+}
+
+/**
+ * The one path a section from {@link workingTreeSections} (with `noRenames`) is about, or
+ * `undefined` when that cannot be said for certain. The section's header is never parsed: it
+ * is compared, whole, with the header each known path would produce. A name git had to quote
+ * (a quote, a control character) or any header that matches no known path therefore yields
+ * `undefined`, and a caller deciding what may be shown must then withhold the section.
+ */
+export function pathOfSection(key: string, paths: readonly string[]): string | undefined {
+	for (const candidate of paths) {
+		if (key === `diff --git a/${candidate} b/${candidate}` || key === `new file ${candidate}`) {
+			return candidate;
+		}
+	}
+	return undefined;
 }
