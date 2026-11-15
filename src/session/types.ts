@@ -87,6 +87,11 @@ export interface TranscriptEntry {
 	 * changed and which commands ran, instead of only the prose the model narrated.
 	 */
 	workNotes?: string;
+	/**
+	 * Set on the notice a `show_page` call leaves in the transcript: which stored page to
+	 * show there. The entry has `kind: 'info'`, so the page is never sent to a model.
+	 */
+	readonly page?: { readonly id: string; readonly title: string };
 }
 
 /** A task-checklist item the agent loop tracks for a run, rendered as the session's todo panel. */

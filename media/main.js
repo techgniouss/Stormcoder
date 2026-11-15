@@ -33,7 +33,7 @@
 
 	/**
 	 * @typedef {{ role: string, label?: string, provider?: string, model?: string, source?: string }} AutoPhase
-	 * @typedef {{ role: 'user'|'assistant', content: string, images?: {mimeType:string,data:string}[], kind?: 'info'|'error'|'auto', phases?: AutoPhase[], fromAgentSession?: {id:string,title:string}, fromEditor?: boolean }} Msg
+	 * @typedef {{ role: 'user'|'assistant', content: string, images?: {mimeType:string,data:string}[], kind?: 'info'|'error'|'auto', phases?: AutoPhase[], fromAgentSession?: {id:string,title:string}, fromEditor?: boolean, page?: {id:string,title:string} }} Msg
 	 * @typedef {{ content: string, status: 'pending'|'in_progress'|'completed' }} Todo
 	 * @typedef {{ id: string, title: string, messages: Msg[], streaming: boolean, pending: string|null, queue: string[], todos?: Todo[], runId?: string, runMode?: string, steerable?: boolean, compactSummary?: string, compactedUpTo?: number, mode?: string, undo?: { runId: string, files: string[] }, worktree?: { path: string, branch: string } }} Session
 	 */
@@ -535,6 +535,10 @@
 				appendAutoSummary(m.phases);
 				continue;
 			}
+			if (m.page) {
+				appendPageEl(m.page);
+				continue;
+			}
 			const body = appendMessageEl(m.role, m.content, m.images);
 			if (m.kind) { body.parentElement?.classList.add(m.kind === 'auto' ? 'info' : m.kind); }
 			// Which transcript entry this bubble is, for "Edit and resend" (see beginPromptEdit).
@@ -590,6 +594,58 @@
 			bar.append(review);
 		}
 		els.messages.appendChild(bar);
+	}
+
+	/**
+	 * A page the agent wrote (`show_page`), shown in the transcript. The frame is sealed: no
+	 * origin of its own, no network, no way to reach this document (the host serves it with
+	 * the policy in host/pages.ts, and `sandbox` here says the same). It is loaded by id from
+	 * the app's own page route; the HTML never passes through this script. Outside the
+	 * desktop shell there is no such route, so only the title is shown.
+	 * @param {{ id: string, title: string }} page
+	 */
+	function appendPageEl(page) {
+		els.messages.querySelector('.empty')?.remove();
+		els.messages.classList.remove('is-empty');
+		const wrap = document.createElement('div');
+		wrap.className = 'message page';
+		const head = document.createElement('div');
+		head.className = 'page-head';
+		const title = document.createElement('span');
+		title.className = 'page-title';
+		title.textContent = String(page.title || 'Page');
+		head.appendChild(title);
+		wrap.appendChild(head);
+		const base = pageBase();
+		if (base && /^[0-9a-f]{16}$/.test(String(page.id))) {
+			const frame = document.createElement('iframe');
+			frame.className = 'page-frame';
+			frame.setAttribute('sandbox', 'allow-scripts');
+			frame.setAttribute('referrerpolicy', 'no-referrer');
+			frame.setAttribute('loading', 'lazy');
+			frame.title = String(page.title || 'Page');
+			frame.src = base + page.id;
+			const grow = document.createElement('button');
+			grow.type = 'button';
+			grow.className = 'page-grow';
+			grow.textContent = 'Larger';
+			grow.addEventListener('click', () => {
+				const tall = wrap.classList.toggle('tall');
+				grow.textContent = tall ? 'Smaller' : 'Larger';
+			});
+			head.appendChild(grow);
+			wrap.appendChild(frame);
+		}
+		els.messages.appendChild(wrap);
+		keepWorkingLast();
+		return wrap;
+	}
+
+	/** The app's page route, or '' when this view is not inside the desktop shell. */
+	function pageBase() {
+		const hero = /** @type {any} */ (window).__STORM_HERO_URI__;
+		const cut = typeof hero === 'string' ? hero.lastIndexOf('/shell/') : -1;
+		return window.parent !== window && cut > 0 ? hero.slice(0, cut) + '/page/' : '';
 	}
 
 	function appendMessageEl(role, content, images) {
@@ -3536,6 +3592,10 @@
 	];
 
 	window.addEventListener('message', (event) => {
+		// Only the host speaks here. A frame embedded in the chat (a page the agent wrote) or
+		// any other window posting a look-alike message is ignored; shell/bridge.js drops those
+		// first, and this holds where there is no bridge.
+		if (event.source && event.source !== window && event.source !== window.parent) { return; }
 		const msg = event.data;
 		if (SETTINGS_ONLY && CHAT_ONLY_MESSAGES.includes(msg.type)) { return; }
 		switch (msg.type) {
@@ -3979,6 +4039,20 @@
 					if (s.id === activeSessionId) { startWorking(); }
 					renderTabs();
 					if (s.id === activeSessionId) { updateComposer(); }
+				}
+				break;
+			}
+			case 'page': {
+				// A page the agent showed (`show_page`); the host has already put the matching
+				// notice in the transcript it owns.
+				const s = sessions.find(x => x.id === msg.sessionId);
+				if (!s || typeof msg.id !== 'string') { break; }
+				const page = { id: msg.id, title: typeof msg.title === 'string' ? msg.title : 'Page' };
+				commitPending(s);
+				s.messages.push({ role: 'assistant', content: `Showed a page: ${page.title}`, kind: 'info', page });
+				if (s.id === activeSessionId) {
+					appendPageEl(page);
+					scrollToBottom();
 				}
 				break;
 			}

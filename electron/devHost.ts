@@ -16,6 +16,7 @@ import * as path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Controller } from '../host/controller';
 import { ASSET_ORIGIN } from '../host/vscode';
+import { MISSING_PAGE, PAGE_HEADERS } from '../host/pages';
 import { createSecretCodec } from './secrets';
 import { prepareViewHtml } from './viewHtml';
 import * as extension from '../src/extension';
@@ -137,6 +138,10 @@ const server = http.createServer((req, res) => {
 	if (parts[0] === 'view') {
 		const html = controller.getViewHtml(parts[1]) ?? '<!doctype html><title>Starting</title>';
 		res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }).end(rewrite(html, origin));
+		return;
+	}
+	if (parts[0] === 'page') {
+		void controller.getPageHtml(parts[1] ?? '').then(html => res.writeHead(html === undefined ? 404 : 200, { ...PAGE_HEADERS }).end(html ?? MISSING_PAGE));
 		return;
 	}
 	const file = path.resolve(appRoot, rel === '' ? 'shell/index.html' : rel);

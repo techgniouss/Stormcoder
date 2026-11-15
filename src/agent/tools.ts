@@ -278,6 +278,18 @@ export const AGENT_TOOLS: ToolSpec[] = [
 			required: ['type', 'text'],
 		},
 	},
+	{
+		name: 'show_page',
+		description: 'Show the user a self-contained HTML page in the chat: a chart, table, diagram or mockup. Use it when a picture answers better than text, or when asked for one. One complete HTML document with inline <style> and <script> only. Nothing is loaded from the network: no CDN scripts, fonts or remote images (inline SVG and data: images work). Links do nothing. Under 500 KB.',
+		parameters: {
+			type: 'object',
+			properties: {
+				title: { type: 'string', description: 'Short title shown above the page.' },
+				html: { type: 'string', description: 'The complete HTML document.' },
+			},
+			required: ['title', 'html'],
+		},
+	},
 ];
 
 /**
@@ -473,6 +485,11 @@ export interface ToolApprover {
 	 * into simply omits it.
 	 */
 	recordWrite?(write: FileWrite): void;
+	/**
+	 * Puts a page the agent wrote into the chat (`show_page`) and returns whether it was
+	 * shown. Optional: a caller with no chat to show it in omits it, and the tool says so.
+	 */
+	showPage?(page: { title: string; html: string }): boolean;
 }
 
 export interface ToolResult {
@@ -699,7 +716,7 @@ export async function executeTool(rawCall: ToolCall, approver: ToolApprover, gua
 		return { result: 'No workspace folder is open; file and command tools are unavailable.', isError: true };
 	}
 	// Side-effecting tools are blocked in untrusted workspaces, regardless of approval.
-	if ((call.name === 'write_file' || call.name === 'edit_file' || call.name === 'edit_notebook' || call.name === 'run_command' || call.name === 'remember') && !vscode.workspace.isTrusted) {
+	if ((call.name === 'write_file' || call.name === 'edit_file' || call.name === 'edit_notebook' || call.name === 'run_command' || call.name === 'remember' || call.name === 'show_page') && !vscode.workspace.isTrusted) {
 		const action = call.name === 'run_command' ? 'run commands' : 'write files';
 		return {
 			result: `This workspace is not trusted, so the agent can't ${action}. Use "Workspaces: Manage Workspace Trust" to trust it, then retry.`,
@@ -777,6 +794,8 @@ export async function executeTool(rawCall: ToolCall, approver: ToolApprover, gua
 					return await recallFacts(root, asString(call.args.query), asNumber(call.args.limit));
 				case 'remember':
 					return await rememberFact(root, asString(call.args.type), asString(call.args.text), asString(call.args.scope), approver, g);
+				case 'show_page':
+					return await showPage(asString(call.args.title), asString(call.args.html), approver, g);
 				case 'command_output':
 				return await readBackgroundCommand(asString(call.args.id).trim(), asBoolean(call.args.stop), asNumber(call.args.waitMs));
 			default:
@@ -802,6 +821,45 @@ export async function executeTool(rawCall: ToolCall, approver: ToolApprover, gua
 /** Searches project memory. Read-only, but not offered where memory is off or the folder is untrusted. */
 async function recallFacts(root: vscode.Uri, query: string, limit?: number): Promise<ToolResult> {
 	return { result: await recallAll(root, query, limit), isError: false };
+}
+
+/** The largest page `show_page` accepts, in UTF-8 bytes. Mirrors the host's own cap. */
+export const MAX_SHOWN_PAGE_BYTES = 512 * 1024;
+
+/**
+ * `show_page`: puts an HTML page the model wrote into the chat. Approved like a file write
+ * (asked about unless edits are auto-approved). The page itself is rendered by the host in a
+ * frame with no origin and no network (see `host/pages.ts`); this function only decides
+ * whether there is a page to show.
+ */
+async function showPage(title: string, html: string, approver: ToolApprover, g: Guardrails): Promise<ToolResult> {
+	const name = title.replace(/\s+/g, ' ').trim().slice(0, 120) || 'Page';
+	if (!html.trim()) {
+		return { result: 'show_page needs the complete HTML document in "html".', isError: true };
+	}
+	const bytes = Buffer.byteLength(html, 'utf8');
+	if (bytes > MAX_SHOWN_PAGE_BYTES) {
+		return { result: `The page is ${Math.round(bytes / 1024)} KB; the limit is ${MAX_SHOWN_PAGE_BYTES / 1024} KB. Make it smaller (fewer data points, no embedded images) and call show_page again.`, isError: true };
+	}
+	if (!approver.showPage) {
+		return { result: 'Pages cannot be shown here. Answer in text instead.', isError: true };
+	}
+	if (!autoApprovesWrites(g)) {
+		const { approved, feedback } = await approver.confirm({
+			kind: 'write',
+			signature: 'show_page',
+			title: `Show the page "${name}"?`,
+			detail: `An HTML page written by the model, ${Math.max(1, Math.round(bytes / 1024))} KB. It is shown in a sealed frame: it cannot reach the network, your files or the rest of the app.`,
+			preview: html.slice(0, 4_000),
+			previewLanguage: 'html',
+		});
+		if (!approved) {
+			return { result: denialMessage('write', feedback), isError: true };
+		}
+	}
+	return approver.showPage({ title: name, html })
+		? { result: `The page "${name}" is now shown to the user in the chat. Do not repeat its contents; add a sentence or two of explanation if useful.`, isError: false }
+		: { result: 'The page could not be shown. Answer in text instead.', isError: true };
 }
 
 /**

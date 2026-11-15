@@ -264,6 +264,35 @@ await equivalent('edit_file replaceAll', { name: 'edit_file', args: { path: 'src
 	assert.strictEqual(badType.isError, true);
 	assert.match(badType.result, /Unknown memory type/);
 	assert.match((await run('remember', { type: 'gotcha', text: 'password = hunter2hunter2' })).result, /credential/);
+	// show_page: refuses an empty or oversized page, and says so plainly where there is no chat
+	// to show it in; with one, the page is handed over once and the title is tidied.
+	covered.add('show_page');
+	assert.match((await run('show_page', { title: 'T', html: '   ' })).result, /complete HTML document/);
+	const huge = await run('show_page', { title: 'T', html: 'x'.repeat(512 * 1024 + 1) });
+	assert.strictEqual(huge.isError, true);
+	assert.match(huge.result, /limit is 512 KB/);
+	const nowhere = await run('show_page', { title: 'T', html: '<p>hi</p>' });
+	assert.strictEqual(nowhere.isError, true);
+	assert.match(nowhere.result, /cannot be shown here/);
+	{
+		const shown = [];
+		const asked = [];
+		const chat = { async confirm(r) { asked.push(r); return { approved: asked.length > 1 }; }, async ask() { return ''; }, showPage: p => { shown.push(p); return true; } };
+		const policy = level => ({ ...loadGuardrails(), approval: level });
+		// Asked about like a file write when edits are not auto-approved, and a refusal shows nothing.
+		const refused = await executeTool({ id: 'p1', name: 'show_page', args: { title: 'Chart', html: '<p>a</p>' } }, chat, policy('always'));
+		assert.strictEqual(refused.isError, true);
+		assert.deepStrictEqual(shown, []);
+		assert.strictEqual(asked[0].kind, 'write');
+		assert.strictEqual(asked[0].signature, 'show_page');
+		const ok = await executeTool({ id: 'p2', name: 'show_page', args: { title: '  Sales\n by   month ', html: '<p>a</p>' } }, chat, policy('always'));
+		assert.strictEqual(ok.isError, false);
+		assert.deepStrictEqual(shown, [{ title: 'Sales by month', html: '<p>a</p>' }]);
+		// With edits auto-approved it is not asked about.
+		await executeTool({ id: 'p3', name: 'show_page', args: { title: 'T', html: '<p>b</p>' } }, chat, policy('auto-edits'));
+		assert.strictEqual(asked.length, 2);
+		assert.strictEqual(shown.length, 2);
+	}
 	// Another product's name and argument spellings reach the same check as the canonical call.
 	for (const call of [['edit_notebook', { path: 'src/a.ts', cell: 0, source: 'x' }], ['NotebookEdit', { notebook_path: 'src/a.ts', cell_number: 0, new_source: 'x' }]]) {
 		assert.match((await run(call[0], call[1])).result, /not a \.ipynb/);

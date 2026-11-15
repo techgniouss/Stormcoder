@@ -3355,6 +3355,47 @@ ${context.content}` }
 		await this.handleSend({ ...message, editIndex: undefined }, origin);
 	}
 
+	// ---- Visual replies ------------------------------------------------------------------
+
+	/** Where pages the agent showed are kept: one HTML file per page, in the app's storage. */
+	private pagesDir(): string {
+		return path.join((this.context.storageUri ?? this.context.globalStorageUri).fsPath, 'pages');
+	}
+
+	/**
+	 * Stores a page the agent wrote (`show_page`) and puts it in the chat: a notice in the
+	 * transcript that names the page, so it is shown again after a reload, and a live message
+	 * to the desktop chat. The HTML never travels inside a chat message: the chat shows it in
+	 * a sealed frame that loads it by id (see `host/pages.ts`). Desktop only; a paired phone
+	 * sees the notice's text.
+	 */
+	publishPage(sessionId: string, runId: string, title: string, html: string): boolean {
+		const id = crypto.randomBytes(8).toString('hex');
+		try {
+			fs.mkdirSync(this.pagesDir(), { recursive: true });
+			fs.writeFileSync(path.join(this.pagesDir(), `${id}.html`), html, { mode: 0o600 });
+		} catch (err) {
+			this.sessionOutput.appendLine(`[page] could not store a page: ${err instanceof Error ? err.message : String(err)}`);
+			return false;
+		}
+		this.sessionStore.appendMessage(sessionId, { role: 'assistant', content: `Showed a page: ${title}`, kind: 'info', page: { id, title } });
+		this.persistSessionState();
+		this.bus.postTo(WEBVIEW_SINK_ID, { type: 'page', sessionId, runId, id, title });
+		return true;
+	}
+
+	/** The stored HTML of a page, for the host to serve; `undefined` for an unknown id. */
+	pageHtml(id: unknown): string | undefined {
+		if (typeof id !== 'string' || !/^[0-9a-f]{16}$/.test(id)) {
+			return undefined;
+		}
+		try {
+			return fs.readFileSync(path.join(this.pagesDir(), `${id}.html`), 'utf8');
+		} catch {
+			return undefined;
+		}
+	}
+
 	// ---- Per-chat worktrees --------------------------------------------------------------
 
 	/** Where this project's chat worktrees live: `<user data>/worktrees/<project key>`. */
@@ -5345,6 +5386,10 @@ class SessionApprover implements ToolApprover {
 
 	recordWrite(write: FileWrite): void {
 		this.view.recordRunWrite(this.sessionId, this.runId, write);
+	}
+
+	showPage(page: { title: string; html: string }): boolean {
+		return this.view.publishPage(this.sessionId, this.runId, page.title, page.html);
 	}
 
 	async ask(question: UserQuestion): Promise<string> {

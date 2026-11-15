@@ -19,6 +19,11 @@
 	};
 	window.addEventListener('message', function (e) {
 		const d = e.data;
+		// The chat can embed pages a model wrote (visual replies). Such a frame, or any other
+		// window, must not be able to pass itself off as the host: anything that was really
+		// posted from somewhere other than the shell is dropped here, before the UI's own
+		// listener sees it. Host messages are re-dispatched below and carry no source.
+		if (e.source && e.source !== parent) { e.stopImmediatePropagation(); return; }
 		if (e.source !== parent || !d || typeof d.mj !== 'string') { return; }
 		// Swallow the envelope so the UI's own listeners only ever see host messages.
 		e.stopImmediatePropagation();

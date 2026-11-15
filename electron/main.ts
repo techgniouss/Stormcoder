@@ -9,6 +9,7 @@ import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { AttentionKind, attentionText } from '../host/attention';
 import { Controller } from '../host/controller';
+import { MISSING_PAGE, PAGE_HEADERS } from '../host/pages';
 import { readJsonFile, writeJsonFile } from '../host/env';
 import { createSecretCodec, keychainAvailable } from './secrets';
 import { prepareViewHtml } from './viewHtml';
@@ -77,6 +78,10 @@ function registerAssetProtocol(): void {
 			return new Response(controller.getViewHtml(parts[1]) ?? '<!doctype html><title>Starting</title>', {
 				headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
 			});
+		}
+		if (parts[0] === 'page') {
+			// A page the agent wrote: served sealed (no origin, no network). See host/pages.ts.
+			return controller.getPageHtml(parts[1] ?? '').then(html => new Response(html ?? MISSING_PAGE, { status: html === undefined ? 404 : 200, headers: PAGE_HEADERS }));
 		}
 		if (!allowedTop.has(parts[0])) {
 			return new Response('Not found', { status: 404 });
@@ -182,6 +187,14 @@ function createWindow(): void {
 		return { action: 'deny' };
 	});
 	window.webContents.on('will-navigate', e => e.preventDefault());
+	// Frames too: the app's own frames never navigate away from its asset origin, and a page
+	// the agent wrote must not be able to load an outside address (with whatever it carries in
+	// the URL) by sending itself there.
+	window.webContents.on('will-frame-navigate', e => {
+		if (!e.url.startsWith(`${ASSET_SCHEME}://`)) {
+			e.preventDefault();
+		}
+	});
 	window.webContents.on('will-attach-webview', e => e.preventDefault());
 	// Right-click in text fields and over selected text gets the usual Cut/Copy/Paste menu. Custom
 	// menus (messages, code, tabs) call preventDefault in the page, which suppresses this event.

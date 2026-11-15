@@ -1957,3 +1957,25 @@ details[open] > .tool-summary::before,
 	border: 1px solid var(--vscode-panel-border);
 	border-radius: 8px;
 }
+
+/* ---- Visual replies ----
+   A page the agent wrote, shown in a sealed frame (main.js appendPageEl). The frame's own
+   background is the page's business; the border marks where the app ends and it begins. */
+.message.page { padding: 0; overflow: hidden; border: 1px solid var(--vscode-panel-border); border-radius: 8px; }
+.page-head {
+	display: flex; align-items: center; justify-content: space-between; gap: 8px;
+	padding: 6px 10px;
+	font-size: 0.85em; font-weight: 600;
+	border-bottom: 1px solid var(--vscode-panel-border);
+}
+.page-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-grow {
+	flex: none; padding: 1px 8px;
+	font: inherit; font-weight: 400; font-size: 0.95em;
+	color: var(--vscode-descriptionForeground);
+	background: transparent; border: 1px solid var(--vscode-panel-border); border-radius: 10px;
+	cursor: pointer;
+}
+.page-grow:hover { color: var(--vscode-foreground); }
+.page-frame { display: block; width: 100%; height: 380px; border: 0; background: Canvas; }
+.message.page.tall .page-frame { height: 78vh; }

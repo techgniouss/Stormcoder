@@ -9,6 +9,7 @@ import * as repo from '../src/git/repo';
 import { USAGE_FILE, UsageLog, usageReport } from '../src/usage/usageLog';
 import { configureHost, HostEnvironment, readJsonFile, UiEvent, ViewId, writeJsonFile } from './env';
 import { attentionFor, AttentionKind, attentionLevel, AttentionThrottle } from './attention';
+import { isPageId, MAX_PAGE_BYTES } from './pages';
 import { cancelProgress, commands, createContext, deliverToView, deliverUri, ExtensionContext, registeredCommands, reloadSettings, resetHost, runCommand, settingDefaults, workspace } from './vscode';
 import COMMAND_LIST from './command-list.json';
 import type { UpdateService } from './updater';
@@ -183,6 +184,24 @@ export class Controller {
 	/** The HTML currently registered for a view, served by the asset protocol. */
 	getViewHtml(view: string): string | undefined {
 		return this.viewHtml.get(view as ViewId);
+	}
+
+	/**
+	 * The HTML of a page the agent showed in a chat, for the embedder to serve with
+	 * `PAGE_HEADERS`. Only a well-formed page id reaches the engine, and an oversized or
+	 * non-string answer is dropped.
+	 */
+	async getPageHtml(id: string): Promise<string | undefined> {
+		if (!isPageId(id)) {
+			return undefined;
+		}
+		let html: unknown;
+		try {
+			html = await runCommand('stormcoder.pageHtml', id);
+		} catch {
+			return undefined;
+		}
+		return typeof html === 'string' && Buffer.byteLength(html, 'utf8') <= MAX_PAGE_BYTES ? html : undefined;
 	}
 
 	private save(): void {

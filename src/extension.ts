@@ -100,6 +100,8 @@ export function activate(context: vscode.ExtensionContext): void {
 			vscode.commands.executeCommand('stormcoder.view.focus')),
 		vscode.commands.registerCommand('stormcoder.newChat', () => viewProvider.newChat()),
 		vscode.commands.registerCommand('stormcoder.newWorktreeChat', () => viewProvider.newWorktreeChat()),
+		// Internal: the stored HTML of a page the agent showed, for the host to serve by id.
+		vscode.commands.registerCommand('stormcoder.pageHtml', (id: unknown) => viewProvider.pageHtml(id)),
 		// Internal: the folder the Changes view should show (the active chat's worktree, if any).
 		vscode.commands.registerCommand('stormcoder.activeFolder', () => viewProvider.activeWorktreeFolder()),
 		vscode.commands.registerCommand('stormcoder.openSettings', () => viewProvider.openSettingsWindow()),
