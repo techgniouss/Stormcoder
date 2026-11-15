@@ -1985,3 +1985,17 @@ details[open] > .tool-summary::before,
    something to notice. */
 #micButton.recording { color: var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground)); }
 #micButton.busy { opacity: 0.6; }
+
+/* ---- Settings: choices ----
+   A setting with a few named values. Inside the desktop shell the <select> is only the source
+   of truth (shell/frame.js draws the menu); anywhere else it is the control itself. */
+.general-settings .settings-select {
+	max-width: 100%;
+	padding: 4px 8px;
+	font: inherit;
+	color: var(--vscode-input-foreground);
+	background: var(--vscode-input-background);
+	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+	border-radius: 4px;
+}
+.general-settings .settings-text { width: 260px; max-width: 100%; }

@@ -31,12 +31,13 @@ let failNext = false;
 const engine = { activate: () => { hostEnv = hostEnvOf(); activations++; if (failNext) { failNext = false; throw new Error('boom'); } }, deactivate: () => undefined };
 const fatals = [];
 const attention = [];
+const attentionChats = [];
 let hostEnv;
 const c = new Controller({
 	appRoot: root, userDataDir: data, uriScheme: 'stormcoder', appVersion: 't', platform: process.platform, secureStorage: false,
 	codec: { encrypt: s => Buffer.from(s), decrypt: b => String(b) },
 	send: () => undefined, openExternal: async () => true, readClipboard: async () => '', writeClipboard: async () => undefined,
-	pickFolder: async () => undefined, pickFiles: async () => undefined, confirmTrust: async () => 'trust', showFatal: (t, d) => fatals.push([t, d]), attention: k => attention.push(k),
+	pickFolder: async () => undefined, pickFiles: async () => undefined, confirmTrust: async () => 'trust', showFatal: (t, d) => fatals.push([t, d]), attention: (k, id) => { attention.push(k); attentionChats.push(id); },
 }, engine, h => h);
 
 const can = async (name, file, text) => { try { await c.handleCall(name, text === undefined ? [file] : [file, text]); return true; } catch { return false; } };
@@ -80,6 +81,21 @@ hostEnv.postToView('chat', { type: 'approvalRequest', detail: 'rm -rf /' });
 hostEnv.postToView('chat', { type: 'approvalRequest', detail: 'again' });
 hostEnv.postToView('chat', { type: 'askRequest', question: 'secret?' });
 assert.deepEqual(attention, ['approval', 'question']);
+// The chat that raised it is named by id only, so a click can open that chat.
+assert.deepEqual(attentionChats, [undefined, undefined]);
+attention.length = 0; attentionChats.length = 0;
+await new Promise(r => setTimeout(r, 5));
+hostEnv.postToView('chat', { type: 'done', sessionId: 'chat-7', content: 'not passed on' });
+assert.deepEqual([attention, attentionChats], [[], []], 'still silent for a finished run at the default level');
+fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify({ 'stormcoder.notifications': 'all' }));
+await c.handleCall('writeFile', [path.join(data, 'settings.json'), JSON.stringify({ 'stormcoder.notifications': 'all' })]);
+hostEnv.postToView('chat', { type: 'done', sessionId: 'chat-7', content: 'not passed on' });
+assert.deepEqual([attention, attentionChats], [['done'], ['chat-7']]);
+// openChat hands the engine a switchSession for that id, and ignores anything that is not an id.
+c.openChat('chat-7');
+c.openChat(undefined);
+c.openChat('');
+c.openChat('x'.repeat(201));
 
 // A scratch chat: an empty folder of the app's own, opened as the project and trusted without
 // the trust question (which would otherwise be asked for any folder not yet trusted).

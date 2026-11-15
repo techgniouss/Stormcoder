@@ -27,6 +27,15 @@ const NON_CHAT_MODEL = /(embed|imagen|veo-|-tts\b|^aqa$)/i;
  * OAuth attempt this provider deliberately avoids repeating.
  */
 export class GeminiProvider extends OpenAICompatibleProvider {
+	/**
+	 * Google's OpenAI-compatible endpoint takes `stream_options.include_usage` (its API
+	 * reference lists `StreamOptions.includeUsage`) and reports no usage without it. It may
+	 * repeat the usage object on several chunks; the last one is what is recorded, never a sum.
+	 */
+	protected override streamsUsage(): boolean {
+		return true;
+	}
+
 	readonly info: ProviderInfo = {
 		id: 'gemini',
 		label: 'Google Gemini',

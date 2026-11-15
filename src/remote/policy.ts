@@ -109,6 +109,8 @@ export const REMOTE_ALLOWED: readonly string[] = [
  *    desktop-only, same reasoning as `requestPairing` immediately above.
  */
 export const REMOTE_DENIED: readonly string[] = [
+	// Settings > General's choices (notifications, tool calls, voice input): the desktop's own.
+	'setPreference',
 	// Voice input: sends a recording to the desktop's speech-to-text provider on its key.
 	'transcribe',
 	'deleteHistory',

@@ -44,6 +44,7 @@ import { defaultChromeProfilePath } from './providers/webCookie/chromeCookies';
 import { AttachImageChunk, UploadAssembler, readPickedImages, sanitizeInlineImages } from './remote/attachments';
 import { DiffSection, addWorktree, changedSections, removeWorktree, renderSections, workingTreeSections, worktreeBranchName, worktreeDirty } from './git/repo';
 import { projectFolders } from './projectFolders';
+import { pageIdsIn, prunePages } from './pages/prune';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { QueueDrainGate } from './session/queueDrain';
@@ -245,6 +246,8 @@ interface WebviewToHost {
 	reviewEnabled?: boolean;
 	/** `setEngine` only: which agent engine to use. */
 	engine?: string;
+	/** `setPreference` only: the new value of the setting named by `key`. */
+	choice?: string;
 	memoryEnabled?: boolean;
 	memoryRecentRuns?: number;
 	memoryAutoPropose?: boolean;
@@ -2023,6 +2026,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 						'agent.maxRunMinutes', Math.floor(message.maxRunMinutes), vscode.ConfigurationTarget.Global);
 				}
 				break;
+			case 'setPreference': {
+				// Settings > General's choices. Only these keys, and only a value the setting
+				// allows, are ever written: the message names a setting, so it is not trusted to.
+				const allowed: Record<string, readonly string[] | 'text'> = {
+					'notifications': ['off', 'attention', 'all'],
+					'chat.toolCalls': ['grouped', 'all', 'hideSuccessful'],
+					'voice.provider': ['off', 'openai', 'groq', 'custom'],
+					'voice.model': 'text',
+				};
+				const key = typeof message.key === 'string' ? message.key : '';
+				const rule = Object.prototype.hasOwnProperty.call(allowed, key) ? allowed[key] : undefined;
+				const value = typeof message.choice === 'string' ? message.choice : undefined;
+				// From a paired phone this never arrives: `setPreference` is in REMOTE_DENIED. The
+				// Settings window is a view of its own, so the sender is not checked against the chat's.
+				if (!rule || value === undefined) {
+					break;
+				}
+				if (rule === 'text' ? value.length <= 100 && !/[\u0000-\u001f]/.test(value) : rule.includes(value)) {
+					await vscode.workspace.getConfiguration('stormcoder').update(key, value, vscode.ConfigurationTarget.Global);
+					await this.postConfig();
+				}
+				break;
+			}
 			case 'setMemoryEnabled':
 				await vscode.workspace.getConfiguration('stormcoder').update(
 					'memory.enabled', !!message.memoryEnabled, vscode.ConfigurationTarget.Global);
@@ -3441,6 +3467,19 @@ ${context.content}` }
 		this.persistSessionState();
 		this.bus.postTo(WEBVIEW_SINK_ID, { type: 'page', sessionId, runId, id, title });
 		return true;
+	}
+
+	/**
+	 * Removes stored pages that no open chat and no saved conversation shows any more (the
+	 * chat was closed and later dropped from History, or cleared). Run once at start.
+	 */
+	cleanPages(): void {
+		const history = this.context.workspaceState.get<HistoryEntry[]>(ChatViewProvider.HISTORY_KEY) ?? [];
+		const shown = pageIdsIn([...this.sessionStore.getSessions().map(s => s.messages), ...history.map(h => h.messages as readonly { page?: { id?: unknown } }[])]);
+		const removed = prunePages(this.pagesDir(), shown);
+		if (removed) {
+			this.sessionOutput.appendLine(`[page] removed ${removed} stored page${removed === 1 ? '' : 's'} no chat shows any more`);
+		}
 	}
 
 	/** The stored HTML of a page, for the host to serve; `undefined` for an unknown id. */
@@ -5174,6 +5213,9 @@ ${context.content}` }
 			memoryRecentRuns: cfg.get<number>('memory.recentRuns') ?? 5,
 			toolCalls: cfg.get<string>('chat.toolCalls') ?? 'grouped',
 			voice: voiceProvider(cfg.get<string>('voice.provider')) !== 'off',
+			notifications: cfg.get<string>('notifications') ?? 'attention',
+			voiceProvider: voiceProvider(cfg.get<string>('voice.provider')),
+			voiceModel: cfg.get<string>('voice.model') ?? '',
 			// Shown on a paired phone ("Connected · project"): which desktop and folder it is driving.
 			workspaceName: (projectFolders()?.[0]?.name ?? '').slice(0, 60),
 		});

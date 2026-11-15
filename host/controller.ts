@@ -38,9 +38,11 @@ export interface ControllerOptions {
 	onExternalActivity?(): void;
 	/**
 	 * A chat wants the user back: a run is waiting for an approval or an answer, or it finished.
-	 * Only the kind is passed, never the message, so the embedder has nothing sensitive to show.
+	 * Only the kind and the chat's id are passed, never the message, so the embedder has
+	 * nothing sensitive to show. The id is for {@link Controller.openChat} when the user
+	 * clicks the notification.
 	 */
-	attention?(kind: AttentionKind): void;
+	attention?(kind: AttentionKind, sessionId: string | undefined): void;
 	/** App-level commands the shell can ask for (`app.quit`, `app.checkUpdates`, `app.openLogs`, `app.zoom`…). */
 	appCommand?(id: string, args: unknown[]): void | Promise<void>;
 	/** Keeps the app current from GitHub releases; its state is pushed to the shell as `app:update`. */
@@ -145,7 +147,8 @@ export class Controller {
 		}
 		const kind = attentionFor(message, attentionLevel(workspace.getConfiguration('stormcoder').get('notifications')));
 		if (kind && this.attentionThrottle.allow(kind)) {
-			this.opts.attention(kind);
+			const sessionId = (message as { sessionId?: unknown }).sessionId;
+			this.opts.attention(kind, typeof sessionId === 'string' && sessionId ? sessionId : undefined);
 		}
 	}
 
@@ -185,6 +188,17 @@ export class Controller {
 	/** The HTML currently registered for a view, served by the asset protocol. */
 	getViewHtml(view: string): string | undefined {
 		return this.viewHtml.get(view as ViewId);
+	}
+
+	/**
+	 * Brings a chat's tab to the front, as clicking the tab would: used when the user clicks
+	 * the desktop notification that chat raised. An id the engine does not know is ignored
+	 * there, so this can only ever switch between chats that exist.
+	 */
+	openChat(sessionId: string | undefined): void {
+		if (typeof sessionId === 'string' && sessionId && sessionId.length <= 200) {
+			deliverToView('chat', { type: 'switchSession', sessionId });
+		}
 	}
 
 	/** Whether voice input is switched on, which is the only time the microphone may be granted. */

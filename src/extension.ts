@@ -63,6 +63,8 @@ export function activate(context: vscode.ExtensionContext): void {
 	const auth = new WebAuthManager(registry);
 	const mcp = new McpManager(promptingConsent(context.workspaceState));
 	const viewProvider = new ChatViewProvider(context, registry, auth, mcp);
+	// Pages the agent showed are files in the app's storage; drop the ones nothing shows now.
+	viewProvider.cleanPages();
 	activeViewProvider = viewProvider;
 	context.subscriptions.push(mcp);
 	const remoteService = new RemoteService(context, viewProvider);

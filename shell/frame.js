@@ -192,11 +192,9 @@
 		sel.addEventListener('change', sync);
 		sync();
 	}
-	if (!settingsWindow) {
-		for (const id of ['providerSelect', 'modelSelect', 'approvalSelect']) {
-			const el = /** @type {HTMLSelectElement | null} */ (document.getElementById(id));
-			if (el) { buildPicker(el); }
-		}
+	for (const id of settingsWindow ? ['notificationsSelect', 'toolCallsSelect', 'voiceProviderSelect'] : ['providerSelect', 'modelSelect', 'approvalSelect']) {
+		const el = /** @type {HTMLSelectElement | null} */ (document.getElementById(id));
+		if (el) { buildPicker(el); }
 	}
 	if (window.StormMenu) { window.StormMenu.tooltips(); }
 

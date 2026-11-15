@@ -72,7 +72,7 @@
 	/** Current agent approval level (synced from `stormcoder.guardrails.approval`). */
 	let approval = 'auto-edits';
 	/** Mirrors `stormcoder.systemPrompt` / `maxTokens` / `rules` / `agent.max*`, synced on every 'config'. */
-	let generalConfig = { systemPrompt: '', maxTokens: 8192, rules: '', maxSteps: 100, maxRunMinutes: 30, memoryEnabled: true, memoryRecentRuns: 5 };
+	let generalConfig = { systemPrompt: '', maxTokens: 8192, rules: '', maxSteps: 100, maxRunMinutes: 30, memoryEnabled: true, memoryRecentRuns: 5, notifications: 'attention', toolCalls: 'grouped', voiceProvider: 'off', voiceModel: '' };
 	/** @type {{ label: string, content: string } | null} */
 	let currentContext = null;
 	/** The DOM bubble of the active session's in-flight assistant turn (model of record is `session.pending`). */
@@ -180,6 +180,11 @@
 		maxRunMinutesInput: /** @type {HTMLInputElement} */ ($('maxRunMinutesInput')),
 		saveMaxRunMinutes: $('saveMaxRunMinutes'),
 		enableMemory: /** @type {HTMLInputElement} */ ($('enableMemory')),
+		notificationsSelect: /** @type {HTMLSelectElement} */ ($('notificationsSelect')),
+		toolCallsSelect: /** @type {HTMLSelectElement} */ ($('toolCallsSelect')),
+		voiceProviderSelect: /** @type {HTMLSelectElement} */ ($('voiceProviderSelect')),
+		voiceModelInput: /** @type {HTMLInputElement} */ ($('voiceModelInput')),
+		saveVoiceModel: $('saveVoiceModel'),
 		memoryRecentRunsInput: /** @type {HTMLInputElement} */ ($('memoryRecentRunsInput')),
 		saveMemoryRecentRuns: $('saveMemoryRecentRuns'),
 		memoryAutoPropose: /** @type {HTMLInputElement} */ ($('memoryAutoPropose')),
@@ -1459,6 +1464,10 @@
 			els.maxRunMinutesInput.value = String(generalConfig.maxRunMinutes);
 		}
 		if (els.enableMemory) { els.enableMemory.checked = !!generalConfig.memoryEnabled; }
+		if (els.notificationsSelect) { els.notificationsSelect.value = generalConfig.notifications; }
+		if (els.toolCallsSelect) { els.toolCallsSelect.value = generalConfig.toolCalls; }
+		if (els.voiceProviderSelect) { els.voiceProviderSelect.value = generalConfig.voiceProvider; }
+		if (els.voiceModelInput && document.activeElement !== els.voiceModelInput) { els.voiceModelInput.value = generalConfig.voiceModel; }
 		if (els.memoryRecentRunsInput && document.activeElement !== els.memoryRecentRunsInput) {
 			els.memoryRecentRunsInput.value = String(generalConfig.memoryRecentRuns);
 			els.memoryRecentRunsInput.disabled = !generalConfig.memoryEnabled;
@@ -3320,6 +3329,14 @@
 			memoryPost({ type: 'memoryClear', memoryScope: scope });
 		});
 	}
+	// Settings with a few named values, and the speech-to-text model. The host checks every
+	// value against what the setting allows before saving it (`setPreference`).
+	for (const [select, key] of /** @type {[HTMLSelectElement, string][]} */ ([[els.notificationsSelect, 'notifications'], [els.toolCallsSelect, 'chat.toolCalls'], [els.voiceProviderSelect, 'voice.provider']])) {
+		select?.addEventListener('change', () => vscode.postMessage({ type: 'setPreference', key, choice: select.value }));
+	}
+	els.saveVoiceModel?.addEventListener('click', () => {
+		vscode.postMessage({ type: 'setPreference', key: 'voice.model', choice: els.voiceModelInput.value.trim() });
+	});
 	els.enableMemory?.addEventListener('change', () => {
 		generalConfig.memoryEnabled = els.enableMemory.checked;
 		els.memoryRecentRunsInput.disabled = !generalConfig.memoryEnabled;
@@ -3692,7 +3709,10 @@
 						notice: typeof e.notice === 'string' ? e.notice : '',
 					};
 				}
-				if (msg.toolCalls === 'grouped' || msg.toolCalls === 'all' || msg.toolCalls === 'hideSuccessful') { toolCallsMode = msg.toolCalls; }
+				if (msg.toolCalls === 'grouped' || msg.toolCalls === 'all' || msg.toolCalls === 'hideSuccessful') { toolCallsMode = msg.toolCalls; generalConfig.toolCalls = msg.toolCalls; }
+				if (typeof msg.notifications === 'string') { generalConfig.notifications = msg.notifications; }
+				if (typeof msg.voiceProvider === 'string') { generalConfig.voiceProvider = msg.voiceProvider; }
+				if (typeof msg.voiceModel === 'string') { generalConfig.voiceModel = msg.voiceModel; }
 				if (typeof msg.voice === 'boolean') {
 					els.micButton.classList.toggle('hidden', !msg.voice);
 					if (!msg.voice) { stopDictation(true); }

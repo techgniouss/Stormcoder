@@ -132,10 +132,10 @@ let renderCrashes: number[] = [];
 /**
  * Shows a desktop notification and flashes the taskbar when a chat needs the user and the
  * window is not in front. The text is fixed per kind (see `attentionText`); clicking it brings
- * the window forward on the chat view. This is the main-process `Notification`, which needs no
+ * the window forward on the chat that raised it. This is the main-process `Notification`, which needs no
  * page permission: the page itself is still refused every permission request.
  */
-function showAttention(kind: AttentionKind): void {
+function showAttention(kind: AttentionKind, sessionId: string | undefined): void {
 	if (!window || window.isDestroyed() || window.isFocused()) {
 		return;
 	}
@@ -154,6 +154,7 @@ function showAttention(kind: AttentionKind): void {
 		window.show();
 		window.focus();
 		window.webContents.send('app:navigate', { view: 'chat' });
+		controller.openChat(sessionId);
 	});
 	note.show();
 }

@@ -55,6 +55,39 @@ export const CHAT_APP_HTML = `
 					<input id="maxRunMinutesInput" type="number" min="1" step="1" class="settings-number" />
 					<button id="saveMaxRunMinutes" class="mini-button">Save</button>
 				</div>
+				<label class="field-label" for="notificationsSelect">Desktop notifications</label>
+				<p class="hint">Shown when a chat needs you and the window is not in front. A notification never includes commands, file names or message text.</p>
+				<div class="settings-row">
+					<select id="notificationsSelect" class="settings-select" title="When to show a desktop notification">
+						<option value="off">Never</option>
+						<option value="attention">When a run waits for an approval or an answer</option>
+						<option value="all">Also when a run finishes</option>
+					</select>
+				</div>
+				<label class="field-label" for="toolCallsSelect">Tool calls in chat</label>
+				<p class="hint">A call that is running or that failed is always shown.</p>
+				<div class="settings-row">
+					<select id="toolCallsSelect" class="settings-select" title="How the agent's tool calls appear">
+						<option value="grouped">Fold three or more finished calls into one line</option>
+						<option value="all">Show every call</option>
+						<option value="hideSuccessful">Keep only calls that fail</option>
+					</select>
+				</div>
+				<label class="field-label" for="voiceProviderSelect">Voice input</label>
+				<p class="hint">Adds a microphone button to the message box. Your recording is sent to the provider chosen here to be turned into text, and is not kept. The text lands in the box for you to review; nothing reaches a model until you press Send. It needs an API key for that provider: a subscription sign-in does not cover speech-to-text.</p>
+				<div class="settings-row">
+					<select id="voiceProviderSelect" class="settings-select" title="Who turns your recording into text">
+						<option value="off">Off</option>
+						<option value="openai">OpenAI</option>
+						<option value="groq">Groq</option>
+						<option value="custom">Custom (Local / Self-hosted) server</option>
+					</select>
+				</div>
+				<label class="field-label" for="voiceModelInput">Speech-to-text model</label>
+				<div class="settings-row">
+					<input id="voiceModelInput" type="text" class="settings-number settings-text" maxlength="100" placeholder="Provider default" spellcheck="false" />
+					<button id="saveVoiceModel" class="mini-button">Save</button>
+				</div>
 			</div>
 			</div>
 

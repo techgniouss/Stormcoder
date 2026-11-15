@@ -148,6 +148,23 @@ try {
 	assert.equal(await chat.locator('#messages > .message.assistant').count(), 1);
 	assert.equal(await chat.locator('#editChip').count(), 0);
 
+	// 1d. The right-click menus: quoting selected reply text, editing your own message, and the
+	// tab strip's worktree entry.
+	const menuItems = () => chat.locator('.sc-menu .sc-item').allInnerTexts();
+	const reply = chat.locator('#messages > .message.assistant .body').first();
+	await reply.evaluate(el => { const r = document.createRange(); r.selectNodeContents(el); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); });
+	await reply.click({ button: 'right' });
+	await chat.locator('.sc-menu .sc-item', { hasText: 'Quote in reply' }).click();
+	assert.equal(await chat.locator('#input').inputValue(), '> Hello from the mock model.\n\n');
+	await chat.locator('#input').fill('');
+	await chat.locator('#messages > .message.user .body').first().click({ button: 'right' });
+	assert.ok((await menuItems()).some(t => t.includes('Edit and resend')), 'your own message offers Edit and resend');
+	await page.keyboard.press('Escape');
+	await chat.locator('.tab-add').click({ button: 'right' });
+	assert.deepEqual((await menuItems()).map(t => t.trim()), ['New chat', 'New chat in a worktree'], 'the + button has no Close entry');
+	await page.keyboard.press('Escape');
+	await chat.locator('#input').fill('');
+
 	// 2. An Agent turn runs the tool loop and writes into the project folder.
 	await chat.locator('.seg-btn[data-value=agent]').click();
 	await chat.locator('#input').fill('create hello.txt');
@@ -193,6 +210,33 @@ try {
 	await page.click('[data-view=settings]');
 	const settings = page.frameLocator('#view-settings');
 	await settings.locator('.area.active[data-area=providers]').waitFor();
+	await settings.getByRole('button', { name: 'Agent permissions' }).click();
+	await settings.locator('.area.active[data-area=permissions]').waitFor();
+
+	// Settings > General holds the notification, tool-call and voice choices. Each shows what is
+	// saved, a pick is written to settings.json, and a value the setting does not allow is not.
+	await settings.getByRole('button', { name: 'General', exact: true }).click();
+	await settings.locator('.area.active[data-area=general]').waitFor();
+	const saved = () => JSON.parse(fs.readFileSync(path.join(host.data, 'settings.json'), 'utf8'));
+	const waitSaved = async (key, value) => { for (let i = 0; i < 50 && saved()[key] !== value; i++) { await new Promise(r => setTimeout(r, 100)); } return saved()[key]; };
+	assert.equal(await settings.locator('#voiceProviderSelect').inputValue(), 'custom', 'the saved voice provider is shown');
+	assert.equal(await settings.locator('#notificationsSelect').inputValue(), 'attention');
+	await settings.locator('#toolCallsSelectButton').click();
+	await settings.locator('.sc-menu .sc-item', { hasText: 'Show every call' }).click();
+	assert.equal(await waitSaved('stormcoder.chat.toolCalls', 'all'), 'all');
+	await settings.locator('#notificationsSelectButton').click();
+	await settings.locator('.sc-menu .sc-item', { hasText: 'Also when a run finishes' }).click();
+	assert.equal(await waitSaved('stormcoder.notifications', 'all'), 'all');
+	await settings.locator('#voiceModelInput').fill('whisper-test');
+	await settings.locator('#saveVoiceModel').click();
+	assert.equal(await waitSaved('stormcoder.voice.model', 'whisper-test'), 'whisper-test');
+	// Back to the defaults the rest of this test expects.
+	await settings.locator('#toolCallsSelectButton').click();
+	await settings.locator('.sc-menu .sc-item', { hasText: 'Fold three or more' }).click();
+	assert.equal(await waitSaved('stormcoder.chat.toolCalls', 'grouped'), 'grouped');
+	await settings.locator('#voiceModelInput').fill('');
+	await settings.locator('#saveVoiceModel').click();
+	assert.equal(await waitSaved('stormcoder.voice.model', ''), '');
 	await settings.getByRole('button', { name: 'Agent permissions' }).click();
 	await settings.locator('.area.active[data-area=permissions]').waitFor();
 
