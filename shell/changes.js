@@ -385,13 +385,16 @@
 			pane.append(el('div', 'ch-empty', 'This file was deleted. Switch to Diff to see what it held.'));
 			return;
 		}
+		// The selection can be dropped while git is answering (a refresh found the file gone,
+		// or the view moved to another chat's folder), so it is read once, before the wait.
+		const chosen = sel;
 		const res = wantFile
-			? await git('file', sel.path)
-			: await git('diff', sel.path, sel.area === 'staged' ? 'staged' : f && f.untracked ? 'untracked' : 'unstaged');
-		if (token !== viewToken) { return; }
+			? await git('file', chosen.path)
+			: await git('diff', chosen.path, chosen.area === 'staged' ? 'staged' : f && f.untracked ? 'untracked' : 'unstaged');
+		if (token !== viewToken || sel !== chosen) { return; }
 		pane.textContent = '';
 		if (!res.ok) { pane.append(el('div', 'ch-empty', res.error)); return; }
-		if (wantFile) { drawText(pane, res.value); } else { drawDiff(pane, res.value, sel.area, sel.path); }
+		if (wantFile) { drawText(pane, res.value); } else { drawDiff(pane, res.value, chosen.area, chosen.path); }
 	}
 
 	/** @param {HTMLElement} pane @param {any} v */

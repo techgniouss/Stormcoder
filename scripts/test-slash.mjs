@@ -27,6 +27,7 @@ function makeEffects(skillsSnapshot) {
 		openMcpSettings: () => calls.push({ fn: 'openMcpSettings' }),
 		reply: text => calls.push({ fn: 'reply', text }),
 		compact: () => calls.push({ fn: 'compact' }),
+		compare: prompt => calls.push({ fn: 'compare', prompt }),
 		memory: args => calls.push({ fn: 'memory', args }),
 		undoRun: () => calls.push({ fn: 'undoRun' }),
 		listSkills: () => skillsSnapshot ?? { skills: [], active: [] },
@@ -275,6 +276,20 @@ for (const remote of [false, true]) {
 	const remoteRun = makeEffects();
 	assert.deepStrictEqual(runSlash('/memory off', remoteRun.effects, true), { handled: true, denied: true });
 	assert.deepStrictEqual(remoteRun.calls, [], 'a remote client cannot read or change memory');
+}
+
+// /compare: hands the prompt to the host, which asks for the models; refused from a remote
+// device, since it creates git worktrees and chats on the desktop.
+{
+	const local = makeEffects();
+	assert.deepStrictEqual(runSlash('/compare fix the flaky test', local.effects, false), { handled: true });
+	assert.deepStrictEqual(local.calls, [{ fn: 'compare', prompt: 'fix the flaky test' }]);
+	const bare = makeEffects();
+	assert.deepStrictEqual(runSlash('/compare', bare.effects, false), { handled: true });
+	assert.deepStrictEqual(bare.calls, [{ fn: 'compare', prompt: '' }]);
+	const remote = makeEffects();
+	assert.deepStrictEqual(runSlash('/compare do it', remote.effects, true), { handled: true, denied: true });
+	assert.deepStrictEqual(remote.calls, []);
 }
 
 console.log('test-slash: all assertions passed');

@@ -3463,6 +3463,90 @@ ${context.content}` }
 		});
 	}
 
+	/** The most models one `/compare` starts: each is a worktree and a run of its own. */
+	private static readonly MAX_COMPARE = 4;
+
+	/**
+	 * `/compare <prompt>`: asks which of the current provider's models to use, then starts one
+	 * chat per model, each in its own worktree and in the mode the asking chat is in, and
+	 * sends the prompt to all of them. Each is an ordinary tab afterwards: review, undo,
+	 * commit and close work as for any worktree chat. Worktrees are what make this safe:
+	 * several agents given the same task in one folder would overwrite each other.
+	 */
+	private async compareModels(sessionId: string, prompt: string, origin: string): Promise<void> {
+		const say = (message: string) => this.bus.postTo(origin, { type: 'info', sessionId, message });
+		const source = this.sessionStore.getSession(sessionId);
+		const project = projectFolders()?.[0]?.uri.fsPath;
+		if (!prompt.trim()) {
+			return say('Usage: /compare <prompt>. You are then asked which models to send it to.');
+		}
+		if (origin !== WEBVIEW_SINK_ID || !source) {
+			return say('/compare is only available from the desktop app.');
+		}
+		if (!project || !vscode.workspace.isTrusted) {
+			return say('/compare needs a project folder you trust: each model works in its own git worktree.');
+		}
+		if (this.engineActive) {
+			return say('/compare is not available with the Claude Code engine yet.');
+		}
+		const providerId = source.provider && source.provider !== AUTO_PROVIDER ? source.provider : this.registry.getDefaultProviderId();
+		const provider = this.registry.getProvider(providerId);
+		if (!provider) {
+			return say('Pick a provider for this chat first.');
+		}
+		let ids: string[];
+		try {
+			ids = (await this.modelCache.load(providerId, false)).map(m => m.id);
+		} catch {
+			ids = [];
+		}
+		if (!ids.length) {
+			ids = [...provider.info.suggestedModels];
+		}
+		if (ids.length < 2) {
+			return say(`${provider.info.label} lists fewer than two models, so there is nothing to compare.`);
+		}
+		const picked = await vscode.window.showQuickPick(ids, {
+			title: `Compare models (${provider.info.label})`,
+			placeHolder: `Choose 2 to ${ChatViewProvider.MAX_COMPARE} models`,
+			canPickMany: true,
+		});
+		if (!picked || !picked.length) {
+			return;
+		}
+		if (picked.length < 2 || picked.length > ChatViewProvider.MAX_COMPARE) {
+			return say(`Choose between 2 and ${ChatViewProvider.MAX_COMPARE} models. Nothing was started.`);
+		}
+		const mode = source.mode;
+		const started: string[] = [];
+		for (const model of picked) {
+			const created = this.sessionStore.createSession(false, mode);
+			try {
+				const worktree = await addWorktree(project, path.join(this.worktreeHome(project), created.id), worktreeBranchName(model, created.id));
+				this.sessionStore.setWorktree(created.id, worktree);
+			} catch (err) {
+				this.sessionStore.closeSession(created.id);
+				say(`Could not create a worktree for ${model}: ${err instanceof Error ? err.message : String(err)}`);
+				continue;
+			}
+			this.sessionStore.setSessionConfig(created.id, mode, providerId, model);
+			this.sessionStore.getSession(created.id)!.title = model.length > 28 ? model.slice(0, 27) + '…' : model;
+			started.push(created.id);
+		}
+		this.persistSessionState();
+		this.postSessions();
+		if (!started.length) {
+			return;
+		}
+		say(`Sent to ${started.length} model${started.length === 1 ? '' : 's'}, each in its own worktree chat. Their tabs are open beside this one.`);
+		for (const id of started) {
+			this.postTranscript(id);
+			// Not awaited: the runs go side by side, each scoped to its own worktree.
+			void this.inSessionFolder(id, undefined, () => this.sendFollowUp(id, undefined, prompt.trim(), origin))
+				.catch(err => this.sessionOutput.appendLine(`[compare] ${id}: ${err instanceof Error ? err.message : String(err)}`));
+		}
+	}
+
 	/** The active chat's worktree folder, if it has one: what the Changes view should show. */
 	activeWorktreeFolder(): string | undefined {
 		const worktree = this.sessionStore.getSession(this.sessionStore.getActiveId())?.worktree;
@@ -3822,6 +3906,7 @@ ${context.content}` }
 			openMcpSettings: () => { this.openSettingsWindow(); },
 			reply: text => { this.bus.postTo(origin, { type: 'info', sessionId, message: text }); },
 			compact: () => { void this.compactSession(sessionId, origin); },
+			compare: prompt => { void this.compareModels(sessionId, prompt, origin); },
 			memory: args => { void this.handleMemorySlash(args, text => this.bus.postTo(origin, { type: 'info', sessionId, message: text }), sessionId); },
 			undoRun: () => { void this.undoLastRun(sessionId, origin); },
 			listSkills: () => skillsSnapshot,

@@ -118,6 +118,32 @@ try {
 	assert.equal(fs.existsSync(second), false, 'a clean worktree folder is removed');
 	assert.match(git(project, 'branch', '--list', branch), new RegExp(branch.replace('/', '\\/')), 'its branch is kept');
 
+	// 8. /compare: one prompt to two models. Each gets a worktree chat of its own, titled with
+	// the model, and each agent writes into its own worktree and not the project.
+	const before = new Set(worktreeDirs());
+	await chat.locator('.chat-tab').first().click();
+	await chat.locator('.seg-btn[data-value=agent]').click();
+	await chat.locator('#input').fill('/compare create cmp.txt');
+	await chat.locator('#input').press('Enter');
+	await page.locator('#palette:not(.hidden) #paletteList li').first().waitFor({ timeout: 10000 });
+	for (const model of ['mock-model', 'glm-4.6']) {
+		await page.locator('#paletteList li', { hasText: model }).first().click();
+	}
+	await page.locator('#paletteInput').press('Enter');
+	await chat.locator('.chat-tab:has(.tab-wt)').nth(1).waitFor({ timeout: 20000 });
+	assert.deepEqual((await chat.locator('.chat-tab:has(.tab-wt) .tab-title').allInnerTexts()).map(t => t.trim()).sort(), ['glm-4.6', 'mock-model']);
+	const fresh = () => worktreeDirs().filter(d => !before.has(d));
+	for (let i = 0; i < 200 && fresh().filter(d => fs.existsSync(path.join(d, 'cmp.txt'))).length < 2; i++) { await new Promise(r => setTimeout(r, 100)); }
+	assert.equal(fresh().length, 2, 'two worktrees were created');
+	for (const dir of fresh()) {
+		assert.equal(fs.readFileSync(path.join(dir, 'cmp.txt'), 'utf8'), 'written by the agent: cmp.txt\n');
+	}
+	assert.equal(fs.existsSync(path.join(project, 'cmp.txt')), false, 'neither run wrote to the project folder');
+	const models = mock.seen.filter(r => String(r.messages?.at(-1)?.content).includes('create cmp.txt') || r.messages?.some(m => String(m.content).includes('create cmp.txt'))).map(r => r.model);
+	assert.ok(models.includes('mock-model') && models.includes('glm-4.6'), 'each chat asked its own model');
+	// The asking chat itself ran nothing.
+	await chat.getByText('each in its own worktree chat').waitFor();
+
 	assert.deepEqual(errors, [], 'no uncaught page errors');
 	console.log('worktree-e2e: ok');
 } catch (err) {

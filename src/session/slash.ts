@@ -28,6 +28,7 @@ export const SLASH_COMMANDS: readonly { cmd: string; desc: string }[] = [
 	{ cmd: 'init', desc: 'Have the agent write an AGENTS.md describing this project' },
 	{ cmd: 'review', desc: 'Review the uncommitted changes (read-only)' },
 	{ cmd: 'compact', desc: 'Summarize older turns of this chat to free context' },
+	{ cmd: 'compare', desc: 'Send one prompt to several models, each in its own worktree chat' },
 	{ cmd: 'memory', desc: 'Show project memory — "add <text>" saves a note, "on"/"off" switches it' },
 	{ cmd: 'clear', desc: 'Clear this chat tab (saved to History)' },
 	{ cmd: 'help', desc: 'Show all slash commands' },
@@ -114,6 +115,8 @@ export interface SlashEffects {
 	openMcpSettings(): void;
 	/** Summarizes this tab's older turns now instead of waiting for the context to fill (`/compact`). */
 	compact(): void;
+	/** `/compare <prompt>`: asks which models, then runs the prompt in one worktree chat per model. */
+	compare(prompt: string): void;
 	/** Handles `/memory` and its arguments (list, add, on, off) — the host answers the requesting sink. */
 	memory(args: string): void;
 	/** Restores the files this tab's latest run changed (`/undo`). */
@@ -233,6 +236,14 @@ export function runSlash(text: string, effects: SlashEffects, remote = false): S
 	if (cmd === 'review') {
 		effects.setMode('agent');
 		return { handled: true, sendRest: rest ? `${REVIEW_PROMPT}\n\nFocus: ${rest}` : REVIEW_PROMPT };
+	}
+	if (cmd === 'compare') {
+		// Creates git worktrees and chats on this machine: desktop only.
+		if (remote) {
+			return { handled: true, denied: true };
+		}
+		effects.compare(rest);
+		return { handled: true };
 	}
 	if (cmd === 'memory') {
 		// Saving, switching and listing memory is desktop-only, like the Memory settings panel.
