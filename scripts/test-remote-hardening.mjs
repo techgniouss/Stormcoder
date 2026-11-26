@@ -22,7 +22,7 @@ assert.match(provider, /origin !== WEBVIEW_SINK_ID && this\.runOriginLocal\.get\
 assert.match(provider, /this\.runOriginLocal\.set\(sessionId, \{ runId, local: origin === WEBVIEW_SINK_ID \}\)/);
 
 // Undo: the checkpoint is not spliced before the restore, and survives a throw or leftovers.
-const undo = provider.slice(provider.indexOf('private async undoLastRun'), provider.indexOf('/** Builds the per-run channel'));
+const undo = provider.slice(provider.indexOf('private async restoreLastRun'), provider.indexOf('/** Builds the per-run channel'));
 assert.ok(!/list\.splice\(index/.test(undo), 'undo must not remove the entry before restoring');
 assert.match(undo, /try \{\s*report = await entry\.checkpoint\.restore\(\)/);
 assert.match(undo, /remaining\.length === 0/);

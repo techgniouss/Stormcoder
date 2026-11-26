@@ -843,6 +843,7 @@ const REMOTE_ALLOWED = [
 	'listSkills', 'setSkill', 'toggleSkill', 'listMcp', 'enhancePrompt', 'steer', 'createSession',
 	'switchSession', 'closeSession', 'clearSession', 'restoreSession', 'setMode', 'setQueue',
 	'sync', 'fetchTranscript', 'undoRun', 'slash', 'attachActive', 'attachImage',
+	'changesRequest', 'usageRequest',
 ];
 void REMOTE_ALLOWED; // referenced by the contract test via source text, not by import
 
