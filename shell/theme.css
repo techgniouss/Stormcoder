@@ -100,7 +100,10 @@ button:active:not(:disabled) { transform: scale(.96); }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 var(--accent-line); } 70%, 100% { box-shadow: 0 0 0 7px transparent; } }
 
 /* ============================================================ hero */
-.empty { max-width: 640px; gap: 12px; padding: 7vh 0 0; margin: 0 auto; }
+/* The home screen is sized from the window height so the logo, title and every starter card fit above the
+   composer without scrolling; only a very short window falls back to scrolling. */
+#messages.is-empty { padding-top: 8px; padding-bottom: 150px; scroll-padding-bottom: 150px; }
+.empty { max-width: 640px; gap: clamp(6px, 1.4vh, 12px); padding: clamp(0px, 2vh, 20px) 0 0; margin: auto; }
 .empty > * { animation: rise 640ms var(--ease-expo) both; }
 .empty > :nth-child(1) { animation-delay: 40ms; }
 .empty > :nth-child(2) { animation-delay: 110ms; }
@@ -111,14 +114,14 @@ button:active:not(:disabled) { transform: scale(.96); }
 .empty > :nth-child(7) { animation-delay: 460ms; }
 .empty-hero {
 	content: url("stormcoder-asset://app/shell/mark.svg");
-	width: 78px; height: 78px; padding: 12px; border-radius: 23px; border: 1px solid var(--accent-soft); opacity: 1;
+	width: clamp(48px, 10vh, 78px); height: clamp(48px, 10vh, 78px); padding: clamp(8px, 1.6vh, 12px); border-radius: clamp(15px, 3vh, 23px); border: 1px solid var(--accent-soft); opacity: 1;
 	background: radial-gradient(circle at 30% 20%, var(--accent-soft), transparent 70%), var(--surface); /* taste-skill-ignore: deliberate depth and accent */
 	box-shadow: 0 0 0 1px var(--border), 0 18px 50px var(--glow); animation: float 6s ease-in-out infinite !important;
 }
 @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
-.empty-title { font-size: 40px; font-weight: 700; letter-spacing: -.035em; line-height: 1.05; color: var(--text); margin-top: 14px; }
+.empty-title { font-size: clamp(26px, 5vh, 40px); font-weight: 700; letter-spacing: -.035em; line-height: 1.05; color: var(--text); margin-top: clamp(4px, 1.2vh, 14px); }
 .empty-sub { font-size: 15px; line-height: 1.6; color: var(--muted); max-width: 470px; }
-.empty-chips { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: 100%; margin-top: 18px; }
+.empty-chips { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: 100%; margin-top: clamp(8px, 2vh, 18px); }
 .empty-chip {
 	display: flex; align-items: flex-start; gap: 12px; text-align: left; padding: 14px 16px; border-radius: 14px;
 	background: var(--surface); border: 1px solid var(--border); color: var(--text);
@@ -130,6 +133,7 @@ button:active:not(:disabled) { transform: scale(.96); }
 .empty-chip .chip-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .empty-chip .chip-title { font-weight: 600; font-size: 13.5px; }
 .empty-chip .chip-hint { color: var(--muted); font-size: 12px; font-weight: 400; }
+@media (max-height: 640px) { .empty-sub, .empty-keys, .empty-recent { display: none; } }
 .empty-keys { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 18px; margin-top: 10px; color: var(--muted); font-size: 12px; }
 .empty-keys kbd { margin-right: 2px; }
 .empty-recent { width: 100%; margin-top: 14px; text-align: left; }
@@ -140,14 +144,11 @@ button:active:not(:disabled) { transform: scale(.96); }
 .empty-footnote { color: var(--faint); font-size: 12px; }
 
 /* ============================================================ messages */
-.message { display: grid; grid-template-columns: 32px minmax(0, 1fr); column-gap: 14px; row-gap: 0; align-items: start; }
-.message .role { grid-column: 1; grid-row: 1; font-size: 0; width: 32px; height: 32px; }
-.message .role::before {
-	content: ""; display: block; width: 32px; height: 32px; border-radius: 10px; background: var(--accent-soft) center / 18px no-repeat;
-	box-shadow: inset 0 0 0 1px var(--accent-soft);
-	background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2352b7ff' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='3' width='13' height='7' rx='1'/><path d='M9.5 10v11'/><path d='M16 6.5h3.5L21 8'/></svg>");
-}
-.message .body { grid-column: 2; grid-row: 1; padding: 3px 0 0; background: transparent; border: 0; border-radius: 0; font-size: 14.5px; line-height: 1.7; color: var(--text); }
+/* No avatar tile: a reply is plain text and only the user's own turns are bubbles, so who is speaking
+   is clear without a second logo beside every answer. */
+.message { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: 0; align-items: start; }
+.message .role { display: none; }
+.message .body { grid-column: 1; grid-row: 1; padding: 3px 0 0; background: transparent; border: 0; border-radius: 0; font-size: 14.5px; line-height: 1.7; color: var(--text); }
 .message.user { grid-template-columns: minmax(0, 1fr); justify-items: end; }
 .message.user .role { display: none; }
 .message.user .body {
@@ -202,7 +203,14 @@ button:active:not(:disabled) { transform: scale(.96); }
 .tool-head { font-weight: 600; font-size: 13px; }
 .tool-summary { color: var(--muted); font-size: 12.5px; }
 .tool-out { border-radius: 8px; background: var(--ground); font-family: var(--mono); font-size: 12px; } /* taste-skill-ignore: command output */
-.thinking, details.thinking { border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }
+/* Reasoning is one quiet inline line that is only as wide as its words; opening it shows the text behind a rule. */
+details.thinking { display: block; width: fit-content; max-width: 100%; margin: 2px 0 8px; background: none; border: 0; border-radius: 0; }
+details.thinking > summary { padding: 3px 10px 3px 8px; gap: 6px; font-size: 12.5px; color: var(--muted); background: var(--hover); border: 1px solid var(--border); border-radius: 999px; transition: color var(--t-hover) ease, background-color var(--t-hover) ease, border-color var(--t-hover) ease; }
+details.thinking > summary:hover { color: var(--text-2); background: var(--active-bg); border-color: var(--border-strong); }
+details.thinking > summary::after { content: ""; width: 5px; height: 5px; margin-left: 2px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg) translateY(-1px); transition: transform var(--t-ui) var(--ease-out); }
+details.thinking[open] > summary::after { transform: rotate(-135deg); }
+details.thinking .storm-glyph { color: var(--accent); }
+details.thinking .thinking-body { margin: 8px 0 4px 10px; padding: 2px 0 2px 14px; border-left: 2px solid var(--rule); color: var(--text-2); font-size: 13.5px; line-height: 1.65; }
 .working { color: var(--muted); }
 
 /* ============================================================ composer */

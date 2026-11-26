@@ -11,6 +11,7 @@
 	let theme = 'dark';
 	try { theme = localStorage.getItem('sc-theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'); } catch (e) { /* storage unavailable */ }
 	document.documentElement.dataset.theme = theme;
+	if (api.setChrome) { api.setChrome(theme); }
 
 	const frames = { chat: $('view-chat'), settings: $('view-settings') };
 	const frameReady = { chat: false, settings: false };
@@ -101,6 +102,7 @@
 		theme = next === 'light' ? 'light' : 'dark';
 		document.documentElement.dataset.theme = theme;
 		try { localStorage.setItem('sc-theme', theme); } catch (e) { /* storage unavailable */ }
+		if (api.setChrome) { api.setChrome(theme); }
 		for (const view of Object.keys(frames)) { navFrame(view, { theme: theme }); }
 	}
 	window.__setTheme = setTheme;

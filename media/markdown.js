@@ -403,7 +403,10 @@
 			if (open === -1) {
 				return html + (rest ? renderProse(rest) : '');
 			}
-			if (open > 0) { html += renderProse(rest.slice(0, open)); }
+			// The opener is written "🤔 *Thinking…*" (src/persona/thinking.ts); the face belongs to
+			// the marker, so it goes with it instead of showing as a stray emoji above the line.
+			const before = rest.slice(0, open).replace(/🤔\s*$/, '');
+			if (before.trim()) { html += renderProse(before); }
 			const after = rest.slice(open + THINK_OPEN.length);
 			const close = after.indexOf(THINK_CLOSE);
 			// No closing marker yet: the block is still streaming (or the stream died in it).

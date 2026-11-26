@@ -168,9 +168,15 @@ function createWindow(): void {
 		y: b?.y,
 		minWidth: 720,
 		minHeight: 520,
-		backgroundColor: '#171719',
+		backgroundColor: '#111114',
 		title: APP_NAME,
 		autoHideMenuBar: true,
+		// No native strip: the page's own header is the title bar and the system's window buttons sit
+		// on it (colours follow the theme, see 'window:chrome'). macOS keeps its traffic lights.
+		titleBarStyle: 'hidden',
+		...(process.platform === 'darwin'
+			? { trafficLightPosition: { x: 18, y: 16 } }
+			: { titleBarOverlay: { color: '#111114', symbolColor: '#a4a4ae', height: 48 } }),
 		webPreferences: {
 			preload: path.join(__dirname, 'preload.js'),
 			contextIsolation: true,
@@ -367,6 +373,12 @@ if (!app.requestSingleInstanceLock()) {
 		}, extension, prepareViewHtml);
 
 		ipcMain.on('renderer:ready', () => controller.rendererIsReady());
+		// The window buttons take the page's header colour; only the two theme names are accepted.
+		ipcMain.on('window:chrome', (_e, theme: unknown) => {
+			if (process.platform === 'darwin' || !window || window.isDestroyed()) { return; }
+			const light = theme === 'light';
+			try { window.setTitleBarOverlay({ color: light ? '#f3f3f6' : '#111114', symbolColor: light ? '#55555f' : '#a4a4ae', height: 48 }); } catch { /* overlay not available */ }
+		});
 		ipcMain.on('view:message', (_e, view, message) => { void controller.handleCall('sendToView', [view, message]); });
 		ipcMain.on('ui:response', (_e, id, value) => { void controller.handleCall('respond', [id, value]); });
 		ipcMain.handle('app:command', (_e, id: string, ...args: unknown[]) => controller.handleCall('command', [id, ...args]));

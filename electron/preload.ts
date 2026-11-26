@@ -19,6 +19,7 @@ function subscribe<T>(channel: string, listener: Listener<T>): () => void {
  */
 contextBridge.exposeInMainWorld('stormcoder', {
 	ready: () => ipcRenderer.send('renderer:ready'),
+	setChrome: (theme: string) => ipcRenderer.send('window:chrome', theme === 'light' ? 'light' : 'dark'),
 	sendToView: (view: string, message: unknown) => ipcRenderer.send('view:message', view, message),
 	respond: (id: number, value: unknown) => ipcRenderer.send('ui:response', id, value),
 	command: (id: string, ...args: unknown[]) => ipcRenderer.invoke('app:command', id, ...args),

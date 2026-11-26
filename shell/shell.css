@@ -254,3 +254,19 @@ kbd {
 .usage-table tr:last-child td { border-bottom: 0; }
 .usage-note { margin: 14px 0 0; font-size: 12px; color: var(--muted); }
 @media (max-width: 760px) { .usage-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ---------------------------------------------------------------- title bar
+   The header is the window's title bar: drag it to move the window, and the system buttons sit on
+   its right edge (the desktop app sets titleBarOverlay; env() is the space they take). */
+#scope {
+	-webkit-app-region: drag;
+	padding-right: max(18px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 14px));
+	background: var(--ground);
+	border-bottom-color: var(--rule);
+}
+#scope button, #scope input, #scope kbd, #scope .pill { -webkit-app-region: no-drag; }
+#rail { -webkit-app-region: drag; }
+#rail button { -webkit-app-region: no-drag; }
+#scope h1 { font-size: 15px; letter-spacing: -.005em; }
+.scope-project { height: 28px; background: transparent; }
+.scope-project:hover { background: var(--hover); }
