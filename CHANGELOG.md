@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.4.1
+
+- Interface polish.
+  - **Title bar.** The window uses the app's own header as its title bar, with the system window buttons on it; the buttons follow the light or dark theme. Not exercised: macOS.
+  - **Replies.** No avatar tile beside answers, and the thinking marker no longer leaves a stray emoji above the "Thought for" line.
+  - **Thinking line.** A small pill, as wide as its text, that opens to the reasoning behind a thin rule.
+  - **Home screen.** Sized from the window height so the logo and all four starter cards fit above the composer without scrolling.
+
 ## 1.4.0
 
 - Remote control: the phone app catches up with the desktop.
