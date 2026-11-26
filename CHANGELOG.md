@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.4.0
+
 - Remote control: the phone app catches up with the desktop.
   - **Drafts and an offline outbox.** What is typed but not sent is kept per chat on the phone. A message sent with no connection waits above the composer (a dashed chip), survives a restart, and goes out in order when the connection is back. A message this device just sent is no longer taken off the screen by a catch-up transcript that was built a moment before it.
   - **Changes** (History > Changes, or the button beside Undo): what the working tree changed, read-only. Bounded, scrubbed of credential shapes, and a file the guardrails protect (environment files, keys) is named but never shown. Staging and committing stay on the desktop.

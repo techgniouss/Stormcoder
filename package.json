@@ -1,8 +1,8 @@
 {
 	"name": "stormcoder",
 	"productName": "Stormcoder",
-	"version": "1.3.6",
-	"description": "Stormcoder \u2014 a standalone desktop AI coding workspace: multi-provider chat, Plan and Agent modes, MCP, skills and phone remote control.",
+	"version": "1.4.0",
+	"description": "Stormcoder — a standalone desktop AI coding workspace: multi-provider chat, Plan and Agent modes, MCP, skills and phone remote control.",
 	"main": "dist/main.js",
 	"license": "MIT",
 	"author": "Srikanth Reddy",
