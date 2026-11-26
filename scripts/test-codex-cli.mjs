@@ -91,7 +91,7 @@ await test('it always runs read-only, non-interactively, in the project folder, 
 	child.emit('close', 0, null);
 	assert.deepEqual(await promise, { truncated: false });
 	assert.equal(lastSpawn.binary, 'codex');
-	assert.deepEqual(lastSpawn.args, ['exec', '--experimental-json', '--sandbox', 'read-only', '--skip-git-repo-check']);
+	assert.deepEqual(lastSpawn.args, ['exec', '--json', '--sandbox', 'read-only', '--skip-git-repo-check']);
 	assert.equal(lastSpawn.opts.cwd, '/work/project');
 	assert.match(child.stdinText, /read-only sandbox/);
 	assert.match(child.stdinText, /System instructions:\nReview this change\./);
@@ -107,7 +107,7 @@ await test('no setting or model name can widen the sandbox', async () => {
 		child.stdout.emit('data', answer('ok'));
 		child.emit('close', 0, null);
 		await p;
-		assert.deepEqual(lastSpawn.args.slice(0, 5), ['exec', '--experimental-json', '--sandbox', 'read-only', '--skip-git-repo-check']);
+		assert.deepEqual(lastSpawn.args.slice(0, 5), ['exec', '--json', '--sandbox', 'read-only', '--skip-git-repo-check']);
 		assert.deepEqual(lastSpawn.args.slice(5), ['--model', model]);
 		assert.ok(!lastSpawn.args.some(a => /danger|workspace-write|bypass|full-auto|yolo/i.test(a)));
 	}
@@ -216,6 +216,25 @@ await test('failures: exit code with stderr, a failed turn, no answer, and the s
 	child.stdout.emit('data', event({ type: 'error', message: 'rate limited' }));
 	child.emit('close', 0, null);
 	await assert.rejects(p, /returned no answer: rate limited/);
+});
+
+await test('the output of a real, signed-out Codex CLI 0.167.0 run is understood: retries are not the verdict, the final failure and the login hint are', async () => {
+	// Captured from `codex exec --json --sandbox read-only --skip-git-repo-check` with no login.
+	const real = [
+		'{"type":"thread.started","thread_id":"01a1be64-a23f-7460-b8cf-37dbfba4bd6b"}',
+		'{"type":"turn.started"}',
+		'{"type":"error","message":"Reconnecting... 2/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: wss://api.openai.com/v1/responses)"}',
+		'{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Falling back from WebSockets to HTTPS transport. unexpected status 401 Unauthorized"}}',
+		'{"type":"error","message":"Reconnecting... 5/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses)"}',
+		'{"type":"error","message":"unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, request id: req_3e42"}',
+		'{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, request id: req_3e42"}}',
+	].join('\n') + '\n';
+	const child = new FakeChild();
+	spawnImpl = () => child;
+	const p = new CodexCliProvider().streamChat(request());
+	child.stdout.emit('data', real);
+	child.emit('close', 1, null);
+	await assert.rejects(p, err => /exited with code 1: unexpected status 401 Unauthorized/.test(err.message) && !/Reconnecting/.test(err.message) && /codex login/.test(err.message));
 });
 
 await test('a missing binary names the install step and the setting', async () => {

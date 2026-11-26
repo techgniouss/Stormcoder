@@ -1662,6 +1662,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				// `saveHistory` wrote the panel's list to disk but could only merge it into the store,
 				// so a deleted conversation came back with the next archive save.
 				if (message.historyId && this.sessionStore.deleteHistory(message.historyId)) {
+					this.forgetEngineChat(message.historyId);
 					await this.persistAndPostHistory();
 				}
 				break;
@@ -1739,6 +1740,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				}
 				this.checkpoints.delete(message.sessionId);
 				this.queueDrains.sessionClosed(message.sessionId);
+				this.forgetEngineNotes(message.sessionId);
 				if (result.abortSessionId) {
 					this.activeRequests.get(result.abortSessionId)?.abort();
 				}
@@ -1758,6 +1760,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 				if (!result) {
 					break;
 				}
+				this.forgetEngineChat(message.sessionId);
 				this.carryCheckpoints(message.sessionId, result.newId);
 				if (result.abortSessionId) {
 					this.activeRequests.get(result.abortSessionId)?.abort();
@@ -2926,6 +2929,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		if (this.engineHost.enabled && await this.handleEngineSend(requestedMode, message, sessionId, runId, origin, post, guardrails, fail)) {
 			return;
 		}
+		// This message goes to the built-in agent (the engine is off, or it declined). The harness will not have seen
+		// it, so the engine session saved for this chat is stale; forget it and the next engine turn starts from the
+		// chat's history instead of resuming a conversation that is missing this turn and its file changes.
+		if (this.engineSessions.has(sessionId)) {
+			this.rememberEngineSession(sessionId, undefined);
+		}
 
 		if (message.provider === AUTO_PROVIDER) {
 			await this.handleAutoSend(requestedMode, message, sessionId, runId, origin);
@@ -3129,8 +3138,32 @@ ${context.content}` }
 		if (requestedMode === 'edit') {
 			return false;
 		}
+		// Registered before the (up to 20 second) readiness check, so Stop, Close and Clear work from the first moment.
+		this.activeRequests.get(sessionId)?.abort();
+		const controller = new AbortController();
+		this.activeRequests.set(sessionId, controller);
+		const release = (): void => {
+			if (this.activeRequests.get(sessionId) === controller) {
+				this.activeRequests.delete(sessionId);
+			}
+		};
+		/** Ends a turn the user stopped before the engine began. */
+		const stoppedEarly = (): boolean => {
+			if (!controller.signal.aborted) {
+				return false;
+			}
+			release();
+			this.clearSteerable(sessionId, runId);
+			this.endSessionRun(sessionId);
+			post({ type: 'done' });
+			return true;
+		};
 		const ready = await this.engineHost.preflight();
+		if (stoppedEarly()) {
+			return true;
+		}
 		if (!ready.ok) {
+			release();
 			this.noteEngineUnavailable(sessionId, ready.reason, post);
 			return false;
 		}
@@ -3138,17 +3171,19 @@ ${context.content}` }
 		try {
 			prepared = await this.prepareEngineTurn(requestedMode, message, sessionId, runId, post, fail);
 		} catch (err) {
+			release();
 			fail(`The Claude Code engine could not start this message: ${err instanceof Error ? err.message : String(err)}`);
 			return true;
 		}
 		if (!prepared) {
+			release();
 			return true; // prepareEngineTurn explained why and ended the turn
+		}
+		if (stoppedEarly()) {
+			return true;
 		}
 		const { mode, folder, provider, providerId, model, resolved, history, last } = prepared;
 
-		this.activeRequests.get(sessionId)?.abort();
-		const controller = new AbortController();
-		this.activeRequests.set(sessionId, controller);
 		let fellBack = false;
 		try {
 			this.trackSessionSend(sessionId, mode, providerId, model);
@@ -3320,7 +3355,8 @@ ${context.content}` }
 			post({ type: 'done' });
 			return undefined;
 		}
-		const model = (message.model && message.model.trim()) || this.registry.getModel(providerId);
+		// With Auto the composer's model belongs to whichever provider it last showed, not to the default one used here.
+		const model = (message.provider !== AUTO_PROVIDER && message.model && message.model.trim()) || this.registry.getModel(providerId);
 		const resolved = this.engineHost.resolveRoute({ providerId, model });
 		if (!resolved.route) {
 			fail(resolved.problems.join(' '));
@@ -3765,6 +3801,23 @@ ${context.content}` }
 		await this.createWorktreeSession(this.sessionStore.getSession(this.sessionStore.getActiveId())?.mode ?? 'ask', WEBVIEW_SINK_ID);
 	}
 
+	/** Forgets everything the engine kept for a chat that is gone for good (cleared or deleted), including its saved session. */
+	private forgetEngineChat(sessionId: string): void {
+		this.forgetEngineNotes(sessionId);
+		if (this.engineSessions.has(sessionId)) {
+			this.rememberEngineSession(sessionId, undefined);
+		}
+	}
+
+	/** Drops the small per-chat engine notes of a closed chat (its saved engine session stays, so a restored chat can continue). */
+	private forgetEngineNotes(sessionId: string): void {
+		this.engineMcpNoted.delete(sessionId);
+		this.engineAnnounced.delete(sessionId);
+		this.engineAutoNoted.delete(sessionId);
+		this.engineUnavailableNoted.delete(sessionId);
+		this.pendingReviews.delete(sessionId);
+	}
+
 	/** Whether the Claude Code engine, not the built-in agent, runs chats in this app session. */
 	get engineActive(): boolean {
 		return this.engineHost.enabled;
@@ -4006,6 +4059,12 @@ ${context.content}` }
 		if (!session) {
 			return;
 		}
+		if (this.engineHost.enabled) {
+			// The harness keeps its own conversation and compacts it itself; a summary made here would cost a model
+			// call and change nothing the harness sees.
+			say('The Claude Code engine manages this chat\'s context itself and compacts it automatically when it fills, so there is nothing to do here.');
+			return;
+		}
 		if (this.activeRequests.has(sessionId)) {
 			say('A run is in progress in this tab; compact once it finishes.');
 			return;
@@ -4089,6 +4148,7 @@ ${context.content}` }
 				if (!result) {
 					return;
 				}
+				this.forgetEngineChat(sessionId);
 				this.carryCheckpoints(sessionId, result.newId);
 				if (result.abortSessionId) {
 					this.activeRequests.get(result.abortSessionId)?.abort();
@@ -5505,6 +5565,10 @@ ${CHAT_APP_HTML}
 	 * only to make sure no run is left waiting on a promise that will never settle.
 	 */
 	dispose(): void {
+		// A run still going when the folder changes or the app quits must be stopped, or its child process keeps working.
+		for (const controller of this.activeRequests.values()) {
+			controller.abort();
+		}
 		stopBackgroundCommands();
 		this.cancelEscalations();
 		this.promptRegistry.settleAllUnanswered();
